@@ -1,6 +1,8 @@
 //! The wrappers of a package's `@external(native, …)` (D-590, D-946,
 //! D-947, §12.5.1): external values cross as handles, external results are
 //! wrapped, counted results are checked, and std's wrappers do not change.
+//! Direct calls of std kernels: the foreign call at the call site, with
+//! each counted argument in an owned temporary (D-525).
 
 use crate::test_support::{Lowered, lower_source};
 
@@ -150,4 +152,222 @@ fn ffi_wrapper_helper_names_are_the_runtimes() {
         let line = format!("pub const {constant}: &str = \"{name}\";");
         assert!(source.contains(&line), "{path} has no `{line}`");
     }
+}
+
+/// A program that calls std kernels directly, in and out of tail
+/// position, on a value used afterwards, and as a function value.
+const DIRECT: &str = r#"//! Direct calls of std kernels.
+
+import std::float
+import std::io
+import std::list
+import std::map
+
+fn scaled(n: Int) -> Float {
+  let x = float::from_int(n)
+  x * 2.0
+}
+
+fn grown(x: Float) -> Float {
+  let y = float::exp(x)
+  y * 2.0
+}
+
+fn root(x: Float) -> Float {
+  float::ln(x)
+}
+
+fn hyp(x: Float) -> Float {
+  float::sqrt(x)
+}
+
+fn kept(xs: List<Int>) -> List<Int> {
+  let ys = list::set(xs, 0, 9)
+  let n = list::length(xs)
+  list::push(ys, n)
+}
+
+fn stocked(m: map::Map<Int, Int>) -> Int {
+  let more = map::insert(m, 1, 2)
+  map::size(more) + map::size(m)
+}
+
+fn values(xs: List<Int>) -> List<Float> {
+  list::map(xs, float::from_int)
+}
+
+fn main() {
+  let xs = kept([1, 2, 3])
+  let f = scaled(2) + grown(0.0) + root(4.0) + hyp(4.0)
+  let ys = values(xs)
+  let n = stocked(map::new())
+  io::println("{xs} {f} {ys} {n}")
+}
+"#;
+
+/// D-455, D-453: a direct call of a plain std kernel is the foreign call
+/// at the call site, and its scalar result stays unboxed: `float::exp`
+/// gives a raw `f64`, which the body multiplies without a box, and the
+/// only box is the function's uniform return.
+#[test]
+fn direct_kernel_call_is_the_foreign_call() {
+    let lowered = lower_source(&[("", DIRECT)]);
+    let grown = lowered.function("app", "app::grown");
+    assert!(
+        grown.contains(
+            "_1: float = call_foreign \"cheby_float_exp\"(borrow _0) -> f64 ; unwind bb1"
+        ),
+        "{grown}"
+    );
+    assert!(!grown.contains("std::float::exp"), "{grown}");
+    assert!(!grown.contains("unbox"), "{grown}");
+    assert_eq!(grown.matches("box float").count(), 1, "{grown}");
+    // In tail position the result is boxed and returned, as the wrapper
+    // would box it, since a foreign call is never a tail call (§12.8).
+    let root = lowered.function("app", "app::root");
+    assert!(
+        root.contains("_1: float = call_foreign \"cheby_float_ln\"(borrow _0) -> f64"),
+        "{root}"
+    );
+    assert!(root.contains("_2: value = box float _1"), "{root}");
+    assert!(root.contains("return _2"), "{root}");
+    assert!(!root.contains("tail_call"), "{root}");
+}
+
+/// A direct call of a kernel that is an instruction
+/// (`crate::kernels_instr`) is the instruction, with no call and no unwind
+/// edge: `float::from_int` is a `convert`, and `float::sqrt` in tail
+/// position is a `float_sqrt` whose result is boxed and returned.
+#[test]
+fn an_instruction_kernel_is_its_instruction() {
+    let lowered = lower_source(&[("", DIRECT)]);
+    let scaled = lowered.function("app", "app::scaled");
+    assert!(
+        scaled.contains("_1: float = convert int float _0\n"),
+        "{scaled}"
+    );
+    assert!(!scaled.contains("call_foreign"), "{scaled}");
+    assert!(!scaled.contains("unbox"), "{scaled}");
+    assert_eq!(scaled.matches("box float").count(), 1, "{scaled}");
+    let hyp = lowered.function("app", "app::hyp");
+    assert!(hyp.contains("_1: float = float_sqrt float _0\n"), "{hyp}");
+    assert!(hyp.contains("_2: value = box float _1"), "{hyp}");
+    assert!(hyp.contains("return _2"), "{hyp}");
+    assert!(!hyp.contains("call_foreign"), "{hyp}");
+}
+
+/// The n-body's `pull` in a release build: its square root is still
+/// `float_sqrt`, with no foreign call, after the release passes.
+#[test]
+fn an_instruction_kernel_stays_an_instruction_in_release() {
+    let source = "//! A pull.
+
+import std::float
+
+type Body {
+  x: Float,
+  vx: Float,
+  mass: Float,
+}
+
+fn pull(a: Body, b: Body) -> Body {
+  let dx = a.x - b.x
+  let mag = 0.01 / (dx * dx * float::sqrt(dx * dx))
+  Body { ..a, vx: a.vx - dx * b.mass * mag }
+}
+
+fn main() {
+  let a = Body { x: 1.0, vx: 0.0, mass: 1.0 }
+  let p = pull(a, Body { x: 0.0, vx: 0.0, mass: 2.0 })
+  let vx = p.vx
+  assert vx < 0.0
+}
+";
+    let lowered = crate::test_support::lower_source_release(&[("", source)], true);
+    let pull = lowered.function("app", "app::pull");
+    assert!(pull.contains("= float_sqrt float "), "{pull}");
+    assert!(!pull.contains("call_foreign"), "{pull}");
+}
+
+/// The index of the first line of `text` that starts with `line`, once
+/// trimmed.
+fn line_at(text: &str, line: &str) -> usize {
+    text.lines()
+        .map(str::trim)
+        .position(|s| s.starts_with(line))
+        .unwrap_or_else(|| panic!("no `{line}` in:\n{text}"))
+}
+
+/// D-525: each counted argument of a kernel that may update it in place is
+/// moved into an owned temporary that the kernel borrows and counting
+/// drops after the call. `m`, used again after `map::insert`, is
+/// `dup`ed into its temporary, so the kernel sees it shared. A kernel
+/// that only reads (`map::size`, `crate::kernels_reading`) borrows its
+/// argument itself, with no temporary.
+#[test]
+fn direct_kernel_call_moves_each_argument_into_a_temporary() {
+    let lowered = lower_source(&[("", DIRECT)]);
+    let stocked = lowered.function("app", "app::stocked");
+    let at = |line: &str| line_at(&stocked, line);
+    let dup = at("dup _0");
+    let moved = at("_3: value = _0");
+    let insert =
+        at("_6: value = call_foreign \"cheby_map_insert\"(borrow _3, borrow _4, borrow _5)");
+    let released = at("drop _3");
+    assert!(
+        dup < moved && moved < insert && insert < released,
+        "{stocked}"
+    );
+    assert!(
+        stocked.contains("call_foreign \"cheby_map_size\"(borrow _6) -> i64"),
+        "{stocked}"
+    );
+    assert!(
+        stocked.contains("call_foreign \"cheby_map_size\"(borrow _0) -> i64"),
+        "{stocked}"
+    );
+    assert_eq!(stocked.matches("dup _0").count(), 1, "{stocked}");
+}
+
+/// A direct call of `list::set` is the helper `list_set`, which owns the
+/// list and the item: `xs`, used again after it, is `dup`ed into the
+/// call, and `list::length`, which only reads, borrows `xs` itself.
+/// `list::push` is an intrinsic (D-1758) and keeps its call.
+#[test]
+fn a_direct_list_set_owns_its_list_and_its_item() {
+    let lowered = lower_source(&[("", DIRECT)]);
+    let kept = lowered.function("app", "app::kept");
+    let at = |line: &str| line_at(&kept, line);
+    let dup = at("dup _0");
+    let set = at("_2: value = call_runtime list_set(_0, borrow const int 0, _1) ; unwind");
+    let length = at("_3: int = call_foreign \"cheby_list_length\"(borrow _0) -> i64");
+    assert!(dup < set && set < length, "{kept}");
+    assert!(!kept.contains("cheby_list_set"), "{kept}");
+    assert_eq!(kept.matches("dup _0").count(), 1, "{kept}");
+    assert!(kept.contains("tail_call std::list::push(_2, "), "{kept}");
+}
+
+/// The wrapper stays for everything but a direct call: a function value
+/// of a kernel's function is its wrapper's (D-453), a call of an
+/// effect-checked kernel (`io::println`, D-537) goes through its slot,
+/// and so does every call of a package's `@external` (D-940).
+#[test]
+fn direct_kernel_calls_leave_other_calls_alone() {
+    let lowered = lower_source(&[("", DIRECT)]);
+    let values = lowered.function("app", "app::values");
+    assert!(
+        values.contains("tail_call std::list::map(_0, const fn std::float::from_int)"),
+        "{values}"
+    );
+    let main = lowered.function("app", "app::main");
+    assert!(main.contains("tail_call std::io::println("), "{main}");
+    assert!(!main.contains("cheby_io_println"), "{main}");
+    let wrapper = lowered.function("std::float", "std::float::from_int");
+    assert!(
+        wrapper.contains("call_foreign \"cheby_float_from_int\"(borrow _0) -> f64"),
+        "{wrapper}"
+    );
+    let package = store().function("app", "app::main");
+    assert!(package.contains("= call app::count("), "{package}");
+    assert!(!package.contains("app_store_count"), "{package}");
 }

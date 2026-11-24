@@ -71,6 +71,47 @@ impl Repr {
         matches!(self, Self::U8 | Self::U16 | Self::U32 | Self::U64)
     }
 
+    /// The width in bits of an integer representation, or `None` for one
+    /// that is no integer.
+    #[must_use]
+    pub const fn int_bits(self) -> Option<u32> {
+        match self {
+            Self::Int | Self::I64 | Self::U64 => Some(64),
+            Self::I32 | Self::U32 => Some(32),
+            Self::I16 | Self::U16 => Some(16),
+            Self::I8 | Self::U8 => Some(8),
+            Self::Value | Self::Float | Self::Bool | Self::F32 => None,
+        }
+    }
+
+    /// Whether every number of `self` converts into `to` without failing,
+    /// so that [`crate::Rvalue::Convert`] may convert it: an integer into an
+    /// integer type that holds all its values (the same width and
+    /// signedness, a wider type of the same signedness, or a wider signed
+    /// type), any integer into `Float` or `F32` (rounded to nearest, ties
+    /// to even), and `F32` into `Float` and back (D-308, D-359). A
+    /// representation never converts into itself, except `Int` into
+    /// `I64` and back, which are the same 64 bits.
+    #[must_use]
+    pub const fn converts_exactly(self, to: Self) -> bool {
+        match (self.int_bits(), to.int_bits()) {
+            (Some(a), Some(b)) => {
+                let (s, t) = (self.is_signed_int(), to.is_signed_int());
+                if a == b {
+                    s == t && matches!((self, to), (Self::Int, Self::I64) | (Self::I64, Self::Int))
+                } else {
+                    a < b && (s == t || t)
+                }
+            }
+            (Some(_), None) => matches!(to, Self::Float | Self::F32),
+            (None, Some(_)) => false,
+            (None, None) => matches!(
+                (self, to),
+                (Self::F32, Self::Float) | (Self::Float, Self::F32)
+            ),
+        }
+    }
+
     /// The name used in dumps.
     #[must_use]
     pub const fn name(self) -> &'static str {
@@ -316,6 +357,7 @@ mod tests {
             clamped: Box::new([]),
             initializer: None,
             call_site: None,
+            kernel: None,
         };
         let plain = ForeignSig {
             params: vec![CType::I64, CType::Ptr],
@@ -335,6 +377,7 @@ mod tests {
             clamped: Box::new([]),
             initializer: None,
             call_site: None,
+            kernel: None,
         };
         assert_eq!(
             foreign_sig_with_context(&nullary, &globals, true),

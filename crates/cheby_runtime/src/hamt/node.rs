@@ -322,8 +322,8 @@ fn unique(word: Word) -> bool {
 }
 
 /// The word left in a slot whose value was moved out (a tagged 0, which
-/// freeing skips).
-pub(super) const HOLE: Word = 1;
+/// freeing skips), also by generated code (`abi::map::HOLE`).
+pub(super) const HOLE: Word = abi::map::HOLE.cast_unsigned();
 
 // ---------------------------------------------------------------------
 // Roots
@@ -510,6 +510,14 @@ impl Bitmap {
         unsafe { read_field(self.ptr(), slot(i)) }
     }
 
+    /// The address of slot `i` (below `used`), as a word: generated code
+    /// reads the slot through it while it holds the node's map
+    /// (`cheby_rt_map_find`). A collision node's slots lie at the same
+    /// offsets.
+    pub(super) fn slot_address(self, i: usize) -> u64 {
+        self.0.wrapping_add(to_u64(slot(i)))
+    }
+
     /// Writes slot `i` (below the capacity) without releasing what was
     /// there.
     pub(super) fn put(self, i: usize, word: Word) {
@@ -519,12 +527,19 @@ impl Bitmap {
     }
 
     /// Moves slots `from..from + n` to `to..to + n`, within the capacity
-    /// of a node this code owns uniquely.
+    /// of a node this code owns uniquely. Word by word, in the order that
+    /// lets the ranges overlap: a node holds at most 64 slots, too few for
+    /// a call to `memmove` to pay off.
     pub(super) fn shift(self, from: usize, to: usize, n: usize) {
-        let ptr = self.ptr();
-        // SAFETY: both ranges lie within the capacity; `ptr::copy` allows
-        // overlap.
-        unsafe { std::ptr::copy(ptr.add(slot(from)), ptr.add(slot(to)), n.wrapping_mul(8)) };
+        if to > from {
+            for i in (0..n).rev() {
+                self.put(to.wrapping_add(i), self.get(from.wrapping_add(i)));
+            }
+        } else {
+            for i in 0..n {
+                self.put(to.wrapping_add(i), self.get(from.wrapping_add(i)));
+            }
+        }
     }
 
     /// Child `ni`, borrowed.
@@ -578,7 +593,20 @@ impl Bitmap {
     /// This node, unique and with room for `extra` more slots: itself when
     /// it already is, grown when it is unique but full, else a copy. The
     /// caller owns the reference and gets the result's.
+    ///
+    /// The common case, a unique node with room, is inline: an update makes
+    /// every node of its path writable, and most already are.
+    #[inline]
     pub(super) fn writable(self, coll: Collection, extra: usize) -> Self {
+        if self.is_unique() && self.used(coll).saturating_add(extra) <= self.cap() {
+            return self;
+        }
+        self.copied_or_grown(coll, extra)
+    }
+
+    /// [`Bitmap::writable`] of a node that is shared, or unique but full.
+    #[inline(never)]
+    fn copied_or_grown(self, coll: Collection, extra: usize) -> Self {
         let need = self.used(coll).saturating_add(extra);
         if !self.is_unique() {
             return self.copy(coll, extra);

@@ -15,6 +15,7 @@ use super::node::{
     BITS, Bitmap, Collection, Collision, HOLE, MAX_SHIFT, Root, drop_word, dup_word,
 };
 use crate::abi::Word;
+use crate::panic::fatal;
 use crate::stats::{self, Event};
 use crate::unwind::guard::DropOnUnwind;
 
@@ -49,6 +50,12 @@ impl Found {
     /// The stored value of a map entry, borrowed.
     pub(super) fn value(self) -> Word {
         Bitmap(self.node).get(self.key_slot.wrapping_add(1))
+    }
+
+    /// The address of the stored value of a map entry: [`Self::value`]
+    /// reads the word there.
+    pub(super) fn value_address(self) -> u64 {
+        Bitmap(self.node).slot_address(self.key_slot.wrapping_add(1))
     }
 }
 
@@ -155,41 +162,99 @@ enum Spot {
     Appended,
 }
 
+/// The most nodes a path holds: the 13 bitmap levels and a collision node.
+const PATH_LEN: usize = 14;
+
+const _: () = assert!(MAX_SHIFT.div_ceil(BITS) + 1 == 14);
+
+/// A stack of at most [`PATH_LEN`] items, in place. A path is bounded by
+/// the hash width, so it needs no heap buffer, and every update walks one.
+#[derive(Debug, Clone, Copy)]
+struct Bounded<T> {
+    items: [T; PATH_LEN],
+    len: usize,
+}
+
+impl<T: Copy + Default> Bounded<T> {
+    fn new() -> Self {
+        Self {
+            items: [T::default(); PATH_LEN],
+            len: 0,
+        }
+    }
+
+    fn push(&mut self, item: T) {
+        let Some(slot) = self.items.get_mut(self.len) else {
+            fatal(format_args!("a map path deeper than its hash"));
+        };
+        *slot = item;
+        self.len = self.len.wrapping_add(1);
+    }
+
+    fn pop(&mut self) -> Option<T> {
+        self.len = self.len.checked_sub(1)?;
+        self.items.get(self.len).copied()
+    }
+}
+
+impl<T> std::ops::Deref for Bounded<T> {
+    type Target = [T];
+
+    fn deref(&self) -> &[T] {
+        self.items.get(..self.len).unwrap_or_default()
+    }
+}
+
+impl<T> std::ops::DerefMut for Bounded<T> {
+    fn deref_mut(&mut self) -> &mut [T] {
+        self.items.get_mut(..self.len).unwrap_or_default()
+    }
+}
+
 /// The nodes from the top down to where a key is or would go, with the
 /// child index taken at each step, and what was found there.
 #[derive(Debug)]
 pub(super) struct Path {
     hash: u64,
-    nodes: Vec<Word>,
-    steps: Vec<usize>,
+    nodes: Bounded<Word>,
+    steps: Bounded<usize>,
     spot: Spot,
+    /// The room [`Path::make_writable`] last made at the end of the path,
+    /// so a second call that asks for no more does nothing.
+    room: Option<usize>,
 }
 
 impl Path {
-    /// Walks down from `top` (read-only) towards `key`.
-    fn walk(top: Bitmap, coll: Collection, key: Word, hash: u64) -> Self {
-        Self::walk_by(top, coll, key, hash, &keys_equal)
+    /// A path at `top` for a key whose hash is `hash`, not walked yet.
+    /// Callers make it in their own frame and walk it in place
+    /// ([`Path::walk`]): a path is a few hundred bytes, and returning a
+    /// walked one from a call would copy it.
+    fn at(top: Bitmap, hash: u64) -> Self {
+        let mut path = Self {
+            hash,
+            nodes: Bounded::new(),
+            steps: Bounded::new(),
+            spot: Spot::Appended,
+            room: None,
+        };
+        path.nodes.push(top.0);
+        path
+    }
+
+    /// Walks down from the top (read-only) towards `key`.
+    fn walk(&mut self, coll: Collection, key: Word) {
+        self.walk_by(coll, key, &keys_equal);
     }
 
     /// [`Path::walk`] with `same` comparing a stored key (first) with
     /// `key`: a context's bindings compare identities by address first
     /// ([`insert_hashed`]).
-    fn walk_by(
-        top: Bitmap,
-        coll: Collection,
-        key: Word,
-        hash: u64,
-        same: &impl Fn(Word, Word) -> bool,
-    ) -> Self {
+    fn walk_by(&mut self, coll: Collection, key: Word, same: &impl Fn(Word, Word) -> bool) {
+        let path = self;
         let stride = coll.stride();
-        let mut path = Self {
-            hash,
-            nodes: vec![top.0],
-            steps: Vec::new(),
-            spot: Spot::Appended,
-        };
+        let hash = path.hash;
         let mut shift = 0;
-        let mut node = top.0;
+        let mut node = path.last();
         loop {
             if shift >= MAX_SHIFT {
                 let leaf = Collision(node);
@@ -221,7 +286,6 @@ impl Path {
             path.nodes.push(node);
             shift = shift.wrapping_add(BITS);
         }
-        path
     }
 
     /// The shift of the last node.
@@ -238,7 +302,14 @@ impl Path {
     /// Makes every node on the path writable, from the top, under `root`
     /// (owned by this code, unique or fresh): the last node gets room for
     /// `extra` more slots. Replaced nodes are written into their parents.
+    ///
+    /// The path stays writable until it is written to, so `upsert`, which
+    /// makes it writable before it calls `update`, does not check every
+    /// node again when it then puts the new entry in.
     fn make_writable(&mut self, root: Root, coll: Collection, extra: usize) {
+        if self.room.is_some_and(|room| room >= extra) {
+            return;
+        }
         let last = self.nodes.len().saturating_sub(1);
         let collision = self.ends_in_collision();
         for i in 0..self.nodes.len() {
@@ -259,6 +330,7 @@ impl Path {
             }
             self.relink(root, coll, i, new);
         }
+        self.room = Some(extra);
     }
 
     /// Writes `new` where node `i` of the path hangs: in the root for the
@@ -323,7 +395,9 @@ fn single(coll: Collection, seed: u64, hash: u64, key: Word, value: Option<Word>
 /// walked in `root` and the key is absent. `rehash` gives the hash of a
 /// key already stored, which a clash splits from the new one: `SipHash`
 /// under the root's seed for `std::map` and `std::set`, the hash a key
-/// carries for a context's bindings ([`insert_hashed`]).
+/// carries for a context's bindings ([`insert_hashed`]). Returns the
+/// address of the new entry's value slot, which [`upsert_open`] hands to
+/// generated code; 0 without a value.
 fn put_new(
     root: Root,
     coll: Collection,
@@ -331,7 +405,7 @@ fn put_new(
     key: Word,
     value: Option<Word>,
     rehash: &impl Fn(Word) -> u64,
-) {
+) -> u64 {
     let stride = coll.stride();
     let extra = match path.spot {
         Spot::Free(_) | Spot::Appended => stride,
@@ -339,14 +413,14 @@ fn put_new(
     };
     path.make_writable(root, coll, extra);
     let last = path.last();
-    match path.spot {
+    let address = match path.spot {
         Spot::Found(_) => {
             // Callers handle a present key themselves; never reached.
             drop_word(key);
             if let Some(value) = value {
                 drop_word(value);
             }
-            return;
+            return 0;
         }
         Spot::Appended => {
             let leaf = Collision(last);
@@ -356,6 +430,9 @@ fn put_new(
                 leaf.put(at.wrapping_add(1), value);
             }
             leaf.set_len(leaf.len().wrapping_add(1));
+            // Bitmap and collision nodes keep their slots at the same
+            // offsets.
+            value_slot(Bitmap(last), at, value)
         }
         Spot::Free(bit) => {
             let node = Bitmap(last);
@@ -371,6 +448,7 @@ fn put_new(
                 node.put(at.wrapping_add(1), value);
             }
             node.set_maps(data | bit, nodes);
+            value_slot(node, at, value)
         }
         Spot::Clash(bit, at) => {
             let node = Bitmap(last);
@@ -379,7 +457,7 @@ fn put_new(
             let old_value = (stride == 2).then(|| node.get(at.wrapping_add(1)));
             let shift = path.last_shift().wrapping_add(BITS);
             let old_hash = rehash(old_key);
-            let child = merge(
+            let (child, address) = merge(
                 coll,
                 shift,
                 (old_hash, old_key, old_value),
@@ -400,9 +478,17 @@ fn put_new(
             node.shift(ci, ci.wrapping_add(1), tail);
             node.put(ci, child);
             node.set_maps(data_after, nodes | bit);
+            address
         }
-    }
+    };
     root.set_count(root.count().wrapping_add(1));
+    address
+}
+
+/// The address of the value slot of the entry whose key is at slot `at`
+/// of `node`, or 0 for an entry without a value (a set's).
+fn value_slot(node: Bitmap, at: usize, value: Option<Word>) -> u64 {
+    value.map_or(0, |_| node.slot_address(at.wrapping_add(1)))
 }
 
 /// A new node (a chain of bitmap nodes ending in two entries, or in a
@@ -412,13 +498,14 @@ fn put_new(
 /// Every node is allocated before a word moves into one, so running out
 /// of memory part of the way (D-642) leaves both entries where they were
 /// and releases the empty nodes made so far: the caller still holds every
-/// word it would have given.
+/// word it would have given. Returns the top node and the address of the
+/// second entry's value slot ([`value_slot`]).
 fn merge(
     coll: Collection,
     shift: u32,
     first: (u64, Word, Option<Word>),
     second: (u64, Word, Option<Word>),
-) -> Word {
+) -> (Word, u64) {
     let stride = coll.stride();
     let (h0, h1) = (first.0, second.0);
     // The shift where the two hashes part, or the collision level.
@@ -453,24 +540,29 @@ fn merge(
                 write(at.wrapping_add(1), value);
             }
         };
-    if split >= MAX_SHIFT {
+    let second_value = second.2;
+    // The slot of the second entry's key in the bottom node.
+    let second_at = if split >= MAX_SHIFT {
         let leaf = Collision(bottom);
         put(&|i, w| leaf.put(i, w), 0, first);
         put(&|i, w| leaf.put(i, w), stride, second);
         leaf.set_len(2);
+        stride
     } else {
         let pair = Bitmap(bottom);
         let (b0, b1) = (bit_at(h0, split), bit_at(h1, split));
-        let (low, high) = if b0 < b1 {
-            (first, second)
+        let (low, high, second_at) = if b0 < b1 {
+            (first, second, stride)
         } else {
-            (second, first)
+            (second, first, 0)
         };
         put(&|i, w| pair.put(i, w), 0, low);
         put(&|i, w| pair.put(i, w), stride, high);
         pair.set_maps(b0 | b1, 0);
-    }
-    node
+        second_at
+    };
+    // Bitmap and collision nodes keep their slots at the same offsets.
+    (node, value_slot(Bitmap(bottom), second_at, second_value))
 }
 
 /// `insert` on a borrowed root: the key (and value) borrowed, the result
@@ -491,7 +583,8 @@ pub(super) fn insert(root: Root, coll: Collection, key: Word, value: Option<Word
         }
         return single(coll, seed, hash, key, value);
     };
-    let mut path = Path::walk(top, coll, key, key_hash(key, root.seed()));
+    let mut path = Path::at(top, key_hash(key, root.seed()));
+    path.walk(coll, key);
     if let (Spot::Found(_), None) = (path.spot, value) {
         dup_word(root.word());
         return root;
@@ -555,7 +648,8 @@ pub(super) fn insert_hashed(
         node.set_maps(bit_at(hash, 0), 0);
         return fresh;
     };
-    let mut path = Path::walk_by(top, coll, key, hash, same);
+    let mut path = Path::at(top, hash);
+    path.walk_by(coll, key, same);
     let target = fresh_root(root, coll, top);
     // Every node on the path is shared with `root` here, so each is copied
     // and none is written in place.
@@ -612,7 +706,8 @@ fn insert_owned(root: Root, coll: Collection, hash: u64, key: Word, value: Optio
     let Some(top) = root.node() else {
         return;
     };
-    let mut path = Path::walk(top, coll, key, hash);
+    let mut path = Path::at(top, hash);
+    path.walk(coll, key);
     put_owned(root, coll, &mut path, key, value, &|stored| {
         key_hash(stored, root.seed())
     });
@@ -661,7 +756,8 @@ pub(super) fn upsert(root: Root, key: Word, update: impl FnOnce(Option<Word>) ->
         dup_word(key);
         return single(coll, seed, hash, key, Some(value));
     };
-    let mut path = Path::walk(top, coll, key, key_hash(key, root.seed()));
+    let mut path = Path::at(top, key_hash(key, root.seed()));
+    path.walk(coll, key);
     let target = writable_root(root, coll);
     let Spot::Found(at) = path.spot else {
         path.make_writable(target, coll, coll.stride());
@@ -687,7 +783,7 @@ pub(super) fn upsert(root: Root, key: Word, update: impl FnOnce(Option<Word>) ->
     node.put(slot, HOLE);
     let guard = UpsertGuard {
         target,
-        entry: Some((path, at)),
+        entry: Some((&path, at)),
     };
     let value = update(Some(old));
     guard.disarm();
@@ -702,29 +798,93 @@ pub(super) fn upsert(root: Root, key: Word, update: impl FnOnce(Option<Word>) ->
 /// then whole again: unchanged when it was shared, since the path was
 /// copied, or, when it was unique, without the entry, released by the
 /// caller's cleanup.
-struct UpsertGuard {
+struct UpsertGuard<'a> {
     target: Root,
     /// The path, writable in `target`, and the slot of the key whose value
-    /// was moved out.
-    entry: Option<(Path, usize)>,
+    /// was moved out. Borrowed, so arming the guard copies no path.
+    entry: Option<(&'a Path, usize)>,
 }
 
-impl UpsertGuard {
+impl UpsertGuard<'_> {
     /// `update` returned: nothing to undo.
     fn disarm(self) {
-        let mut this = std::mem::ManuallyDrop::new(self);
-        // The path's buffers are still freed.
-        drop(this.entry.take());
+        let _disarmed = std::mem::ManuallyDrop::new(self);
     }
 }
 
-impl Drop for UpsertGuard {
+impl Drop for UpsertGuard<'_> {
     fn drop(&mut self) {
         if let Some((path, at)) = &self.entry {
             remove_entry(self.target, Collection::Map, path, *at);
         }
         drop_word(self.target.word());
     }
+}
+
+/// What [`upsert_open`] says of the key besides its map: the map is
+/// empty and the key was not hashed.
+pub(super) const UPSERT_EMPTY: u64 = 1;
+
+/// `map::upsert` taken apart for generated code (`cheby_rt_map_upsert`):
+/// takes `root` (owned) and the borrowed `key`, and returns a root of this
+/// code's own, unique or empty, with the path to the key's entry writable,
+/// and a word that says where the entry is:
+///
+/// - the address of its value slot, which still holds the stored value,
+///   when the key is present;
+/// - that address plus 1 when the key was absent: the key, with a reference
+///   added, is in now, with [`HOLE`] as its value and the count raised;
+/// - [`UPSERT_EMPTY`] when the map is empty: nothing was done and the key
+///   was not hashed, since the kernel calls `update` before it hashes the
+///   key of an empty map ([`upsert`]).
+///
+/// The rest of the upsert is generated code's: it moves the value out (and
+/// leaves [`HOLE`]), calls the callback, and stores its result in the
+/// slot, or for an empty map inserts it. The root is unique, so nothing
+/// else sees the slot meanwhile, and [`HOLE`] is a tagged word, which a
+/// release of the root skips: when the callback raises, the root is an
+/// ordinary map, released by the caller's cleanup. The key is hashed and
+/// compared before any change, as [`upsert`] does it, and the root's
+/// update is counted in place or copied once, as there (D-768).
+///
+/// When the hash raises, or memory runs out, `root` is released.
+pub(super) fn upsert_open(root: Root, key: Word) -> (Root, u64) {
+    let coll = Collection::Map;
+    let Some(top) = root.node() else {
+        return (root, UPSERT_EMPTY);
+    };
+    let held = DropOnUnwind::new([root.word()]);
+    let mut path = Path::at(top, key_hash(key, root.seed()));
+    path.walk(coll, key);
+    let unique = root.is_unique();
+    let target = if unique {
+        stats::record(Event::MapUpdateInPlace);
+        root
+    } else {
+        stats::record(Event::MapUpdateCopied);
+        fresh_root(root, coll, top)
+    };
+    held.disarm();
+    if !unique {
+        // A reference of a shared root: this releases nothing else.
+        drop_word(root.word());
+    }
+    let held = DropOnUnwind::new([target.word()]);
+    let Spot::Found(at) = path.spot else {
+        dup_word(key);
+        // Only a clash allocates still, in `merge`, before it moves a word.
+        let key_held = DropOnUnwind::new([key]);
+        let address = put_new(target, coll, &mut path, key, Some(HOLE), &|stored| {
+            key_hash(stored, target.seed())
+        });
+        key_held.disarm();
+        held.disarm();
+        return (target, address.wrapping_add(1));
+    };
+    path.make_writable(target, coll, 0);
+    held.disarm();
+    // Bitmap and collision nodes keep their slots at the same offsets.
+    (target, Bitmap(path.last()).slot_address(at.wrapping_add(1)))
 }
 
 // ---------------------------------------------------------------------
@@ -738,7 +898,8 @@ pub(super) fn remove(root: Root, coll: Collection, key: Word) -> Root {
     let Some(top) = root.node() else {
         return root;
     };
-    let mut path = Path::walk(top, coll, key, hash);
+    let mut path = Path::at(top, hash);
+    path.walk(coll, key);
     let Spot::Found(at) = path.spot else {
         dup_word(root.word());
         return root;
@@ -819,15 +980,14 @@ fn compact(root: Root, coll: Collection, path: &mut Path) {
             return;
         }
         // Take the entry's words out of the node and free it.
-        let words: Vec<Word> = (0..stride)
-            .map(|i| {
-                if collision {
-                    Collision(last).get(i)
-                } else {
-                    Bitmap(last).get(i)
-                }
-            })
-            .collect();
+        let get = |i: usize| {
+            if collision {
+                Collision(last).get(i)
+            } else {
+                Bitmap(last).get(i)
+            }
+        };
+        let words = [get(0), if stride == 2 { get(1) } else { 0 }];
         if collision {
             Collision(last).free_shell();
         } else {
@@ -860,7 +1020,7 @@ fn compact(root: Root, coll: Collection, path: &mut Path) {
         let at = index(data, bit).wrapping_mul(stride);
         let moved = used.wrapping_sub(1).wrapping_sub(at);
         parent.shift(at, at.wrapping_add(stride), moved);
-        for (i, word) in words.into_iter().enumerate() {
+        for (i, word) in words.into_iter().take(stride).enumerate() {
             parent.put(at.wrapping_add(i), word);
         }
         parent.set_maps(data | bit, nodes & !bit);

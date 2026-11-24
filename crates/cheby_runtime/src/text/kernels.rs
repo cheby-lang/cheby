@@ -67,7 +67,7 @@ fn build(cap: u64, write: impl FnOnce(&mut dyn FnMut(&[u8]))) -> Word {
     write(&mut |piece: &[u8]| {
         // SAFETY: `text` is the unique string built here, owned by this
         // function; `piece` lies outside it.
-        text = unsafe { string::append(text, piece) };
+        text = unsafe { string::append_in_room(text, piece) };
     });
     text
 }
@@ -89,8 +89,8 @@ unsafe fn extend(
     let (mut out, reused) = unsafe { string::with_room(text, extra, reuse) };
     write(&mut |piece: &[u8]| {
         // SAFETY: `out` is unique with room for every piece (`with_room`),
-        // so `append` writes in place, and the pieces lie outside it.
-        out = unsafe { string::append(out, piece) };
+        // and the pieces lie outside it.
+        out = unsafe { string::append_in_room(out, piece) };
     });
     if reused {
         // SAFETY: `out` is the live argument, changed in place; the caller
@@ -112,9 +112,15 @@ unsafe fn keep(text: Word, range: std::ops::Range<usize>, reuse: bool) -> Word {
     unsafe { string::keep_range(text, range, reuse) }
 }
 
-/// A new list of new strings, one per part.
+/// A new list of new strings, one per part. One lookup of the running
+/// fiber serves every part's allocation: the kernel runs on one fiber from
+/// its start to its end and never switches.
 fn string_list<'a>(parts: impl IntoIterator<Item = &'a str>) -> Word {
-    list::from_iter(parts.into_iter().map(values::string))
+    let ctx = crate::tls::current_fiber();
+    list::from_iter(parts.into_iter().map(|part| {
+        // SAFETY: `ctx` is null or the fiber running on this thread.
+        unsafe { string::new_text_for(ctx, part.as_bytes(), crate::abi::layout::STRING) }
+    }))
 }
 
 // ---------------------------------------------------------------------
@@ -208,7 +214,11 @@ pub(crate) unsafe extern "C" fn cheby_string_split(text: Word, separator: Word) 
     guarded(None, || {
         // SAFETY: forwarded from the caller.
         let (whole, sep) = unsafe { (arg(text), arg(separator)) };
-        if !sep.is_empty() && !whole.contains(sep) {
+        let mut parts = ops::split(whole, sep);
+        let first = parts.next();
+        // The first part is the whole text exactly when a separator that is
+        // not empty does not occur.
+        if !sep.is_empty() && first.is_some_and(|part| part.len() == whole.len()) {
             // SAFETY: a live string; the list gets a reference of its own,
             // released if the list cannot be allocated.
             unsafe { rc::dup(text) };
@@ -217,7 +227,7 @@ pub(crate) unsafe extern "C" fn cheby_string_split(text: Word, separator: Word) 
             held.disarm();
             return parts;
         }
-        string_list(ops::split(whole, sep))
+        string_list(first.into_iter().chain(parts))
     })
 }
 
@@ -318,6 +328,36 @@ const fn needs_json_escape(byte: u8) -> bool {
     byte < 0x20 || byte == b'"' || byte == b'\\'
 }
 
+/// The offset of the first byte of `data` that JSON text escapes
+/// ([`needs_json_escape`]), or `None`. Eight bytes at a time: in a word
+/// `w`, `(w - 0x0101…01 * n) & !w & 0x8080…80` sets the top bit of a
+/// byte below `n` (n <= 0x80), and of a zero byte of `w ^ 0x0101…01 * c`
+/// for `n = 1`. A borrow can only set bits above a byte that matched, so
+/// the lowest bit set, read little-endian, is the first match. The bytes
+/// after the last whole word are tested one by one. O(n).
+pub(crate) fn first_json_escape(data: &[u8]) -> Option<usize> {
+    const ONES: u64 = 0x0101_0101_0101_0101;
+    const HIGH: u64 = 0x8080_8080_8080_8080;
+    let below = |w: u64, n: u64| w.wrapping_sub(ONES.wrapping_mul(n)) & !w & HIGH;
+    let (words, rest) = data.as_chunks::<8>();
+    let mut at = 0_usize;
+    for chunk in words {
+        let w = u64::from_le_bytes(*chunk);
+        let found = below(w, 0x20)
+            | below(w ^ ONES.wrapping_mul(u64::from(b'"')), 1)
+            | below(w ^ ONES.wrapping_mul(u64::from(b'\\')), 1);
+        if found != 0 {
+            let byte = usize::try_from(found.trailing_zeros() / 8).unwrap_or(0);
+            debug_assert!(chunk.get(byte).is_some_and(|&b| needs_json_escape(b)));
+            return Some(at.saturating_add(byte));
+        }
+        at = at.saturating_add(8);
+    }
+    rest.iter()
+        .position(|&b| needs_json_escape(b))
+        .map(|i| at.saturating_add(i))
+}
+
 /// The JSON escape of `byte` and its length, or `None` when JSON text
 /// holds the byte as it is (D-326, D-398): `\"` and `\\`; `\b`, `\f`,
 /// `\n`, `\r` and `\t`; `\u00` and two lower-case hex digits for every
@@ -357,7 +397,7 @@ pub(crate) unsafe extern "C" fn cheby_string_add_json_quoted(out: Word, text: Wo
     guarded(None, || {
         // SAFETY: forwarded from the caller.
         let piece = unsafe { arg(text) }.as_bytes();
-        let Some(first) = piece.iter().position(|&b| needs_json_escape(b)) else {
+        let Some(first) = first_json_escape(piece) else {
             // SAFETY: a live string; `piece` is another object's text
             // unless `out == text`, when nothing is reused.
             return unsafe {

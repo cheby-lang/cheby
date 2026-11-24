@@ -1,0 +1,44 @@
+mapped 0: 0 0.0 True True True True True True -1 0
+mapped 1: 1 0.0 True True True True True True -1 1
+mapped 2: 9 0.0 True True True True True True -1 2
+mapped 3: 67 0.0 True True True True True True 124 3
+mapped 31: 798484 7.789306640625 True True True True True True 124 31
+mapped 32: 589373 8.6446533203125 True True True True True True 124 32
+mapped 33: 125600 8.6446533203125 True True True True True True 124 33
+mapped 34: 879202 8.6446533203125 True True True True True True 124 34
+mapped 64: 830133 24.64285758137703 True True True True True True 124 64
+mapped 65: 810917 24.64285758137703 True True True True True True 124 65
+mapped 1100: 472291 540.6428571428571 True True True True True True 124 1100
+pushed 0: 0 0.0 True True True True True True -1 0
+pushed 1: 1 0.0 True True True True True True -1 1
+pushed 2: 9 0.0 True True True True True True -1 2
+pushed 3: 67 0.0 True True True True True True 124 3
+pushed 31: 798484 7.789306640625 True True True True True True 124 31
+pushed 32: 589373 8.6446533203125 True True True True True True 124 32
+pushed 33: 125600 8.6446533203125 True True True True True True 124 33
+pushed 34: 879202 8.6446533203125 True True True True True True 124 34
+pushed 64: 830133 24.64285758137703 True True True True True True 124 64
+pushed 65: 810917 24.64285758137703 True True True True True True 124 65
+pushed 1100: 472291 540.6428571428571 True True True True True True 124 1100
+prepended 0: 0 0.0 True True True True True True -1 0
+prepended 1: 1 0.0 True True True True True True -1 1
+prepended 2: 9 0.0 True True True True True True -1 2
+prepended 3: 67 0.0 True True True True True True 124 3
+prepended 31: 798484 7.789306640625 True True True True True True 124 31
+prepended 32: 589373 8.6446533203125 True True True True True True 124 32
+prepended 33: 125600 8.6446533203125 True True True True True True 124 33
+prepended 34: 879202 8.6446533203125 True True True True True True 124 34
+prepended 64: 830133 24.64285758137703 True True True True True True 124 64
+prepended 65: 810917 24.64285758137703 True True True True True True 124 65
+prepended 1100: 472291 540.6428571428571 True True True True True True 124 1100
+f32 0: True True True True True True
+f32 1: True True True True True True
+f32 2: True True True True True True
+f32 3: True True True True True True
+f32 31: True True True True True True
+f32 32: True True True True True True
+f32 33: True True True True True True
+f32 34: True True True True True True
+f32 64: True True True True True True
+f32 65: True True True True True True
+f32 1100: True True True True True True

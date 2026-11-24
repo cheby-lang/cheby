@@ -605,7 +605,57 @@ fn the_builder_refuses_misplaced_edges() {
 
 #[test]
 fn the_scope_helpers() {
-    assert_eq!(RuntimeFn::ALL.len(), 17);
+    assert_eq!(RuntimeFn::ALL.len(), 45);
+    // An upsert's first step takes the map over and may raise; the steps
+    // after it only read and write the slot it opened.
+    assert_eq!(
+        RuntimeFn::MapUpsert.params(),
+        [
+            (Repr::Value, UseKind::Owned),
+            (Repr::Value, UseKind::Borrowed)
+        ]
+    );
+    assert!(RuntimeFn::MapUpsert.may_unwind());
+    assert_eq!(RuntimeFn::MapUpsertAddress.ret(), Some(Repr::U64));
+    assert!(RuntimeFn::MapUpsertFound.may_unwind());
+    assert!(RuntimeFn::MapUpsertStore.may_unwind());
+    assert_eq!(
+        RuntimeFn::MapUpsertStore.params(),
+        [
+            (Repr::Value, UseKind::Owned),
+            (Repr::U64, UseKind::Borrowed),
+            (Repr::Value, UseKind::Borrowed),
+            (Repr::Value, UseKind::Owned),
+        ]
+    );
+    // `list_set` takes its list and its item over, and `map_find` and
+    // `map_value_at` only read.
+    assert_eq!(
+        RuntimeFn::ListSet.params(),
+        [
+            (Repr::Value, UseKind::Owned),
+            (Repr::Int, UseKind::Borrowed),
+            (Repr::Value, UseKind::Owned),
+        ]
+    );
+    assert!(RuntimeFn::ListSet.may_unwind());
+    assert_eq!(RuntimeFn::MapFind.ret(), Some(Repr::U64));
+    assert!(RuntimeFn::MapFind.may_unwind());
+    assert_eq!(
+        RuntimeFn::MapValueAt.params(),
+        [
+            (Repr::Value, UseKind::Borrowed),
+            (Repr::U64, UseKind::Borrowed),
+        ]
+    );
+    // `list_prepend` takes both arguments over, as `list_push` does.
+    assert_eq!(
+        RuntimeFn::ListPrepend.params(),
+        RuntimeFn::ListPush.params()
+    );
+    assert_eq!(RuntimeFn::ListPrepend.ret(), Some(Repr::Value));
+    assert_eq!(RuntimeFn::ListPrepend.name(), "list_prepend");
+    assert!(RuntimeFn::ListPrepend.may_unwind());
     assert_eq!(
         RuntimeFn::ScopeOpen.params(),
         [
@@ -635,7 +685,21 @@ fn the_scope_helpers() {
             RuntimeFn::StrEq,
             RuntimeFn::ListLength,
             RuntimeFn::ListGet,
-            RuntimeFn::ListUnconsHead
+            RuntimeFn::ListUnconsHead,
+            RuntimeFn::MapValueAt,
+            RuntimeFn::ListUnconsHeadFloat,
+            RuntimeFn::ListUnconsHeadF32,
+            RuntimeFn::ListGetFloat,
+            RuntimeFn::ListGetF32,
+            RuntimeFn::MapUpsertAddress,
+            RuntimeFn::MapSlotTake,
+            RuntimeFn::BufferStep,
+            RuntimeFn::HeapSlot,
+            RuntimeFn::HeapFirst,
+            RuntimeFn::PairLeft,
+            RuntimeFn::PairRight,
+            RuntimeFn::BytesInRange,
+            RuntimeFn::BytesByte,
         ]
     );
     assert_eq!(Const::Ctx.repr(), Repr::U64);

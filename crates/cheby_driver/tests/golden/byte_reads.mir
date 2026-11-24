@@ -1,0 +1,65 @@
+fn app::scan(borrow _0: value, _1: int, _2: int, _3: int) -> value check str#0 {
+  entry unwind bb12
+  str#0 = "src/main.cheby:10:4"
+  str#1 = "src/main.cheby:12:30"
+  str#2 = "src/main.cheby:12:37"
+  str#3 = "src/main.cheby:14:18"
+  str#4 = "src/main.cheby:14:32"
+bb0:
+  _21: bool = call_runtime bytes_in_range(borrow _0, borrow _1)
+  branch _21, bb1, bb2
+bb1:
+  _22: u8 = call_runtime bytes_byte(borrow _0, borrow _1)
+  _7: u8 = _22
+  switch _7 [10 => bb3, _ => bb4]
+bb2:
+  goto bb10()
+bb3:
+  _8: int = checked add int _1, const int 1 at str#1 ; unwind bb12
+  _9: int = checked add int _2, const int 1 at str#2 ; unwind bb12
+  tail_call app::scan(borrow _0, _8, _9, _3)
+bb4:
+  _10: bool = compare ge u8 _7, const u8 48
+  branch _10, bb5, bb6
+bb5:
+  _12: bool = compare le u8 _7, const u8 57
+  goto bb7(_12)
+bb6:
+  goto bb7(const bool false)
+bb7(_11: bool):
+  branch _11, bb8, bb9
+bb8:
+  _13: int = checked add int _1, const int 1 at str#3 ; unwind bb12
+  _14: int = convert u8 int _7
+  _15: int = checked add int _3, _14 at str#4 ; unwind bb12
+  _16: int = checked sub int _15, const int 48 at str#4 ; unwind bb12
+  tail_call app::scan(borrow _0, _13, _2, _16)
+bb9:
+  goto bb10()
+bb10:
+  _17: value = box int _2 ; unwind bb12
+  _18: value = box int _3 ; unwind bb13
+  _19: value = alloc tuple/2(_17, _18) ; unwind bb14
+  goto bb11(_19)
+bb11(_20: value):
+  return _20
+bb12:
+  resume
+bb13:
+  drop _17
+  goto bb12()
+bb14:
+  drop _18
+  goto bb13()
+}
+fn app::is_name(borrow _0: value) -> value check str#0 {
+  entry unwind bb1
+  str#0 = "src/main.cheby:21:4"
+  str#1 = "name"
+bb0:
+  _2: bool = call_runtime str_eq(borrow _0, borrow const str#1)
+  _3: value = box bool _2
+  return _3
+bb1:
+  resume
+}

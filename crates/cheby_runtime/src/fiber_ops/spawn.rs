@@ -188,7 +188,7 @@ unsafe fn spawn(
             // reaches it (`cancel::check_chain`, review finding
             // CONC-W2-1); the outermost is the target (D-667).
             let failed = scope.fill(slot, fiber);
-            let target = cancel::outermost_failing(scope.parent().cloned())
+            let target = cancel::outermost_failing(scope.parent())
                 .or_else(|| failed.then(|| Arc::clone(&scope)));
             if let Some(target) = target {
                 // SAFETY: the fiber was just created and is not queued yet,

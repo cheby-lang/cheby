@@ -1,0 +1,41 @@
+// @decisions: D-043, D-547
+> import std::io
+> import store::limits
+> (limits::limit, limits::twice())
+(3, 6) : (Int, Int)
+> let read = limits::reader()
+> const scale: Float = 1.5
+> fn scaled() -> Float {
+.   scale * 2.0
+. }
+> scaled()
+3.0 : Float
+> const scale: Float = 2.5
+> scaled()
+5.0 : Float
+> const flag: Bool = True
+> fn flagged() -> Bool {
+.   flag
+. }
+> const flag: Bool = False
+> flagged()
+False : Bool
+> io::write_file("src/limits.cheby", r#"//! The limit, changed.
+. /// The limit.
+. pub const limit: Int = 4
+. /// The limit, twice.
+. pub fn twice() -> Int {
+.   limit * 2
+. }
+. /// A function that reads the limit when it is called.
+. pub fn reader() -> fn() -> Int {
+.   fn() -> Int {
+.     limit
+.   }
+. }
+. "#)
+Ok(Nil) : Result<Nil, io::Error>
+> :reload
+reloaded `store::limits`
+> (limits::limit, limits::twice(), read())
+(4, 8, 3) : (Int, Int, Int)

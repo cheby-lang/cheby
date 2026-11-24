@@ -17,8 +17,21 @@
 //!   itself (`cheby build`, `CHEBY_DUMP_DIR`, a build without a cache)
 //!   takes them by name ([`std_masks_in`]); a JIT host with a cache loads
 //!   std's records ([`std_records`]). Package masks never read std's facts:
-//!   std names no package item, and a package calls only std's `pub`
-//!   functions, which never borrow (D-787, D-812).
+//!   std names no package item, and a debug build's package calls only
+//!   std's `pub` functions, which never borrow (D-787, D-812). A release
+//!   build's package units may also call std functions that borrow, from
+//!   std bodies they inlined, so they get std's release masks by name
+//!   ([`std_release_masks_in`]).
+//! - **Release code** (design T8, T9): in a release build with the
+//!   `inline` lever, std's units are optimized as one build, inlining
+//!   each other's bodies, and std's release masks are inferred over the
+//!   optimized code ([`ReleaseStd`]), so std has one release code per
+//!   lever set. Its exports are the bodies a package's units inline.
+//! - **The export record** (design T15): std's exports and release masks,
+//!   what a release build needs from std besides std's release code
+//!   records, lie in one record under the build ID and std's release
+//!   settings ([`exports`]), so a warm release command, like a warm debug
+//!   one, parses, checks, lowers and optimizes no std module.
 //! - **One code per module and settings** (D-958, D-980): each std
 //!   module's code record lies under [`std_code_key`], the build ID, the
 //!   module's path, `BuildKind::Std` with the command's other settings
@@ -44,14 +57,14 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write as _;
 use std::path::PathBuf;
-use std::sync::{Arc, OnceLock};
+use std::sync::{Arc, Mutex, OnceLock};
 
 use cheby_codegen_clif::record::CodeRecord;
 use cheby_diag::{Diagnostic, SourceMap};
 use cheby_iface::{Ice, ModuleId, PackageId};
 use cheby_jit::{BatchCx, BatchUnit, Jit, JitOptions};
 use cheby_mir::borrow::{self, BorrowMask};
-use cheby_mir::{FnKey, MirModule, MirOptions, UnitKind};
+use cheby_mir::{FnKey, MirModule, MirOptions, ReleaseOptions, UnitKind};
 use cheby_package::{Manifest, ModulePath};
 use rayon::prelude::*;
 
@@ -59,6 +72,12 @@ use crate::cache::front::FrontRecord;
 use crate::cache::{BuildId, BuildKind, CacheLog, Key, KeyKind, Settings, StoreShare};
 use crate::frontend::{self, Frontend};
 use crate::{Error, Module, Package, parse_file, std_lib};
+
+mod exports;
+
+pub(crate) use exports::{StdExports, std_exports};
+#[cfg(test)]
+pub(crate) use exports::{in_process as exports_in_process, std_export_key};
 
 /// Whether a front end reads std's front records instead of parsing std
 /// (D-980); `load_set.rs`'s walk reads a std hit's summaries
@@ -190,9 +209,11 @@ pub(crate) fn std_summaries(
     Ok(Some(record.references))
 }
 
-/// D-968, D-980: the settings of std's one code, `BuildKind::Std` with the
+/// D-968, D-980: the settings of std's code, `BuildKind::Std` with the
 /// command's other D-958 settings, shared by `run`, `test`, `plain` and
-/// `check`.
+/// `check`. The profile is one of them, so std has one code per profile:
+/// a release command's std records are release records, and its
+/// evaluation module reads std's debug ones.
 pub(crate) fn std_settings(command: &Settings) -> Settings {
     Settings {
         kind: BuildKind::Std,
@@ -263,6 +284,10 @@ pub(crate) struct WholeStd {
     modules: Vec<String>,
     /// Every std module's front record but its blobs, in build order.
     fronts: Vec<StdFront>,
+    /// Std's own front end, which checked every std module: the release
+    /// profile optimizes std's units over its interfaces
+    /// ([`release_std`]).
+    front: Frontend,
 }
 
 /// What a std module's front record holds (D-1262), made
@@ -414,7 +439,181 @@ fn compute_whole_std() -> Result<WholeStd, Error> {
         constructors,
         modules,
         fronts,
+        front,
     })
+}
+
+/// Std's code in a release build with the `inline` lever (design T8, T9):
+/// [`WholeStd`]'s units optimized as one build, std's modules inlining
+/// each other's bodies ([`cheby_mir::export::optimize_build`]), and std's
+/// release masks inferred over the optimized code as one inference unit
+/// (D-968), so they describe the code std's release records hold. Std's
+/// exports are its bodies that a package's units may inline, by name.
+pub(crate) struct ReleaseStd {
+    /// Every std module's code unit, optimized, without masks and not
+    /// counted, in build order.
+    units: Vec<MirModule>,
+    /// The masks written into them under borrowing, by def of std's own
+    /// front end.
+    by_def: borrow::Masks,
+    /// The same masks of std's functions that borrow something, by module
+    /// path and item, sorted.
+    named: Vec<(String, String, BorrowMask)>,
+    /// The bodies a package's units may inline, by module path and item.
+    exports: cheby_mir::export::PortableBodies,
+    /// With the `consts` lever, std's scalar literal constants by path
+    /// (`module::name`), sorted, with their values: what a package's
+    /// release units fold of std's constants (design T10). Empty without
+    /// the lever.
+    literals: Vec<(String, cheby_mir::Const)>,
+}
+
+impl ReleaseStd {
+    /// Std's scalar literal constants by path, sorted, with their values
+    /// (empty without the `consts` lever).
+    pub(crate) fn literals(&self) -> &[(String, cheby_mir::Const)] {
+        &self.literals
+    }
+
+    /// The bodies a package's units may inline, by module path and item.
+    pub(crate) const fn exports(&self) -> &cheby_mir::export::PortableBodies {
+        &self.exports
+    }
+
+    /// The masks of std's release functions that borrow something, by
+    /// module path and item, sorted.
+    #[cfg_attr(not(test), expect(dead_code, reason = "read by tests only"))]
+    pub(crate) fn named(&self) -> &[(String, String, BorrowMask)] {
+        &self.named
+    }
+}
+
+/// [`ReleaseStd`] by release levers, computed once per process and levers.
+type ReleaseByLevers = Vec<(ReleaseOptions, Result<Arc<ReleaseStd>, String>)>;
+
+/// Std's release code under `levers` ([`ReleaseStd`]), computed on the
+/// first call of the process with those levers from [`whole_std`]: the
+/// levers change std's code as they change the package's.
+///
+/// # Errors
+///
+/// An internal error when std does not optimize or infer.
+pub(crate) fn release_std(levers: ReleaseOptions) -> Result<Arc<ReleaseStd>, Ice> {
+    static RELEASE: Mutex<ReleaseByLevers> = Mutex::new(Vec::new());
+    let mut done = RELEASE
+        .lock()
+        .map_err(|_| Ice::new("std's release code was poisoned"))?;
+    if let Some((_, found)) = done.iter().find(|(l, _)| *l == levers) {
+        return found.clone().map_err(Ice::new);
+    }
+    let computed = whole_std()
+        .and_then(|whole| compute_release_std(&whole, levers))
+        .map(Arc::new)
+        .map_err(|e| e.message().to_owned());
+    done.push((levers, computed.clone()));
+    drop(done);
+    computed.map_err(Ice::new)
+}
+
+/// Optimizes std's units under `levers`, infers std's release masks over
+/// them and takes their exports (design T8, T9). With the `consts` lever,
+/// std's units first read its scalar literal constants of other std
+/// modules as their values, and only those (design T10): folding std's
+/// computed constants would make std's release code depend on an
+/// evaluation.
+fn compute_release_std(whole: &WholeStd, levers: ReleaseOptions) -> Result<ReleaseStd, Ice> {
+    let front = &whole.front;
+    let budget = cheby_mir::inline::InlineBudget::DEFAULT;
+    let mut units = whole.units.clone();
+    let none = cheby_mir::export::PortableBodies::new();
+    let (values, literals) = if levers.consts {
+        std_literals(front)?
+    } else {
+        (cheby_mir::fold_consts::ConstValues::new(), Vec::new())
+    };
+    for unit in &mut units {
+        cheby_mir::fold_consts::fold_unit(unit, &values);
+    }
+    // The exports as the layers found them: a function whose calls got
+    // clones is exported as it was before (`cheby_mir::specialize`).
+    let exports = crate::borrowing::with_build_defs(front, |defs| {
+        let found = cheby_mir::export::optimize_build(
+            &mut units,
+            &|_| true,
+            &none,
+            defs,
+            &budget,
+            cheby_mir::inline::Passes::of(&levers),
+            &values,
+            &crate::backend::each_in_parallel,
+        )?;
+        cheby_mir::export::portable_of(found, defs)
+    })?;
+    let mut masked = units.clone();
+    let inferred = crate::borrowing::infer(front, &mut masked, &|unit, facts| {
+        crate::backend::unit_masks_of(front, unit, facts)
+    })?;
+    let mut named = Vec::new();
+    for unit in &masked {
+        for f in &unit.functions {
+            if let FnKey::Item(def) = f.key
+                && !f.borrow.is_owned()
+            {
+                let name = unit.name(def)?;
+                named.push((name.module.to_string(), name.item.to_string(), f.borrow));
+            }
+        }
+    }
+    named.sort();
+    Ok(ReleaseStd {
+        units,
+        by_def: inferred.masks,
+        named,
+        exports,
+        literals,
+    })
+}
+
+/// Std's scalar literal constants (`cheby_mir::scalar_literal`), from
+/// std's own front end `front`: by def, and by path (`module::name`, as
+/// a build's constants are named), sorted.
+fn std_literals(
+    front: &Frontend,
+) -> Result<
+    (
+        cheby_mir::fold_consts::ConstValues,
+        Vec<(String, cheby_mir::Const)>,
+    ),
+    Ice,
+> {
+    let mut values = cheby_mir::fold_consts::ConstValues::new();
+    let mut by_path = Vec::new();
+    for module in std_modules(front) {
+        let path = front.modules.try_get(module)?.path.to_string();
+        let checked = front
+            .checked(module)
+            .ok_or_else(|| Ice::new(format!("std module `{path}` was not checked")))?;
+        for c in &checked.thir.consts {
+            let Some(value) = cheby_mir::scalar_literal(c, &front.globals) else {
+                continue;
+            };
+            let item = checked
+                .interface
+                .item(c.def.index)
+                .ok_or_else(|| Ice::new(format!("a constant of `{path}` has no item")))?;
+            let name = front.globals.names.get(item.name);
+            by_path.push((format!("{path}::{name}"), value.clone()));
+            values.insert(c.def, value);
+        }
+    }
+    by_path.sort_by(|a, b| a.0.cmp(&b.0));
+    Ok((values, by_path))
+}
+
+/// Whether std's code under `mir` is its release code ([`ReleaseStd`]):
+/// a release build with the `inline` lever.
+pub(crate) fn is_release(mir: MirOptions) -> bool {
+    mir.release.is_some_and(|levers| levers.inline)
 }
 
 /// The functions of the std modules `std` that an `@std_initializer` or an
@@ -722,6 +921,75 @@ pub(crate) fn std_masks_in(front: &Frontend) -> Result<borrow::Masks, Ice> {
     Ok(masks)
 }
 
+/// Std's release masks ([`ReleaseStd`]), as `exports` holds them, by def
+/// of `front`, found by name: what a release build writes into its package
+/// units, whose inlined std bodies may call std functions that borrow
+/// (design T9, refining D-787 and D-968's rule that the package calls only
+/// std's `pub` functions, which never borrow). A name `front` cannot see
+/// is skipped: no unit of the build can call it.
+///
+/// # Errors
+///
+/// An internal error when a name cannot be read.
+pub(crate) fn std_release_masks_in(
+    front: &Frontend,
+    exports: &StdExports,
+) -> Result<borrow::Masks, Ice> {
+    let names: Vec<(&str, &str)> = exports
+        .named()
+        .iter()
+        .map(|(module, item, _)| (module.as_str(), item.as_str()))
+        .collect();
+    let found = crate::borrowing::with_build_defs(front, |defs| borrow::find_defs(&names, defs))?;
+    let mut masks = borrow::Masks::new();
+    for ((_, _, mask), def) in exports.named().iter().zip(found) {
+        if let Some(def) = def {
+            masks.insert(def, *mask);
+        }
+    }
+    Ok(masks)
+}
+
+/// Std's release records under `mir` without a store (a command without a
+/// cache), compiled once per process and options from [`ReleaseStd`]: a
+/// release build takes std's code from records whether or not it has a
+/// cache, so its package units, which inline std's bodies and call std's
+/// functions with std's release masks, always meet the code those masks
+/// describe.
+///
+/// # Errors
+///
+/// An internal error when std does not compile, or `modules` names no
+/// std module.
+pub(crate) fn release_records_in_process(
+    modules: &[String],
+    mir: MirOptions,
+) -> Result<BTreeMap<String, CodeRecord>, Ice> {
+    type Compiled = Arc<BTreeMap<String, CodeRecord>>;
+    static DONE: Mutex<Vec<(MirOptions, Compiled)>> = Mutex::new(Vec::new());
+    let _std = crate::phases::span(crate::phases::Phase::Std);
+    let mut done = DONE
+        .lock()
+        .map_err(|_| Ice::new("std's release records were poisoned"))?;
+    let all = if let Some((_, all)) = done.iter().find(|(m, _)| *m == mir) {
+        Arc::clone(all)
+    } else {
+        let all = Arc::new(compile_whole(&*whole_std()?, mir)?);
+        done.push((mir, Arc::clone(&all)));
+        all
+    };
+    drop(done);
+    modules
+        .iter()
+        .map(|module| {
+            all.get(module)
+                .cloned()
+                .map(|record| (module.clone(), record))
+                .ok_or_else(|| Ice::new(format!("std compiled no `{module}`")))
+        })
+        .collect()
+}
+
 /// Where std's records are read and written: the store, the lookup log
 /// and whether lookups read (`CHEBY_DUMP_DIR` bypasses reads, D-965).
 #[derive(Clone)]
@@ -864,12 +1132,21 @@ pub(crate) fn first_use(
 /// `mir` (D-718), compiled alone into its code record in a JIT of its own
 /// (D-1217) that is dropped once the records are taken: by module path.
 fn compile_whole(whole: &WholeStd, mir: MirOptions) -> Result<BTreeMap<String, CodeRecord>, Ice> {
-    let mut units = whole.units.clone();
+    // A release build's std is optimized, its masks inferred over the
+    // optimized code (design T9).
+    let release = match mir.release {
+        Some(levers) if is_release(mir) => Some(release_std(levers)?),
+        Some(_) | None => None,
+    };
+    let (mut units, by_def) = match &release {
+        Some(release) => (release.units.clone(), &release.by_def),
+        None => (whole.units.clone(), &whole.by_def),
+    };
     let counted: Vec<Result<(), Ice>> = units
         .par_iter_mut()
         .map(|unit| {
             if mir.borrows() {
-                borrow::apply(unit, &whole.by_def)?;
+                borrow::apply(unit, by_def)?;
             }
             cheby_mir::count_lowered_with(unit, &mir)
         })

@@ -419,12 +419,13 @@ impl Jit {
         // D-921: the target's fixed feature set, never the host's detected
         // features, so the JIT runs the code the cache and executables
         // hold. D-913: no libcall resolves.
-        let isa = cheby_codegen_clif::isa::host_isa().map_err(|e| match e {
-            CodegenError::UnsupportedHost(message) => JitError::Host(message),
-            other @ (CodegenError::Ice(_) | CodegenError::Module(_) | CodegenError::Compile(_)) => {
-                JitError::Codegen(other)
-            }
-        })?;
+        let isa =
+            cheby_codegen_clif::isa::host_isa_with(options.opt_level).map_err(|e| match e {
+                CodegenError::UnsupportedHost(message) => JitError::Host(message),
+                other @ (CodegenError::Ice(_)
+                | CodegenError::Module(_)
+                | CodegenError::Compile(_)) => JitError::Codegen(other),
+            })?;
         let mut builder =
             JITBuilder::with_isa(Arc::clone(&isa), cheby_codegen_clif::isa::libcall_names());
         builder.symbols(cheby_runtime::symbols());

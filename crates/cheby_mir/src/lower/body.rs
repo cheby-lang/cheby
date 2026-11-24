@@ -42,7 +42,8 @@ pub(super) fn lower_body(
         | FnKey::Trampoline(_)
         | FnKey::TupleDictFn { .. }
         | FnKey::DynForward { .. }
-        | FnKey::Continuation { .. } => None,
+        | FnKey::Continuation { .. }
+        | FnKey::Specialized { .. } => None,
     };
     let mut b = FunctionBuilder::new(key, Abi::Cheby, Repr::Value, span)?;
     b.set_entry_loc(&cx.location(span)?)?;

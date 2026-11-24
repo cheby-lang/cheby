@@ -238,7 +238,8 @@ pub(crate) fn misses_before_check(
 /// names each selected test by its def and entry; a decoded interface holds
 /// no test, D-1121, so the warm facts' tests are added to it), when a constant of it
 /// misses (K5b) or it is imported, transitively, by a module whose constant
-/// misses (D-1134). `--reuse-report`, which reads a record only with its
+/// misses (D-1134). A release build checks every package module, since it
+/// reads no package record and lowers them all. `--reuse-report`, which reads a record only with its
 /// reuse lines (`reuse_replay.rs`), checks every module as before
 /// ([`misses_before_check`] gives no misses). A hit the back end must lower
 /// after all (an edit that only a reader's lowering reads, D-955; a body
@@ -261,6 +262,18 @@ pub(crate) fn keys_before_check(
     for (at, entry) in view.vouched.iter().enumerate() {
         let module =
             ModuleId::from_u32(u32::try_from(at).map_err(|_| Ice::new("too many modules"))?);
+        // A release build reads no package record (`backend::Reading`), so
+        // it lowers every package module from its body: each is checked,
+        // and only std comes from its front records.
+        if build.mir.release.is_some()
+            && view
+                .modules
+                .get(module)
+                .is_some_and(|info| info.package == PackageId::LOCAL)
+        {
+            misses.code.insert(module);
+            continue;
+        }
         let Some(entry) = entry else {
             // A package module the index does not vouch for was edited (or
             // is new) since this family's last build: its code misses, even

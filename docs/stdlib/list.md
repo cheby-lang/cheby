@@ -6,11 +6,11 @@ Functions for the built-in `List<T>` (§3.8). `List` is in the prelude (§3.2), 
 pub type List<T>
 ```
 
-A `List` is a persistent, immutable RRB-tree vector, not a linked list (D-039, ADR-0018). Reading or updating at an index, adding at either end, concatenating and slicing all take O(log n) at most (§3.8). The kernels, the functions that build, read or cut the tree, are implemented in the runtime, and the other functions are written in Cheby over them (D-274). The kernels are `length`, `get`, `push`, `prepend`, `append`, `set`, `slice`, `take`, `drop`, `split_at` and `unique` (D-484). The kernels' costs are required and the others' informative (D-300).
+A `List` is a persistent, immutable RRB-tree vector, not a linked list (D-039, ADR-0018). Reading or updating at an index, adding at either end, concatenating and slicing all take O(log n) at most (§3.8). The kernels, the functions that build, read or cut the tree, are implemented in the runtime, and the other functions are written in Cheby over them (D-274). The kernels are `length`, `get`, `append`, `set`, `slice`, `take`, `drop`, `split_at` and `unique` (D-484). `push` and `prepend` are compiler intrinsics over the runtime's helpers, with no kernel between (D-1758). The costs of the kernels and of these two are required and the others' informative (D-300).
 
 The kernels have no effects, so compile-time evaluation runs them, and they may be called while a constant is computed (D-360, §4.5).
 
-The functions that return a changed list, such as `push`, `prepend`, `append` and `set`, update their first argument in place when it is unique (§9.3). A list built with `push` in a fold therefore costs amortized O(1) per element. `slice`, `take` and `drop` cut a unique list in place too, and release the elements they cut that no other list holds (§9.2); `split_at` reuses a unique list for its back half (D-894).
+The functions that return a changed list, such as `push`, `prepend`, `append` and `set`, update their first argument in place when it is unique (§9.3). A list built with `push` in a fold therefore costs amortized O(1) per element, and so does one built with `prepend`, or taken apart from either end with `[first, ..rest]` or `[..rest, last]` when the match is its last use: a list of more than 32 elements keeps the leaf at each end outside its tree, and the tree changes once per 32 elements (D-1757). `slice`, `take` and `drop` cut a unique list in place too, and release the elements they cut that no other list holds (§9.2); `split_at` reuses a unique list for its back half (D-894).
 
 Lists compare with `==` element by element and debug-print as `[1, 2]` (§3.13). `List<T>` satisfies `Compare` and `Show` when `T` does (§8.7, §8.8, D-064, D-136).
 
@@ -1299,7 +1299,7 @@ pub fn sort_with<T>(xs: List<T>, compare: fn(T, T) -> Order) -> List<T>
 
 Returns the elements of `xs` in increasing order by `compare`, where `Less` means the first argument goes first (D-335). The sort is stable (D-299).
 
-It is a bottom-up merge sort, and every target runs this algorithm, so a `compare` that is not a consistent order gives the same list everywhere and sees the same calls in the same order (D-1448). Each element starts as a run of one. Each round merges the runs in adjacent pairs, front to back, and a last run without a partner waits for the next round, until one run is left. A merge calls `compare` with the front elements of its left and right runs, takes the right one when the result is `Greater` and the left one otherwise, and copies the rest of either run once the other is empty. The runtime runs the sort and calls `compare` back, as `map::upsert` calls its function (D-1448).
+It is a bottom-up merge sort, and every target runs this algorithm, so a `compare` that is not a consistent order gives the same list everywhere and sees the same calls in the same order (D-1448). Each element starts as a run of one. Each round merges the runs in adjacent pairs, front to back, and a last run without a partner waits for the next round, until one run is left. A merge calls `compare` with the front elements of its left and right runs, takes the right one when the result is `Greater` and the left one otherwise, and copies the rest of either run once the other is empty. The runtime runs the sort one comparison at a time: it names the next pair, the caller's code calls `compare` and hands back the answer, so no runtime frame is under a call of `compare` (D-1448, D-1787).
 
 - **Cost:** O(n log n) calls to `compare`. Informative.
 

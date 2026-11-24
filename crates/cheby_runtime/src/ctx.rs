@@ -9,11 +9,17 @@
 //! mode at 8 (a `u32`) and the unwind flag at 12 (a `u32`, D-733), and it
 //! writes the wait-frame word at 16 (a `usize`, D-856;
 //! D-868) right before it calls a waiting kernel or
-//! `scope_close`. The view ends at byte 24, where the Rust part starts
-//! with the interrupt reasons; offsets 16 and 24 once held the exit record
-//! of a prototype that is gone (D-763), so nothing generated reads or
-//! writes anything else. The function-entry check compares the stack pointer with `stack_limit` and
-//! calls `cheby_rt_stack_slow` when it is below. Setting `stack_limit` to
+//! `scope_close`. It reads the inline allocation record at 24, the block
+//! cache it takes blocks from and gives them back to without a call, and
+//! the slow path of an allocation leaves its result at 32, which generated
+//! code then reads (`abi::block_cache`). A large function's outer function
+//! writes its frame size at 40 right before it calls the releasing slow
+//! path of its entry check. The view ends at byte 48, where
+//! the Rust part starts with the interrupt reasons; offsets 16 and 24 once
+//! held the exit record of a prototype that is gone (D-763), so nothing
+//! generated reads or writes anything else. The function-entry check
+//! compares the stack pointer with `stack_limit` and calls
+//! `cheby_rt_stack_slow` when it is below. Setting `stack_limit` to
 //! `usize::MAX` forces the next function entry into that slow path, which
 //! is how an interrupt reaches running code with the same single compare
 //! (D-124).
@@ -59,7 +65,6 @@
 //! reported (D-677). The lowest soft limit is the watermark the slot is
 //! given back with. An isolated entry's soft limit is its hard limit.
 
-use std::cell::RefCell;
 use std::mem::offset_of;
 use std::ptr;
 use std::sync::Arc;
@@ -115,7 +120,22 @@ pub struct ExecCtx {
     /// and read by that fiber's kernels ([`ExecCtx::wait_frame`]); 0 until
     /// the first such call.
     wait_frame: AtomicUsize,
-    // The Rust part, from byte 24: generated code never reads it.
+    /// At [`abi::CTX_ALLOC_CACHE`]: the inline allocation record, the block
+    /// cache generated code takes blocks from and gives them back to
+    /// without a call (`abi::block_cache`). The cache of the thread the
+    /// fiber is current on while the inline path may serve it, the cache
+    /// that never serves otherwise, and that one whenever the fiber is
+    /// current nowhere (`alloc::inline_record`, set by
+    /// `tls::set_current_fiber` with `block_cache`).
+    alloc_cache: AtomicPtr<BlockCache>,
+    /// At [`abi::CTX_ALLOC_RESULT`]: where an allocation's slow path
+    /// leaves its result for generated code, the object or 0.
+    alloc_result: AtomicU64,
+    /// At [`abi::CTX_FRAME_SIZE`]: where a large function's outer
+    /// function leaves its frame size for the releasing slow path of its
+    /// entry check (`crate::unwind::entry_slow`), right before the call.
+    frame_size: AtomicU64,
+    // The Rust part, from byte 48: generated code never reads it.
     /// Why an interrupt was requested: [`reason`] bits (D-688).
     reasons: AtomicU32,
     /// Whether the fiber's code was compiled with unwind edges (D-742).
@@ -157,7 +177,7 @@ pub struct ExecCtx {
     /// current nowhere or the thread's cache is gone. The allocator reads
     /// it instead of the thread-local, which saves a `tls.rs` accessor
     /// call on the paths that know their fiber (GATE1-1, D-686).
-    block_cache: AtomicPtr<RefCell<BlockCache>>,
+    block_cache: AtomicPtr<BlockCache>,
     /// The accounting domain the fiber charges (D-564, D-691).
     domain: Arc<Domain>,
     /// The build's constants during constant evaluation (D-535).
@@ -188,8 +208,11 @@ const _: () = assert!(offset_of!(ExecCtx, stack_limit) == 0 && abi::CTX_STACK_LI
 const _: () = assert!(offset_of!(ExecCtx, mode) == 8 && abi::CTX_MODE == 8);
 const _: () = assert!(offset_of!(ExecCtx, unwind) == 12 && abi::CTX_UNWIND == 12);
 const _: () = assert!(offset_of!(ExecCtx, wait_frame) == 16 && abi::CTX_WAIT_FRAME == 16);
-// The generated-code view ends at 24: the Rust part starts there.
-const _: () = assert!(offset_of!(ExecCtx, reasons) == 24);
+const _: () = assert!(offset_of!(ExecCtx, alloc_cache) == 24 && abi::CTX_ALLOC_CACHE == 24);
+const _: () = assert!(offset_of!(ExecCtx, alloc_result) == 32 && abi::CTX_ALLOC_RESULT == 32);
+const _: () = assert!(offset_of!(ExecCtx, frame_size) == 40 && abi::CTX_FRAME_SIZE == 40);
+// The generated-code view ends at 48: the Rust part starts there.
+const _: () = assert!(offset_of!(ExecCtx, reasons) == 48);
 
 /// What a new fiber control block starts with.
 #[derive(Debug)]
@@ -257,6 +280,9 @@ impl ExecCtx {
             mode: AtomicU32::new(mode),
             unwind: AtomicU32::new(abi::unwind_flag::NONE),
             wait_frame: AtomicUsize::new(0),
+            alloc_cache: AtomicPtr::new(crate::alloc::never_serving_cache().cast_mut()),
+            alloc_result: AtomicU64::new(0),
+            frame_size: AtomicU64::new(0),
             reasons: AtomicU32::new(0),
             unwind_edges: init.unwind_edges,
             soft_limit: AtomicUsize::new(init.soft_limit),
@@ -433,14 +459,49 @@ impl ExecCtx {
     /// The block cache of the thread the fiber is current on, or null (see
     /// the field). Valid only while the fiber is this thread's current
     /// fiber, and only for code that does not suspend (D-686).
-    pub(crate) fn block_cache(&self) -> *const RefCell<BlockCache> {
+    pub(crate) fn block_cache(&self) -> *const BlockCache {
         self.block_cache.load(Ordering::Relaxed)
     }
 
     /// Records the block cache of the thread the fiber becomes current on,
-    /// or null when it stops being current (`tls::set_current_fiber`).
-    pub(crate) fn set_block_cache(&self, cache: *const RefCell<BlockCache>) {
+    /// or null when it stops being current (`tls::set_current_fiber`),
+    /// and the inline allocation record that goes with it
+    /// ([`crate::alloc::inline_record`]).
+    pub(crate) fn set_block_cache(&self, cache: *const BlockCache) {
         self.block_cache.store(cache.cast_mut(), Ordering::Relaxed);
+        let record = crate::alloc::inline_record(self, cache);
+        self.alloc_cache.store(record.cast_mut(), Ordering::Relaxed);
+    }
+
+    /// The inline allocation record (see the field).
+    #[cfg(test)]
+    pub(crate) fn alloc_cache(&self) -> *const BlockCache {
+        self.alloc_cache.load(Ordering::Relaxed)
+    }
+
+    /// Leaves `word` where generated code reads an allocation slow path's
+    /// result ([`abi::CTX_ALLOC_RESULT`]).
+    pub(crate) fn set_alloc_result(&self, word: u64) {
+        self.alloc_result.store(word, Ordering::Relaxed);
+    }
+
+    /// What the last allocation slow path left for generated code.
+    #[cfg(test)]
+    pub(crate) fn alloc_result(&self) -> u64 {
+        self.alloc_result.load(Ordering::Relaxed)
+    }
+
+    /// The frame size a large function's outer function left for its
+    /// releasing slow path ([`abi::CTX_FRAME_SIZE`]).
+    pub(crate) fn frame_size(&self) -> u64 {
+        self.frame_size.load(Ordering::Relaxed)
+    }
+
+    /// Leaves `size` where the releasing slow path of a large frame reads
+    /// it, as generated code does before the call.
+    #[cfg(test)]
+    pub(crate) fn set_frame_size(&self, size: u64) {
+        self.frame_size.store(size, Ordering::Relaxed);
     }
 
     /// The memory budget, `u64::MAX` for none.
@@ -448,9 +509,18 @@ impl ExecCtx {
         self.budget.load(Ordering::Relaxed)
     }
 
-    /// Replaces the memory budget.
+    /// Replaces the memory budget. A budget turns the inline allocation
+    /// path off at once, since every allocation must then be checked
+    /// against it; lifting it turns the path on again the next time the
+    /// fiber becomes current.
     pub(crate) fn set_budget(&self, budget: u64) {
         self.budget.store(budget, Ordering::Relaxed);
+        if budget != u64::MAX {
+            self.alloc_cache.store(
+                crate::alloc::never_serving_cache().cast_mut(),
+                Ordering::Relaxed,
+            );
+        }
     }
 
     /// The fiber's scratch counters: live bytes and their peak.
@@ -552,8 +622,14 @@ mod tests {
         assert_eq!(offset_of!(ExecCtx, mode), 8);
         assert_eq!(offset_of!(ExecCtx, unwind), 12);
         assert_eq!(offset_of!(ExecCtx, wait_frame), 16);
-        assert_eq!(offset_of!(ExecCtx, reasons), 24);
+        assert_eq!(offset_of!(ExecCtx, alloc_cache), 24);
+        assert_eq!(offset_of!(ExecCtx, alloc_result), 32);
+        assert_eq!(offset_of!(ExecCtx, frame_size), 40);
+        assert_eq!(offset_of!(ExecCtx, reasons), 48);
         let ctx = fcb();
+        // A block that is current nowhere names the cache that never
+        // serves.
+        assert_eq!(ctx.alloc_cache(), crate::alloc::never_serving_cache());
         assert_eq!(ctx.unwind.load(Ordering::Relaxed), abi::unwind_flag::NONE);
         assert!(ctx.unwind_edges());
     }

@@ -46,12 +46,27 @@
 //! Lowering rules (D-453): every Cheby-ABI function uses Cranelift's
 //! `tail` convention with the hidden `ctx` parameter first, and a tail call
 //! is `return_call` (D-015). Every call of a top-level function loads the
-//! callee's slot (D-043, [`CallMode::Indirect`]). Entry thunks use the
+//! callee's slot (D-043, [`CallMode::Indirect`]), with one exception: a
+//! tail call of a function by itself, a top-level function calling itself
+//! or a closure's code calling its own `self`, is a jump to a loop header
+//! inside the function, placed before the entry check so that every
+//! iteration makes the check. A REPL session keeps a top-level function's
+//! self calls on its slot ([`CodegenOptions::slot_self_calls`]), and the
+//! inner body of a large frame keeps them on the outer function, whose
+//! check it lacks (D-679). Entry thunks use the
 //! platform C convention and are the only way the host enters generated
 //! code. Every Cheby-ABI function starts with the stack-limit check of
 //! D-124, whose slow path is `cheby_rt_stack_slow(ctx, location)`, or
-//! `cheby_rt_stack_slow_unwind`, which also releases up to four counted
-//! parameters when it starts an unwinding (D-775). The
+//! `cheby_rt_stack_slow_unwind(ctx, location, p0, p1, p2, p3)`, which also
+//! releases up to four counted parameters when it starts an unwinding
+//! (D-775); no slow path takes more than six arguments, so none passes one
+//! on the stack on System V x86-64. The slow paths save
+//! every register generated code may use, so on aarch64 and x86-64
+//! outside Windows they are called with Cranelift's `preserve_all`
+//! convention, which clobbers nothing: the values that live across the
+//! check, a self tail call's loop-carried ones included, stay in registers
+//! on the fast path. They return nothing; the code reads the flag at
+//! `ctx+12` after them. The
 //! check runs after the prologue has allocated the frame, so a function
 //! whose frame exceeds [`CodegenOptions::large_frame_threshold`] (64 KiB)
 //! is compiled as two (D-679): an outer function with its symbol and a
@@ -100,6 +115,7 @@
 //! call the runtime only on the slow paths, unless
 //! [`CodegenOptions::checked_rc`] asks for the checked runtime calls.
 
+mod alloc_inline;
 #[cfg(test)]
 mod alone_tests;
 mod arith;
@@ -110,9 +126,13 @@ mod data;
 mod decls;
 mod error;
 mod func;
+#[cfg(test)]
+mod instr_kernels_tests;
 pub mod isa;
 pub mod jit_unit;
 mod layout;
+mod list_ends;
+mod list_index;
 #[cfg(test)]
 mod locs_tests;
 pub mod mangle;
@@ -167,9 +187,35 @@ pub enum CallMode {
     /// (D-916).
     #[default]
     Indirect,
-    /// Call the callee's symbol directly. No build uses it (D-916: direct
-    /// calls are reconsidered with M6's release profile).
+    /// Call the callee's symbol directly: release builds (D-916's
+    /// reconsideration). A top-level function's symbol then carries its
+    /// borrow mask as its slot does ([`mangle::function`], D-917,
+    /// D-1109), at its definition and at every import, so a caller
+    /// compiled against another mask fails to resolve. Slots stay defined.
     Direct,
+}
+
+/// Cranelift's optimization level (`opt_level`): `none` in debug builds
+/// (D-259, D-912), `speed` in release builds unless `CHEBY_RELEASE_OFF`
+/// turns the `clif` lever off.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Default)]
+pub enum OptLevel {
+    /// `opt_level=none`, the default.
+    #[default]
+    None,
+    /// `opt_level=speed`.
+    Speed,
+}
+
+impl OptLevel {
+    /// The value of Cranelift's `opt_level` flag.
+    #[must_use]
+    pub const fn flag(self) -> &'static str {
+        match self {
+            Self::None => "none",
+            Self::Speed => "speed",
+        }
+    }
 }
 
 /// How generated code declares an `@external(native, …)` symbol. In both
@@ -221,8 +267,21 @@ pub struct CodegenOptions {
     /// outer function, which checks the stack for its whole frame, and an
     /// unchecked inner body `cb$big$…` (D-679). Only consulted when
     /// [`CodegenOptions::stack_check`] is set. Tests lower it to split
-    /// small functions.
+    /// small functions; 0 splits every function whose frame is not empty.
     pub large_frame_threshold: u32,
+    /// Compile a top-level function's tail calls of itself as every other
+    /// call, through its slot, instead of as a jump inside the function.
+    /// A REPL session sets it, so a running loop reaches a redefinition
+    /// that takes over the slot at its next iteration (D-043); `false` by
+    /// default.
+    pub slot_self_calls: bool,
+    /// Cranelift's optimization level, which the ISA is built with
+    /// ([`isa::host_isa_with`]).
+    pub opt_level: OptLevel,
+    /// The profile the code is compiled in, written into every code record
+    /// ([`record::CodeRecord::profile`]), so that a batch or a link of
+    /// mixed profiles is refused.
+    pub profile: cheby_mir::Profile,
 }
 
 /// The default [`CodegenOptions::large_frame_threshold`]: 64 KiB (D-679).
@@ -240,6 +299,9 @@ impl Default for CodegenOptions {
             checked_rc: false,
             unwind_edges: true,
             large_frame_threshold: LARGE_FRAME_THRESHOLD,
+            slot_self_calls: false,
+            opt_level: OptLevel::None,
+            profile: cheby_mir::Profile::Debug,
         }
     }
 }
@@ -276,7 +338,7 @@ pub fn declare<M: Module>(
     _cx: &CodegenCx<'_>,
     opts: &CodegenOptions,
 ) -> Result<(), CodegenError> {
-    decls.declare_units(module, mirs, opts.foreign_import)
+    decls.declare_units(module, mirs, opts.foreign_import, opts.call_mode)
 }
 
 /// What one call of [`define_with_stats`] defined: the size of the machine

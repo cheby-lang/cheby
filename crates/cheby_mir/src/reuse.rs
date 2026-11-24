@@ -664,6 +664,44 @@ impl Facts {
     }
 }
 
+/// How many sinks the drops of `f`, a lowered function of `module`, would
+/// pair with once counted with every parameter owned: what the release
+/// inliner keeps from falling (`crate::inline`). 0 for a `precounted`
+/// body and for one whose field reads and allocations share no size.
+pub(crate) fn pair_count(module: &MirModule, f: &Function) -> usize {
+    if f.precounted {
+        return 0;
+    }
+    let mut read = BTreeSet::new();
+    let mut made = BTreeSet::new();
+    for stmt in f.blocks.iter().flat_map(|b| &b.stmts) {
+        match stmt {
+            Stmt::Assign {
+                value: Rvalue::Field { layout, .. },
+                ..
+            } => read.extend(reusable_size(module, *layout)),
+            Stmt::Assign {
+                value: Rvalue::Alloc { layout, .. },
+                ..
+            } => made.extend(reusable_size(module, *layout)),
+            Stmt::Assign { .. }
+            | Stmt::Eval(_)
+            | Stmt::Dup(_)
+            | Stmt::Drop(_)
+            | Stmt::DropKeep { .. }
+            | Stmt::ClearUnwind => {}
+        }
+    }
+    if read.intersection(&made).next().is_none() {
+        return 0;
+    }
+    let mut counted = f.clone();
+    if crate::rc::insert(&mut counted).is_err() {
+        return 0;
+    }
+    pairs(module, &counted).map_or(0, |p| p.iter().map(|pair| pair.sinks.len()).sum())
+}
+
 /// The pairs of `f`, a counted function of `module` without unwind edges
 /// (module documentation).
 fn pairs(module: &MirModule, f: &Function) -> Result<Vec<Pair>, Ice> {
@@ -1010,6 +1048,9 @@ pub fn decisions(module: &MirModule, function: &Function) -> Result<Vec<ReuseDec
                 | Rvalue::FloatArith { .. }
                 | Rvalue::Bitwise { .. }
                 | Rvalue::FloatNeg { .. }
+                | Rvalue::Convert { .. }
+                | Rvalue::FloatSqrt { .. }
+                | Rvalue::Wrapping { .. }
                 | Rvalue::Not(_)
                 | Rvalue::ReadTag { .. }
                 | Rvalue::DropReuse { .. } => continue,

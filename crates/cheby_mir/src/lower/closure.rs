@@ -339,7 +339,8 @@ pub(super) fn owner_of(key: FnKey) -> Result<DefId, Ice> {
         | FnKey::ConstInit(d)
         | FnKey::Test(d)
         | FnKey::Closure { owner: d, .. }
-        | FnKey::Continuation { owner: d, .. } => Ok(d),
+        | FnKey::Continuation { owner: d, .. }
+        | FnKey::Specialized { owner: d, .. } => Ok(d),
         other @ (FnKey::ValueShim(_)
         | FnKey::Entry(_)
         | FnKey::Trampoline(_)

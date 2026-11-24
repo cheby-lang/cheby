@@ -311,15 +311,16 @@ fn code_cache_warm_test_loads_every_module() {
     same_output(&fresh, &filtered);
 }
 
-/// D-1187, D-1180: a second `cheby check` loads the `plain` record of every
-/// module of the constants' module set (all three hold a constant) and
-/// prints what the first printed.
+/// D-1187, D-1180, D-1260: a first `cheby check` compiles the `plain` code
+/// of every module of the constants' module set (all three hold a
+/// constant); a second one, whose constants all hit their entries, lowers
+/// and loads nothing and prints what the first printed.
 #[test]
 #[cfg_attr(
     windows,
     ignore = "runs JIT-compiled code; Windows support is M6 (D-545)"
 )]
-fn code_cache_warm_check_loads_the_constants_modules() {
+fn code_cache_warm_check_whose_constants_hit_loads_nothing() {
     let scratch = Scratch::new("check");
     let dir = package(&scratch.path().join("app"));
     let (first, second) = twice(&scratch, &dir, &["check"], &[]);
@@ -328,9 +329,15 @@ fn code_cache_warm_check_loads_the_constants_modules() {
         code_lookups(&first.log, "plain"),
         every("code.plain", "miss", false)
     );
-    assert_eq!(
-        code_lookups(&second.log, "plain"),
-        every("code.plain", "hit", false)
+    assert_eq!(code_lookups(&second.log, "plain"), Vec::<String>::new());
+    assert!(
+        second
+            .log
+            .iter()
+            .filter(|l| l.starts_with("const "))
+            .all(|l| l.ends_with(" hit")),
+        "{:?}",
+        second.log
     );
     same_output(&first, &second);
 }

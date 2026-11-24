@@ -4,30 +4,37 @@
 //! D-634), releasing the element it cuts (D-893) or, when the pattern
 //! binds that element, moving it out in the same descent (D-909).
 //!
-//! - [`node`]: the objects (layout ids 26-28) and their [`CustomKind`]s,
+//! - [`node`]: the objects (layout ids 26-29) and their [`CustomKind`]s,
 //!   and the static empty list `cheby_rt_static_empty_list`.
 //! - [`tree`]: get, set, push, take, drop and concatenation on trees, in
 //!   place along the path where nodes are unique.
 //! - [`ops`]: the operations on list values (views over a tree).
+//! - [`buffers`]: the head and tail leaves that a big root keeps outside
+//!   its tree, and the fast paths of `push`, `prepend` and the pattern
+//!   steps at either end of a list (D-1757).
 //! - `kernels`: the runtime helpers for generated code (plan §4.1) and
 //!   the `std::list` kernels (D-484).
 //! - `heap`: the `std::heap` kernels, a binary heap kept in a list's tree
 //!   and updated in place (D-1612, D-1613).
 //!
 //! Costs, as `docs/stdlib/list.md` requires (D-300) and the tests in
-//! `tests.rs` pin: `length` O(1); `get` and `set` O(log n); `push` O(log n)
-//! and in place at count one, with amortized O(1) allocation; `prepend` and
-//! `append` O(log n); `slice`, `take`, `drop` and `split_at` O(1) views.
+//! `tests.rs` pin: `length` O(1); `get` and `set` O(log n); `push` and
+//! `prepend` O(log n), and at count one in place with amortized O(1) time
+//! and allocation; `append` O(log n); `slice`, `take`, `drop` and
+//! `split_at` O(1) views, after an O(log n) fold of a big root's leaves
+//! into its tree when it has any.
 //!
 //! For other runtime modules: [`iter`] walks a list's elements and
 //! [`from_iter`] builds one (plan §4.3.4).
 //!
 //! [`CustomKind`]: crate::layout::CustomKind
 
+mod buffers;
 mod heap;
 pub(crate) mod kernels;
 mod node;
 mod ops;
+mod steps;
 mod tree;
 
 #[cfg(test)]
@@ -35,16 +42,19 @@ mod tests;
 
 pub use heap::{
     cheby_heap_sys_from_list, cheby_heap_sys_pop, cheby_heap_sys_push, cheby_heap_sys_to_list,
+    cheby_rt_heap_heapify, cheby_rt_heap_list_start, cheby_rt_heap_pop, cheby_rt_heap_push,
+    cheby_rt_heap_step,
 };
 pub use kernels::{
-    cheby_list_append, cheby_list_drop, cheby_list_get, cheby_list_length, cheby_list_prepend,
-    cheby_list_push, cheby_list_set, cheby_list_slice, cheby_list_sort_with, cheby_list_split_at,
-    cheby_list_take, cheby_list_unique, cheby_rt_list_append, cheby_rt_list_get,
-    cheby_rt_list_length, cheby_rt_list_push, cheby_rt_list_slice, cheby_rt_list_slice_owned,
-    cheby_rt_list_uncons, cheby_rt_list_uncons_owned,
+    cheby_list_append, cheby_list_drop, cheby_list_get, cheby_list_length, cheby_list_set,
+    cheby_list_slice, cheby_list_sort_with, cheby_list_split_at, cheby_list_take,
+    cheby_list_unique, cheby_rt_list_append, cheby_rt_list_get, cheby_rt_list_length,
+    cheby_rt_list_prepend, cheby_rt_list_push, cheby_rt_list_set, cheby_rt_list_slice,
+    cheby_rt_list_slice_owned, cheby_rt_list_uncons, cheby_rt_list_uncons_owned,
 };
 pub use node::{StaticList, cheby_rt_static_empty_list};
 pub(crate) use ops::Iter;
+pub use steps::{cheby_rt_buffer_finish, cheby_rt_buffer_step, cheby_rt_sort_start};
 
 use crate::abi::Word;
 
@@ -52,7 +62,7 @@ use crate::abi::Word;
 /// `(symbol, address)` pairs. The `cheby_rt_list_*` helpers and the static empty list are
 /// runtime helpers, registered by `symbols.rs` itself.
 ///
-/// Also registers the list layouts (26-28), so generated code that only
+/// Also registers the list layouts (26-29), so generated code that only
 /// `dup`s or prints the static empty list finds layout 26 even before any
 /// list function ran: `symbols()` calls this whenever a JIT is built.
 pub(crate) fn kernels(out: &mut Vec<(&'static str, *const u8)>) {
@@ -61,7 +71,7 @@ pub(crate) fn kernels(out: &mut Vec<(&'static str, *const u8)>) {
     out.extend(heap::all());
 }
 
-/// Registers the list layouts (26-28) once per process, as `kernels`
+/// Registers the list layouts (26-29) once per process, as `kernels`
 /// does: an executable's start calls it through `image::install`, since
 /// it never builds the symbol table (D-919).
 pub(crate) fn register_kinds() {
@@ -88,6 +98,25 @@ pub(crate) unsafe fn iter(list: Word) -> Iter {
     node::register();
     // SAFETY: forwarded from the caller.
     Iter::new(unsafe { node::Root::from_word(list) })
+}
+
+/// Folds a big root's head and tail leaves into its tree
+/// ([`buffers`]) before the value reaches another fiber or becomes
+/// static, since such a root is never written again. Does nothing for
+/// any other value.
+///
+/// # Safety
+///
+/// `word` is a tagged integer, 0, or a live object that only this fiber
+/// holds.
+pub(crate) unsafe fn settle_value(word: Word) {
+    // SAFETY: forwarded from the caller.
+    unsafe { buffers::settle_value(word) };
+}
+
+/// Whether `id` is the layout of a list value: a root or a big root.
+pub(crate) fn is_root(id: crate::abi::LayoutId) -> bool {
+    node::is_root(id)
 }
 
 /// The number of elements of a borrowed list. O(1).

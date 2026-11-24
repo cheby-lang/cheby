@@ -20,6 +20,14 @@
 //! D-909). What rules 2 and 3 put after a `list_uncons` goes after the
 //! `list_uncons_head` that completes it, which must follow it at once.
 //!
+//! A `list_uncons_head` or a `list_get` whose only use is an `unbox` to
+//! `Float` or `F32` right after it, which rule 2 would follow with the
+//! element's `drop`, becomes one read of the element as a raw number
+//! (`list_uncons_head_float`, `list_get_float` and their `F32` forms),
+//! with no `unbox` and no `drop` (`scalar_read`). The element's word
+//! then never reaches a local, so code generation may read the number
+//! without touching the element's count when the list keeps it alive.
+//!
 //! Borrowed locals (D-715, [`Function::borrowed_locals`]) hold no
 //! reference: a borrowed parameter, and a `field` result of a borrowed
 //! local (a borrowed projection, D-807, which changes
@@ -69,6 +77,10 @@ pub fn insert_module(module: &mut MirModule) -> Result<(), Ice> {
 ///
 /// An [`Ice`] if `f` already has `dup` or `drop`, has unwind edges
 /// (they come after this pass, D-698), or is malformed.
+#[expect(
+    clippy::too_many_lines,
+    reason = "the rules of the module documentation, in the order they apply"
+)]
 pub fn insert(f: &mut Function) -> Result<(), Ice> {
     if f.precounted {
         return Ok(());
@@ -87,6 +99,7 @@ pub fn insert(f: &mut Function) -> Result<(), Ice> {
     let borrowed = f.borrowed_locals()?;
     let held =
         |l: Local| -> Result<bool, Ice> { Ok(counted(f, l)? && !is_borrowed_local(&borrowed, l)) };
+    let uses = use_counts(f);
     let mut new_blocks = Vec::with_capacity(f.blocks.len());
     let mut edge_drops: Vec<(BlockId, BlockId, Vec<Local>)> = Vec::new();
     for (id, block) in f.blocks.iter_enumerated() {
@@ -108,17 +121,19 @@ pub fn insert(f: &mut Function) -> Result<(), Ice> {
         // What goes after a `list_uncons`, held until its
         // `list_uncons_head` is placed, with its position.
         let mut held_post: Vec<(Stmt, PosRef)> = Vec::new();
+        // Whether the statement is an `unbox` a scalar read took in.
+        let mut fused = false;
         for (i, (stmt, after)) in block.stmts.iter().zip(&bl.after).enumerate() {
+            if std::mem::take(&mut fused) {
+                continue;
+            }
             let here = block.pos_at(i);
-            let uses = match stmt {
-                Stmt::Assign { value, .. } | Stmt::Eval(value) => value.uses(),
-                Stmt::Dup(_) | Stmt::Drop(_) | Stmt::DropKeep { .. } => {
-                    return Err(Ice::new("reference counts inserted twice"));
-                }
-                // Touches no local (D-693).
-                Stmt::ClearUnwind => Vec::new(),
-            };
-            let (before, mut post) = place(f, &borrowed, &uses, after)?;
+            // After a scalar read, what is live is what is live after the
+            // `unbox`, but for the element and the number, neither counted.
+            let scalar = scalar_read(f, &block.stmts, i, &uses)?;
+            fused = scalar.is_some();
+            let stmt = scalar.as_ref().unwrap_or(stmt);
+            let (before, mut post) = place(f, &borrowed, &stmt_uses(stmt)?, after)?;
             stmts.extend(before, here);
             stmts.push(own_dying_list(stmt, &mut post), here);
             if let (Some(dst), Stmt::Assign { value, .. }) = (stmt_def(stmt), stmt)
@@ -179,6 +194,85 @@ pub fn insert(f: &mut Function) -> Result<(), Ice> {
         });
     }
     place_edge_drops(f, new_blocks, edge_drops)
+}
+
+/// The locals `stmt` uses, before any count is placed.
+fn stmt_uses(stmt: &Stmt) -> Result<Vec<(Local, UseKind)>, Ice> {
+    match stmt {
+        Stmt::Assign { value, .. } | Stmt::Eval(value) => Ok(value.uses()),
+        Stmt::Dup(_) | Stmt::Drop(_) | Stmt::DropKeep { .. } => {
+            Err(Ice::new("reference counts inserted twice"))
+        }
+        // Touches no local (D-693).
+        Stmt::ClearUnwind => Ok(Vec::new()),
+    }
+}
+
+/// How many times each local is used, by local index: by statements,
+/// terminators and block arguments, before any count is placed.
+fn use_counts(f: &Function) -> Vec<u32> {
+    let mut counts = vec![0_u32; f.locals.len()];
+    let mut add = |l: Local| {
+        if let Some(n) = counts.get_mut(l.index()) {
+            *n = n.saturating_add(1);
+        }
+    };
+    for block in &f.blocks {
+        for stmt in &block.stmts {
+            match stmt {
+                Stmt::Assign { value, .. } | Stmt::Eval(value) => {
+                    for (l, _) in value.uses() {
+                        add(l);
+                    }
+                }
+                Stmt::Dup(l) | Stmt::Drop(l) | Stmt::DropKeep { local: l, .. } => add(*l),
+                Stmt::ClearUnwind => {}
+            }
+        }
+        for (l, _) in block.term.uses() {
+            add(l);
+        }
+    }
+    counts
+}
+
+/// Statements `i` and `i + 1` of `stmts` as one read of an element as a
+/// raw number, when `i` is `e = list_uncons_head()` or `e = list_get(l,
+/// n)`, `i + 1` is `x = unbox e` to `Float` or `F32`, and that is the
+/// only use of `e` in the function: `x = list_uncons_head_float()` or
+/// `x = list_get_float(l, n)` (or the `F32` form). Counting would only
+/// have dropped `e` right after the `unbox`, which the read does itself.
+fn scalar_read(f: &Function, stmts: &[Stmt], i: usize, uses: &[u32]) -> Result<Option<Stmt>, Ice> {
+    let (
+        Some(Stmt::Assign {
+            dst: elem,
+            value: Rvalue::CallRuntime { func, args },
+        }),
+        Some(Stmt::Assign {
+            dst,
+            value:
+                Rvalue::Unbox {
+                    value: Operand::Local(unboxed),
+                    to,
+                },
+        }),
+    ) = (stmts.get(i), i.checked_add(1).and_then(|n| stmts.get(n)))
+    else {
+        return Ok(None);
+    };
+    let Some(fused) = func.as_scalar(*to) else {
+        return Ok(None);
+    };
+    if unboxed != elem || uses.get(elem.index()).copied() != Some(1) || !counted(f, *elem)? {
+        return Ok(None);
+    }
+    Ok(Some(Stmt::Assign {
+        dst: *dst,
+        value: Rvalue::CallRuntime {
+            func: fused,
+            args: args.clone(),
+        },
+    }))
 }
 
 /// Whether `stmt` is a `list_uncons`, which its `list_uncons_head`

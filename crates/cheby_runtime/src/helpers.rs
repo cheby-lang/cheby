@@ -27,7 +27,9 @@ use crate::values;
 pub(crate) unsafe extern "C" fn cheby_rt_str_with_capacity(ctx: *mut ExecCtx, cap: i64) -> Word {
     guarded(Some(ctx), || {
         let cap = u64::try_from(cap).unwrap_or(0);
-        object::ptr_to_word(string::alloc_string(cap))
+        // SAFETY: `ctx` is null or the running fiber's (the caller's
+        // contract).
+        object::ptr_to_word(unsafe { string::alloc_text_for(ctx, cap, crate::abi::layout::STRING) })
     })
 }
 
@@ -57,17 +59,6 @@ pub(crate) unsafe extern "C" fn cheby_rt_str_append(
                 "`cheby_rt_str_append` got a piece that is not a String"
             ));
         };
-        // SAFETY: `acc` is live (the caller's contract) and checked to be a
-        // text object before its fields are read.
-        if unsafe { string::bytes(acc) }.is_some() {
-            // SAFETY: as above.
-            let path = unsafe { string::growth(acc, object::to_u64(bytes.len()), true) };
-            stats::record(match path {
-                string::Growth::InPlace => Event::StrAppendInPlace,
-                string::Growth::Grown => Event::StrAppendGrown,
-                string::Growth::Copied => Event::StrAppendCopied,
-            });
-        }
         if acc == piece {
             // The piece aliases the accumulator, which this call may grow or
             // free: copy it first. (The caller owns two references, so the
@@ -78,18 +69,30 @@ pub(crate) unsafe extern "C" fn cheby_rt_str_append(
             let [copy_word] = copy.words();
             // SAFETY: forwarded from the caller; the copy is a live object of
             // its own.
-            let out =
-                unsafe { string::append(acc, string::text_bytes(copy_word).unwrap_or_default()) };
+            let (out, path) = unsafe {
+                string::append_in(ctx, acc, string::text_bytes(copy_word).unwrap_or_default())
+            };
             owned.disarm();
             drop(copy);
+            record_append(path);
             return out;
         }
         // SAFETY: forwarded from the caller; `piece` is another object, so its
         // bytes stay valid while `acc` changes.
-        let out = unsafe { string::append(acc, bytes) };
+        let (out, path) = unsafe { string::append_in(ctx, acc, bytes) };
         owned.disarm();
+        record_append(path);
         out
     })
+}
+
+/// Counts the path an append of `cheby_rt_str_append` took.
+fn record_append(path: string::Growth) {
+    stats::record(match path {
+        string::Growth::InPlace => Event::StrAppendInPlace,
+        string::Growth::Grown => Event::StrAppendGrown,
+        string::Growth::Copied => Event::StrAppendCopied,
+    });
 }
 
 /// `cheby_rt_str_eq(a, b)`: whether two borrowed `String`s hold the same
@@ -165,7 +168,8 @@ pub(crate) unsafe extern "C" fn cheby_rt_debug(ctx: *mut ExecCtx, value: Word) -
 /// context.
 #[unsafe(no_mangle)]
 pub(crate) unsafe extern "C" fn cheby_rt_box_i64(ctx: *mut ExecCtx, value: i64) -> Word {
-    guarded(Some(ctx), || values::int_word(value))
+    // SAFETY: `ctx` is null or the running fiber's control block.
+    guarded(Some(ctx), || unsafe { values::int_word_for(ctx, value) })
 }
 
 /// `cheby_rt_box_u64(ctx, value)`: the uniform word of a `U64` (a
@@ -177,7 +181,8 @@ pub(crate) unsafe extern "C" fn cheby_rt_box_i64(ctx: *mut ExecCtx, value: i64) 
 /// context.
 #[unsafe(no_mangle)]
 pub(crate) unsafe extern "C" fn cheby_rt_box_u64(ctx: *mut ExecCtx, value: u64) -> Word {
-    guarded(Some(ctx), || values::u64_word(value))
+    // SAFETY: `ctx` is null or the running fiber's control block.
+    guarded(Some(ctx), || unsafe { values::u64_word_for(ctx, value) })
 }
 
 /// `cheby_rt_box_f64(ctx, value)`: a new `BoxedFloat`.
@@ -188,7 +193,8 @@ pub(crate) unsafe extern "C" fn cheby_rt_box_u64(ctx: *mut ExecCtx, value: u64) 
 /// context.
 #[unsafe(no_mangle)]
 pub(crate) unsafe extern "C" fn cheby_rt_box_f64(ctx: *mut ExecCtx, value: f64) -> Word {
-    guarded(Some(ctx), || values::f64_word(value))
+    // SAFETY: `ctx` is null or the running fiber's control block.
+    guarded(Some(ctx), || unsafe { values::f64_word_for(ctx, value) })
 }
 
 /// `cheby_rt_box_f32(ctx, value)`: a new `BoxedF32`.
@@ -199,7 +205,8 @@ pub(crate) unsafe extern "C" fn cheby_rt_box_f64(ctx: *mut ExecCtx, value: f64) 
 /// context.
 #[unsafe(no_mangle)]
 pub(crate) unsafe extern "C" fn cheby_rt_box_f32(ctx: *mut ExecCtx, value: f32) -> Word {
-    guarded(Some(ctx), || values::f32_word(value))
+    // SAFETY: `ctx` is null or the running fiber's control block.
+    guarded(Some(ctx), || unsafe { values::f32_word_for(ctx, value) })
 }
 
 /// `cheby_rt_fmod_f64(a, b)`: `a % b` on `Float`, the exact remainder of

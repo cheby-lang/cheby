@@ -122,6 +122,9 @@ fn consumed_by(stmt: &Stmt) -> Vec<Local> {
         | Rvalue::FloatArith { .. }
         | Rvalue::Bitwise { .. }
         | Rvalue::FloatNeg { .. }
+        | Rvalue::Convert { .. }
+        | Rvalue::FloatSqrt { .. }
+        | Rvalue::Wrapping { .. }
         | Rvalue::Not(_)
         | Rvalue::ReadTag { .. }
         | Rvalue::DropReuse { .. }

@@ -490,7 +490,7 @@ unsafe fn send(ctx: *mut ExecCtx, sender: Word, value: Word) -> Word {
             // enclosing scope reached first (`cancel::check_chain`, review
             // finding CONC-W2-1): then this fiber is being cancelled too,
             // and the value is released as it unwinds (D-670).
-            if cancel::check_chain(me, me.conc.responsible_scope()).is_err() {
+            if cancel::check_chain(me, me.conc.responsible_scope().as_ref()).is_err() {
                 drop(value);
                 raise_cancel(Some(ctx));
             }
@@ -595,7 +595,7 @@ unsafe fn receive(ctx: *mut ExecCtx, receiver: Word) -> Word {
         // (D-769), as in `send`: a waiter woken by a close while it is
         // being cancelled unwinds and takes nothing (D-667, D-670).
         WaitState::Closed => {
-            if cancel::check_chain(me, me.conc.responsible_scope()).is_err() {
+            if cancel::check_chain(me, me.conc.responsible_scope().as_ref()).is_err() {
                 raise_cancel(Some(ctx));
             }
             cheby_rt_static_err_nil.word()

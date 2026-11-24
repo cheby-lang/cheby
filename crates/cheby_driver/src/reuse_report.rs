@@ -28,7 +28,11 @@
 //!   [`cheby_mir::kernels_in_place`] whose first argument is a local at its
 //!   last use (consumed by the call, not used after it, and held by no
 //!   other value of the function that is still alive at the call,
-//!   [`Flow::held_elsewhere`]) gets
+//!   [`Flow::held_elsewhere`]) gets the line below. A direct call of the
+//!   kernel, the foreign call at the call site (`cheby_mir`'s
+//!   `lower/external.rs`), counts as the call: its argument is the local
+//!   moved into the call's temporary, judged at that move ([`moved_from`]),
+//!   so the lines are those of a call through the wrapper.
 //!
 //!   ```text
 //!   `set::insert` gets `held` at its last use: in place when it is unique at run time
@@ -291,48 +295,197 @@ fn kernel_calls(
             continue;
         }
         for (at, stmt) in block.stmts.iter().enumerate() {
-            let Stmt::Assign {
-                dst,
-                value: Rvalue::Call { callee, args },
-            } = stmt
-            else {
+            let Stmt::Assign { dst, value } = stmt else {
                 continue;
             };
-            let Some(def) = callee.direct() else {
+            let before = block.stmts.get(..at).unwrap_or_default();
+            let Some(call) = in_place_call(unit, value, before, at)? else {
                 continue;
             };
-            let name = unit.name(def)?;
-            if !cheby_mir::kernels_in_place::updates_in_place(&name.module, &name.item) {
-                continue;
-            }
-            let Some(Operand::Local(first)) = args.first() else {
-                continue;
-            };
-            let first = *first;
-            // Borrowed (never for a `pub` std function, D-787), passed
-            // twice, a constant's value, used after the call, or held by
-            // another value at the call: not at its last use.
-            let borrowed = matches!(callee, Callee::Borrowing(_, mask) if mask.is_borrowed(0));
-            let twice = args.iter().skip(1).any(|a| a.local() == Some(first));
-            if borrowed
-                || twice
+            let first = call.first;
+            // Borrowed, passed twice, a constant's value, used after the
+            // call, or held by another value at the call: not at its last
+            // use.
+            if call.borrowed
+                || call.others.contains(&first)
                 || flow.constants.contains(&first)
-                || used_after(f, id, at, first)?
-                || flow.held_elsewhere(id, at, first)?
+                || used_after(f, id, call.point, first)?
+                || flow.held_elsewhere(id, call.point, first)?
             {
                 continue;
             }
-            let module = name.module.strip_prefix("std::").unwrap_or(&name.module);
             out.push((
                 KernelCall {
                     result: *dst,
-                    name: format!("{module}::{}", name.item),
+                    name: call.name,
                 },
                 first,
             ));
         }
     }
     Ok(out)
+}
+
+/// A call of an in-place kernel before the report judges its first
+/// argument ([`in_place_call`]).
+struct InPlaceCall {
+    /// The kernel's name as written in a program, `set::insert`.
+    name: String,
+    /// The first argument.
+    first: Local,
+    /// The index of the statement that consumes `first` in the call's
+    /// block.
+    point: usize,
+    /// The other arguments.
+    others: Vec<Local>,
+    /// Whether the callee borrows the first argument (never for a `pub`
+    /// std function, D-787).
+    borrowed: bool,
+}
+
+/// `value`, statement `at` of its block after the statements `before`,
+/// as a call of a kernel of [`cheby_mir::kernels_in_place`] whose first
+/// argument is a local: a call of its wrapper, or a direct call of the
+/// kernel (`cheby_mir`'s `lower/external.rs`). A direct call borrows a
+/// temporary that each counted argument is moved into, so the argument and
+/// the statement that consumes it are those of the move. A direct call of
+/// `list::set` is the helper `list_set`, which consumes the list itself.
+fn in_place_call(
+    unit: &MirModule,
+    value: &Rvalue,
+    before: &[Stmt],
+    at: usize,
+) -> Result<Option<InPlaceCall>, Ice> {
+    let (module, item, first, point, others, borrowed) = match value {
+        Rvalue::Call { callee, args } => {
+            let Some(def) = callee.direct() else {
+                return Ok(None);
+            };
+            let name = unit.name(def)?;
+            if !cheby_mir::kernels_in_place::updates_in_place(&name.module, &name.item) {
+                return Ok(None);
+            }
+            let Some(Operand::Local(first)) = args.first() else {
+                return Ok(None);
+            };
+            let others = args.iter().skip(1).filter_map(Operand::local).collect();
+            let borrowed = matches!(callee, Callee::Borrowing(_, mask) if mask.is_borrowed(0));
+            (
+                name.module.to_string(),
+                name.item.to_string(),
+                *first,
+                at,
+                others,
+                borrowed,
+            )
+        }
+        Rvalue::CallForeign { symbol, args, .. } => {
+            let Some((module, item)) = cheby_mir::kernels_in_place::by_symbol(symbol) else {
+                return Ok(None);
+            };
+            let Some(Operand::Local(temp)) = args.first() else {
+                return Ok(None);
+            };
+            let Some((point, first)) = moved_from(before, *temp) else {
+                return Ok(None);
+            };
+            let others = args
+                .iter()
+                .skip(1)
+                .filter_map(Operand::local)
+                .map(|t| moved_from(before, t).map_or(t, |(_, from)| from))
+                .collect();
+            (
+                module.to_owned(),
+                item.to_owned(),
+                first,
+                point,
+                others,
+                false,
+            )
+        }
+        Rvalue::CallRuntime {
+            func: func @ (RuntimeFn::ListSet | RuntimeFn::MapUpsert),
+            args,
+        } => {
+            let Some(Operand::Local(first)) = args.first() else {
+                return Ok(None);
+            };
+            let others = args.iter().skip(1).filter_map(Operand::local).collect();
+            let (module, item) = helper_kernel(*func);
+            (
+                module.to_owned(),
+                item.to_owned(),
+                *first,
+                at,
+                others,
+                false,
+            )
+        }
+        Rvalue::Use(_)
+        | Rvalue::CallRuntime { .. }
+        | Rvalue::Alloc { .. }
+        | Rvalue::AllocPlaceholder { .. }
+        | Rvalue::InitField { .. }
+        | Rvalue::Field { .. }
+        | Rvalue::ReadLayout { .. }
+        | Rvalue::LoadConst(_)
+        | Rvalue::Box { .. }
+        | Rvalue::Unbox { .. }
+        | Rvalue::Checked { .. }
+        | Rvalue::Compare { .. }
+        | Rvalue::FloatArith { .. }
+        | Rvalue::Bitwise { .. }
+        | Rvalue::FloatNeg { .. }
+        | Rvalue::Convert { .. }
+        | Rvalue::FloatSqrt { .. }
+        | Rvalue::Wrapping { .. }
+        | Rvalue::Not(_)
+        | Rvalue::ReadTag { .. }
+        | Rvalue::DropReuse { .. }
+        | Rvalue::AllocReuse { .. } => return Ok(None),
+    };
+    let module = module.strip_prefix("std::").unwrap_or(&module);
+    Ok(Some(InPlaceCall {
+        name: format!("{module}::{item}"),
+        first,
+        point,
+        others,
+        borrowed,
+    }))
+}
+
+/// The kernel whose direct call is the helper `func`, `list_set` or
+/// `map_upsert`, as `(module, function)`.
+const fn helper_kernel(func: RuntimeFn) -> (&'static str, &'static str) {
+    if matches!(func, RuntimeFn::ListSet) {
+        ("std::list", "set")
+    } else {
+        ("std::map", "upsert")
+    }
+}
+
+/// The local that `temp` was moved from, `temp = x`, with the index of the
+/// move among `stmts`, the statements before a direct kernel call in its
+/// block: where lowering moves each counted argument of the call into its
+/// own temporary (D-525).
+fn moved_from(stmts: &[Stmt], temp: Local) -> Option<(usize, Local)> {
+    stmts
+        .iter()
+        .enumerate()
+        .rev()
+        .find_map(|(at, stmt)| match stmt {
+            Stmt::Assign {
+                dst,
+                value: Rvalue::Use(Operand::Local(from)),
+            } if *dst == temp => Some((at, *from)),
+            Stmt::Assign { .. }
+            | Stmt::Eval(_)
+            | Stmt::Dup(_)
+            | Stmt::Drop(_)
+            | Stmt::DropKeep { .. }
+            | Stmt::ClearUnwind => None,
+        })
 }
 
 /// The locals of `f` that hold a constant's value on every path, which is
@@ -401,6 +554,9 @@ fn constants(f: &Function, incoming: &BTreeMap<Local, Vec<Option<Local>>>) -> BT
                 | Rvalue::FloatArith { .. }
                 | Rvalue::Bitwise { .. }
                 | Rvalue::FloatNeg { .. }
+                | Rvalue::Convert { .. }
+                | Rvalue::FloatSqrt { .. }
+                | Rvalue::Wrapping { .. }
                 | Rvalue::Not(_)
                 | Rvalue::ReadTag { .. }
                 | Rvalue::DropReuse { .. } => None,
@@ -882,11 +1038,38 @@ impl<'f> Flow<'f> {
                     _ => None,
                 };
                 match func {
-                    RuntimeFn::ListPush | RuntimeFn::ListAppend => {
+                    RuntimeFn::ListPush
+                    | RuntimeFn::ListAppend
+                    | RuntimeFn::ListPrepend
+                    | RuntimeFn::ListSet
+                    | RuntimeFn::MapUpsert
+                    | RuntimeFn::MapUpsertStore
+                    // The steps of std's intrinsics (`lower/intrinsic.rs`)
+                    // keep or return what they are given.
+                    | RuntimeFn::SortStart
+                    | RuntimeFn::HeapListStart
+                    | RuntimeFn::BufferFinish
+                    | RuntimeFn::HeapPush
+                    | RuntimeFn::HeapPop
+                    | RuntimeFn::HeapHeapify => {
                         args.iter().any(|op| held(holds, op)) && join_into(holds, dst, Hold::Any)
                     }
-                    RuntimeFn::ListGet | RuntimeFn::ListSlice | RuntimeFn::ListSliceOwned => {
-                        let get = matches!(func, RuntimeFn::ListGet);
+                    RuntimeFn::ListGet
+                    | RuntimeFn::ListSlice
+                    | RuntimeFn::ListSliceOwned
+                    | RuntimeFn::MapValueAt
+                    | RuntimeFn::MapSlotTake
+                    | RuntimeFn::MapUpsertFound => {
+                        // A map's value works as a list's element at an
+                        // unknown index, and so does the `Some` an upsert
+                        // gives its callback.
+                        let get = matches!(
+                            func,
+                            RuntimeFn::ListGet
+                                | RuntimeFn::MapValueAt
+                                | RuntimeFn::MapSlotTake
+                                | RuntimeFn::MapUpsertFound
+                        );
                         // An element of a list that holds the object there,
                         // or a view of one, which shares its root.
                         let reaches =
@@ -921,7 +1104,26 @@ impl<'f> Flow<'f> {
                     | RuntimeFn::ScopeClose
                     | RuntimeFn::ListUncons
                     | RuntimeFn::ListUnconsOwned
-                    | RuntimeFn::ListUnconsHead => false,
+                    | RuntimeFn::ListUnconsHead
+                    | RuntimeFn::MapFind
+                    | RuntimeFn::MapUpsertAddress
+                    // A raw number holds nothing.
+                    | RuntimeFn::ListUnconsHeadFloat
+                    | RuntimeFn::ListUnconsHeadF32
+                    | RuntimeFn::ListGetFloat
+                    | RuntimeFn::ListGetF32
+                    | RuntimeFn::BytesInRange
+                    | RuntimeFn::BytesByte
+                    // An address, or an element of a list held as an
+                    // address, which the report does not follow: these are
+                    // only in std's bodies, which it does not judge.
+                    | RuntimeFn::BufferStep
+                    | RuntimeFn::HeapSlot
+                    | RuntimeFn::HeapFirst
+                    | RuntimeFn::HeapStep
+                    | RuntimeFn::PairLeft
+                    | RuntimeFn::PairRight
+                    | RuntimeFn::LoopCheck => false,
                 }
             }
             Rvalue::Call { .. } | Rvalue::CallForeign { .. } => {
@@ -941,6 +1143,9 @@ impl<'f> Flow<'f> {
             | Rvalue::FloatArith { .. }
             | Rvalue::Bitwise { .. }
             | Rvalue::FloatNeg { .. }
+            | Rvalue::Convert { .. }
+            | Rvalue::FloatSqrt { .. }
+            | Rvalue::Wrapping { .. }
             | Rvalue::Not(_)
             | Rvalue::ReadTag { .. }
             | Rvalue::DropReuse { .. } => false,

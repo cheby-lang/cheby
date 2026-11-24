@@ -1,0 +1,201 @@
+// @mode: run-pass
+// @milestone: M3
+// @decisions: D-521, D-1759, D-1774, D-1781, D-1783
+//! Lists of `Float` and `F32` read one element at a time: pattern steps
+//! from the front and from the back, and reads at an index, over lists
+//! that only the walk holds and over lists that the caller keeps and walks
+//! again. Each read takes the element's number from its box. The
+//! elements include NaN, -0.0 and both infinities, and every walk is
+//! checked against the same numbers computed without a list. The lengths
+//! sit around the edges of a leaf of 32 elements, and the lists are built
+//! by `list::map`, by pushes and by prepends. The leak check finds every
+//! box released at the end. The `.env` file turns poisoning off, so the
+//! inline paths of code generation run.
+
+import std::f32
+import std::float
+import std::io
+import std::list
+
+/// Element `i` of every list here: NaN, -0.0, an infinity of either
+/// sign, 0.0 or a finite number.
+fn element(i: Int) -> Float {
+  case i % 8 {
+    0 => 0.0 / 0.0
+    1 => -0.0
+    2 => 1.0 / 0.0
+    3 => -1.0 / 0.0
+    4 => 0.0
+    _ => float::from_int(i) * 0.25 - 3.0
+  }
+}
+
+/// The kind of `x` as a digit: 0 for a finite number other than zero,
+/// then NaN, -0.0, 0.0, +inf and -inf.
+fn kind(x: Float) -> Int {
+  let zero = x == 0.0
+  let negative = 1.0 / x < 0.0
+  case {
+    float::is_nan(x) => 1
+    zero && negative => 2
+    zero => 3
+    float::is_infinite(x) && x > 0.0 => 4
+    float::is_infinite(x) => 5
+    _ => 0
+  }
+}
+
+/// `seen` after one more element `x`: the kinds hashed in order, and the
+/// finite numbers other than zero mixed in order.
+fn see(seen: (Int, Float), x: Float) -> (Int, Float) {
+  let (hash, mix) = seen
+  let k = kind(x)
+  let next = case k {
+    0 => mix * 0.5 + x
+    _ => mix
+  }
+  ((hash * 7 + k) % 1_000_003, next)
+}
+
+/// The elements from `i` up to `n`, seen without a list.
+fn count_up(i: Int, n: Int, seen: (Int, Float)) -> (Int, Float) {
+  case i < n {
+    False => seen
+    True => count_up(i + 1, n, see(seen, element(i)))
+  }
+}
+
+/// The elements from `i` down to 0, seen without a list.
+fn count_down(i: Int, seen: (Int, Float)) -> (Int, Float) {
+  case i < 0 {
+    True => seen
+    False => count_down(i - 1, see(seen, element(i)))
+  }
+}
+
+fn front(xs: List<Float>, seen: (Int, Float)) -> (Int, Float) {
+  case xs {
+    [] => seen
+    [x, ..rest] => front(rest, see(seen, x))
+  }
+}
+
+fn back(xs: List<Float>, seen: (Int, Float)) -> (Int, Float) {
+  case xs {
+    [] => seen
+    [..rest, x] => back(rest, see(seen, x))
+  }
+}
+
+/// The elements of `xs` from index `i` on, read with `list::get`.
+fn at(xs: List<Float>, i: Int, seen: (Int, Float)) -> (Int, Float) {
+  case list::get(xs, i) {
+    None => seen
+    Some(x) => at(xs, i + 1, see(seen, x))
+  }
+}
+
+/// The kinds of the first three elements, read by a pattern.
+fn first_three(xs: List<Float>) -> Int {
+  case xs {
+    [a, b, c, ..] => kind(a) * 100 + kind(b) * 10 + kind(c)
+    _ => -1
+  }
+}
+
+fn front32(xs: List<F32>, seen: (Int, Float)) -> (Int, Float) {
+  case xs {
+    [] => seen
+    [x, ..rest] => front32(rest, see(seen, float::from_f32(x)))
+  }
+}
+
+fn back32(xs: List<F32>, seen: (Int, Float)) -> (Int, Float) {
+  case xs {
+    [] => seen
+    [..rest, x] => back32(rest, see(seen, float::from_f32(x)))
+  }
+}
+
+fn at32(xs: List<F32>, i: Int, seen: (Int, Float)) -> (Int, Float) {
+  case list::get(xs, i) {
+    None => seen
+    Some(x) => at32(xs, i + 1, see(seen, float::from_f32(x)))
+  }
+}
+
+/// The list of the first `n` elements, made by `list::map`.
+fn mapped(n: Int) -> List<Float> {
+  list::map(list::range(0, n), element)
+}
+
+/// The elements from `i` up to `n` pushed onto `acc`.
+fn pushed(i: Int, n: Int, acc: List<Float>) -> List<Float> {
+  case i < n {
+    False => acc
+    True => pushed(i + 1, n, [..acc, element(i)])
+  }
+}
+
+/// The elements from `i` down to 0 prepended to `acc`.
+fn prepended(i: Int, acc: List<Float>) -> List<Float> {
+  case i < 0 {
+    True => acc
+    False => prepended(i - 1, [element(i), ..acc])
+  }
+}
+
+/// The list made the way `how` names.
+fn make(how: String, n: Int) -> List<Float> {
+  case how {
+    "pushed" => pushed(0, n, [])
+    "prepended" => prepended(n - 1, [])
+    _ => mapped(n)
+  }
+}
+
+/// Walks lists of `n` elements made the way `how` names: one the caller
+/// keeps, twice from each end and twice by index, and fresh ones that
+/// each walk holds alone.
+fn floats(how: String, n: Int) {
+  let start = (0, 0.0)
+  let up = count_up(0, n, start)
+  let down = count_down(n - 1, start)
+  let xs = make(how, n)
+  let kept_front = front(xs, start) == up && front(xs, start) == up
+  let kept_back = back(xs, start) == down && back(xs, start) == down
+  let kept_at = at(xs, 0, start) == up && at(xs, 0, start) == up
+  let alone_front = front(make(how, n), start) == up
+  let alone_back = back(make(how, n), start) == down
+  let alone_at = at(make(how, n), 0, start) == up
+  let three = first_three(xs)
+  let (hash, mix) = up
+  let len = list::length(xs)
+  io::println(
+    "{how} {n}: {hash} {mix} {kept_front} {kept_back} {kept_at} {alone_front} {alone_back} {alone_at} {three} {len}",
+  )
+}
+
+/// `floats` for a list of `F32`, whose elements all convert exactly.
+fn singles(n: Int) {
+  let start = (0, 0.0)
+  let up = count_up(0, n, start)
+  let down = count_down(n - 1, start)
+  let make32 = fn() { list::map(mapped(n), f32::from_float) }
+  let xs = make32()
+  let kept_front = front32(xs, start) == up && front32(xs, start) == up
+  let kept_back = back32(xs, start) == down && back32(xs, start) == down
+  let kept_at = at32(xs, 0, start) == up
+  let alone_front = front32(make32(), start) == up
+  let alone_back = back32(make32(), start) == down
+  let alone_at = at32(make32(), 0, start) == up
+  io::println("f32 {n}: {kept_front} {kept_back} {kept_at} {alone_front} {alone_back} {alone_at}")
+}
+
+fn main() {
+  let lengths = [0, 1, 2, 3, 31, 32, 33, 34, 64, 65, 1100]
+  list::each(lengths, fn(n) { floats("mapped", n) })
+  list::each(lengths, fn(n) { floats("pushed", n) })
+  list::each(lengths, fn(n) { floats("prepended", n) })
+  list::each(lengths, singles)
+}

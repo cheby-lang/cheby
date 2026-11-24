@@ -1,0 +1,35 @@
+// @mode: run-pass
+// @milestone: M3
+// @decisions: D-852, D-1765, D-1785
+// @flags: --reuse-report
+//! A direct call of `map::upsert`, which is the kernel's work in steps,
+//! gets the kernel line of its map at its last use, as the kernel's call
+//! did; a call in tail position and a map used afterwards get none.
+
+import std::io
+import std::list
+import std::map
+
+fn bump(found: Option<Int>) -> Int {
+  case found {
+    Some(n) => n + 1
+    None => 1
+  }
+}
+
+fn count(counts: map::Map<String, Int>, word: String) -> map::Map<String, Int> {
+  let next = map::upsert(counts, word, bump)
+  next
+}
+
+fn tail(counts: map::Map<String, Int>, word: String) -> map::Map<String, Int> {
+  map::upsert(counts, word, bump)
+}
+
+fn main() {
+  let counts = list::fold(["a", "b", "a"], map::new(), count)
+  let more = tail(counts, "c")
+  let again = map::upsert(more, "a", bump)
+  let n = map::size(again) + map::size(more)
+  io::println("{n}")
+}

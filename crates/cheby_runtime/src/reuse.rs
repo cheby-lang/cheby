@@ -19,8 +19,10 @@
 //! the distinct allocation entry [`cheby_rt_alloc_miss`], which costs what
 //! `cheby_rt_alloc` costs; a hit makes no call, so generated code loads
 //! the counting flag ([`crate::stats::counting_flag`]) and calls
-//! [`cheby_rt_reuse_hit`] out of line only while counting is on or not
-//! yet settled: one load and one predictable branch per hit.
+//! [`cheby_rt_reuse_hit`](crate::alloc::slow::cheby_rt_reuse_hit) out of
+//! line only while counting is on or not yet settled: one load and one
+//! predictable branch per hit. A miss allocates inline where the block
+//! cache serves it, and its slow path counts it.
 //!
 //! With checked counting (`checked_rc`, poisoning mode) generated code
 //! calls [`cheby_rt_drop_reuse_checked`] and
@@ -62,34 +64,24 @@ pub unsafe extern "C" fn cheby_rt_release_fields(ctx: *mut ExecCtx, obj: Word) {
 /// Frees `obj`, a unique object of a constructor or tuple layout whose
 /// value fields the hit path of a drop specialized by constructor already
 /// released or moved to its kept projections (D-716, D-850):
-/// the block only, charged to the domain as a free is. Never raises
-/// (D-171).
+/// the block only, charged to the domain as a free is. `size` is the
+/// allocation's size, which generated code knows from the layout, so the
+/// free reads nothing of the object; debug builds check it, and the
+/// layout's kind, against the layout table. Never raises (D-171).
 ///
 /// # Safety
 ///
 /// `ctx` is null or the control block of the fiber running on this
 /// thread; `obj` is a live heap object of a constructor or tuple layout
-/// whose count is 1, the caller owns and gives up that reference, and
-/// its value fields own nothing.
+/// whose count is 1 and whose allocation is `size` bytes, rounded as
+/// `cheby_rt_alloc` rounds it; the caller owns and gives up that
+/// reference, and its value fields own nothing.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn cheby_rt_free_unique(ctx: *mut ExecCtx, obj: Word) {
+pub unsafe extern "C" fn cheby_rt_free_unique(ctx: *mut ExecCtx, obj: Word, size: u64) {
     // SAFETY: forwarded from the caller.
     unsafe { check_live(obj, "a specialized drop") };
     // SAFETY: forwarded from the caller.
-    let freed = unsafe { crate::alloc::free_unique(ctx.as_ref(), word_to_ptr(obj)) };
-    if freed.is_none() {
-        fatal(format_args!(
-            "a specialized drop of an object that is not a constructor or a tuple"
-        ));
-    }
-}
-
-/// Counts one reuse hit (`CHEBY_RT_STATS`'s `reuse hits`) in the current
-/// accounting domain when events are counted. Generated code calls it out
-/// of line, only while the counting flag is not settled to off.
-#[unsafe(no_mangle)]
-pub extern "C" fn cheby_rt_reuse_hit() {
-    stats::record(Event::ReuseHit);
+    unsafe { crate::alloc::free_unique(ctx.as_ref(), word_to_ptr(obj), size) };
 }
 
 /// `cheby_rt_alloc` for an `alloc_reuse` whose token is 0 (a reuse miss):

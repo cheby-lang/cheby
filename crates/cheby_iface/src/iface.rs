@@ -60,6 +60,15 @@ pub struct FnSig {
     /// and a mention of it as a value is a closure that does so (D-1628,
     /// D-1629, D-1630). Always `None` outside `std`.
     pub call_site: Option<Name>,
+    /// The native symbol of the function's `@external(native, "symbol")`
+    /// when the function is in `std` and carries neither `@std_context`
+    /// nor `@blocking`: a caller in any module may call the kernel at the
+    /// call site instead of the wrapper (D-455, D-976), and lowering
+    /// decides which of these calls it makes directly (`cheby_mir`'s
+    /// `lower/external.rs`). Std is keyed by the build ID (D-957), so the
+    /// binding changes only with the toolchain. Always `None` outside
+    /// `std`: a package's externals keep their wrappers (D-940).
+    pub kernel: Option<Box<str>>,
 }
 
 /// A type definition.

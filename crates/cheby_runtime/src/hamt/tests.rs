@@ -1385,7 +1385,7 @@ unsafe extern "C" fn tramp1(_: *mut ExecCtx, closure: u64, arg: u64) -> u64 {
                 if abi::is_tagged_int(inner) {
                     values::int_word(abi::untag_int(inner) + abi::untag_int(step))
                 } else {
-                    as_wrapper(inner, |xs| crate::list::cheby_list_push(xs, step))
+                    crate::list::cheby_rt_list_push(std::ptr::null_mut(), inner, step)
                 }
             }
         }
@@ -1895,4 +1895,268 @@ fn measure() {
         drop_word(s.word());
         drop_word(m);
     }
+}
+
+/// `cheby_rt_map_find` gives the address of the value stored under a key,
+/// or 0 for an absent key, in bitmap and collision nodes alike, and
+/// `cheby_rt_map_value_at` reads it there with one reference more, as
+/// `cheby_map_get` reads it into its `Some`.
+#[test]
+fn map_find_gives_the_address_of_the_stored_value() {
+    for mask in [u64::MAX, 0] {
+        balanced(|| {
+            with_mask(mask, || {
+                let model: BTreeMap<Key, i64> = (0..sized(300, 30))
+                    .map(|i| (Key::Str(format!("key-{i}")), i))
+                    .collect();
+                let m = map_of(5, &model);
+                let null = std::ptr::null_mut();
+                for (key, &v) in &model {
+                    let k = key_word(key);
+                    // SAFETY: a live map and key, borrowed; the address is
+                    // read while the map is held.
+                    let value = unsafe {
+                        let at = cheby_rt_map_find(null, m, k);
+                        assert_ne!(at, 0, "{key:?}");
+                        cheby_rt_map_value_at(at)
+                    };
+                    // SAFETY: as above.
+                    let some = unsafe { cheby_map_get(m, k) };
+                    // SAFETY: the kernel's live `Option`.
+                    let kernel = unsafe { values::read_option(some) }.map(self::value);
+                    drop_word(some);
+                    assert_eq!(kernel, Some(v));
+                    assert_eq!(value_and_drop(value), v);
+                    drop_word(k);
+                }
+                let absent = key_word(&Key::Str("absent".to_owned()));
+                // SAFETY: as above.
+                assert_eq!(unsafe { cheby_rt_map_find(null, m, absent) }, 0);
+                drop_word(absent);
+                drop_word(m);
+            });
+        });
+    }
+}
+
+/// The model value of an owned value word, which is released.
+fn value_and_drop(word: Word) -> i64 {
+    let v = value(word);
+    drop_word(word);
+    v
+}
+
+// ---------------------------------------------------------------------
+// `map::upsert` in steps, as generated code does it
+
+/// What generated code does for a direct call of `map::upsert`
+/// (`cheby_mir`'s `lower/upsert.rs`): `cheby_rt_map_upsert`, the
+/// callback's `Option` from `cheby_rt_map_upsert_found`, or, where the
+/// release clean-up takes that `Option` apart (`folded`), the stored value
+/// moved out with `cheby_rt_map_slot_take`, then the callback's result
+/// stored with `cheby_rt_map_upsert_store`. `m` is owned and `key`
+/// borrowed; `update` takes and returns owned words; the result is owned.
+fn upsert_in_steps(
+    m: Word,
+    key: Word,
+    folded: bool,
+    update: impl FnOnce(Option<Word>) -> Word,
+) -> Word {
+    let null = std::ptr::null_mut();
+    let mut at = 0;
+    // SAFETY: an owned map, given up, and a live key; `at` is writable.
+    let opened = unsafe { cheby_rt_map_upsert(null, m, key, &raw mut at) };
+    let previous = if folded {
+        // SAFETY: a present key's slot in `opened`, which only this code
+        // holds.
+        (at & 1 == 0).then(|| unsafe { cheby_rt_map_slot_take(at) })
+    } else {
+        // SAFETY: as above.
+        let found = unsafe { cheby_rt_map_upsert_found(null, at) };
+        // SAFETY: an owned `Option`; its payload gets its own reference.
+        let previous = unsafe { values::read_option(found) };
+        if let Some(value) = previous {
+            dup_word(value);
+        }
+        drop_word(found);
+        previous
+    };
+    let new = update(previous);
+    // SAFETY: the opened map and its address, the key and an owned value.
+    unsafe { cheby_rt_map_upsert_store(null, opened, at, key, new) }
+}
+
+/// Upserts in steps agree with the kernel and the model for present and
+/// absent keys, on unique maps (changed in place: the same root comes
+/// back) and shared ones (left as they were), in bitmap and collision
+/// nodes, as the root's nodes grow from one entry, with `Int`, `String`
+/// and tuple keys, and the update sees each stored value moved out, with
+/// the count it had.
+#[test]
+fn upserts_in_steps_agree_with_the_model() {
+    // Under Miri, one mask that makes bitmap and collision nodes alike, and
+    // fewer keys (D-721, D-884).
+    let masks: &[u64] = if cfg!(miri) {
+        &[0xF]
+    } else {
+        &[u64::MAX, 0xF, 0]
+    };
+    for &mask in masks {
+        for family in 0..3 {
+            balanced(|| {
+                with_mask(mask, || {
+                    let n = sized(200, 6);
+                    let mut model: BTreeMap<Key, i64> = BTreeMap::new();
+                    let mut m = map_of(3, &model);
+                    for i in 0..n * 2 {
+                        // Every key twice: absent, then present.
+                        let k = nth_key(family, i % n);
+                        let key = key_word(&k);
+                        let shared = i % 5 == 0;
+                        let before = model.clone();
+                        if shared {
+                            dup_word(m);
+                        }
+                        let calls = Cell::new(0);
+                        let next = upsert_in_steps(m, key, i % 2 == 0, |previous| {
+                            calls.set(calls.get() + 1);
+                            bump(previous, i)
+                        });
+                        assert_eq!(calls.get(), 1, "the update is called once");
+                        let v = model.get(&k).map_or(i, |old| old + i);
+                        model.insert(k, v);
+                        if shared {
+                            assert_ne!(next, m, "a shared map is copied");
+                            check_map(m, &before);
+                            drop_word(m);
+                        } else if !before.is_empty() {
+                            assert_eq!(next, m, "a unique map is changed in place");
+                        }
+                        check_map(next, &model);
+                        drop_word(key);
+                        m = next;
+                    }
+                    drop_word(m);
+                });
+            });
+        }
+    }
+}
+
+/// `cheby_rt_map_upsert` says where the key's entry is: its value slot, or
+/// that slot plus 1 with the key put in and a placeholder there, or 1 for
+/// an empty map, which it neither hashes nor changes; an update of a
+/// unique root is counted in place and one of a shared root copied, once
+/// each (D-768).
+#[test]
+fn map_upsert_says_where_the_entry_is() {
+    use crate::stats::Event;
+    crate::stats::count_events();
+    balanced(|| {
+        let domain = alloc::current_domain();
+        let count = |event| domain.stats().count(event);
+        let null = std::ptr::null_mut();
+        let mut at = 0;
+        // The empty map: nothing is hashed, so even a key that holds a
+        // function does not raise here.
+        let function = closure(&[]);
+        let (in_place, copied) = (
+            count(Event::MapUpdateInPlace),
+            count(Event::MapUpdateCopied),
+        );
+        // SAFETY: the static empty map and a live key.
+        let empty = unsafe { cheby_rt_map_upsert(null, cheby_map_new(), function, &raw mut at) };
+        assert_eq!((empty, at), (cheby_map_new(), ops::UPSERT_EMPTY));
+        drop_word(function);
+        // A map of one entry: the key present, then absent.
+        let key = new_string("k");
+        let one = map_of(1, &BTreeMap::from([(Key::Str("k".to_owned()), 1)]));
+        // SAFETY: an owned map and a live key.
+        let same = unsafe { cheby_rt_map_upsert(null, one, key, &raw mut at) };
+        assert_eq!(same, one);
+        assert_ne!(at, 0);
+        assert_eq!(at & 1, 0, "present");
+        // SAFETY: the stored value's slot.
+        let stored = unsafe { object::read_field(object::word_to_ptr(at), 0) };
+        assert_eq!(value(stored), 1);
+        let other = new_string("other");
+        // SAFETY: as above.
+        let grown = unsafe { cheby_rt_map_upsert(null, same, other, &raw mut at) };
+        assert_eq!(at & 1, 1, "absent, put in");
+        // SAFETY: a live map.
+        assert_eq!(unsafe { size(grown) }, 2);
+        // SAFETY: the placeholder's slot.
+        let slot = unsafe { object::read_field(object::word_to_ptr(at & !1), 0) };
+        assert_eq!(slot, abi::map::HOLE.cast_unsigned());
+        // SAFETY: the opened map, its slot and an owned value.
+        let grown = unsafe { cheby_rt_map_upsert_store(null, grown, at, other, int(7)) };
+        check_map(
+            grown,
+            &BTreeMap::from([
+                (Key::Str("k".to_owned()), 1),
+                (Key::Str("other".to_owned()), 7),
+            ]),
+        );
+        assert_eq!(count(Event::MapUpdateInPlace), in_place + 2);
+        // Shared: a new root, counted as copied; the old map keeps its
+        // entries.
+        dup_word(grown);
+        // SAFETY: as above; the test keeps its other reference.
+        let copy = unsafe { cheby_rt_map_upsert(null, grown, key, &raw mut at) };
+        assert_ne!(copy, grown);
+        assert_eq!(count(Event::MapUpdateCopied), copied + 1);
+        // SAFETY: the copy's slot, which only the copy holds.
+        let found = unsafe { cheby_rt_map_upsert_found(null, at) };
+        // SAFETY: an owned `Some`.
+        let old = unsafe { values::read_option(found) }.unwrap();
+        // SAFETY: as above.
+        let copy = unsafe { cheby_rt_map_upsert_store(null, copy, at, key, int(value(old) + 10)) };
+        drop_word(found);
+        check_map(
+            grown,
+            &BTreeMap::from([
+                (Key::Str("k".to_owned()), 1),
+                (Key::Str("other".to_owned()), 7),
+            ]),
+        );
+        check_map(
+            copy,
+            &BTreeMap::from([
+                (Key::Str("k".to_owned()), 11),
+                (Key::Str("other".to_owned()), 7),
+            ]),
+        );
+        for word in [copy, grown, key, other] {
+            drop_word(word);
+        }
+    });
+}
+
+/// A map whose value slot holds the placeholder, as when an upsert's
+/// callback panics, is released whole: the placeholder is skipped and
+/// every key, value and node goes.
+#[test]
+fn a_map_with_a_moved_out_value_is_released_whole() {
+    balanced(|| {
+        with_mask(0xF, || {
+            let model: BTreeMap<Key, i64> = (0..sized(100, 20))
+                .map(|i| (Key::Str(format!("key-{i}")), i * 3))
+                .collect();
+            let m = map_of(2, &model);
+            for absent in [false, true] {
+                let m = if absent { map_of(2, &model) } else { m };
+                let key = key_word(&Key::Str(if absent { "new" } else { "key-3" }.to_owned()));
+                let mut at = 0;
+                // SAFETY: an owned map and a live key.
+                let opened =
+                    unsafe { cheby_rt_map_upsert(std::ptr::null_mut(), m, key, &raw mut at) };
+                if !absent {
+                    // SAFETY: a present key's slot.
+                    drop_word(unsafe { cheby_rt_map_slot_take(at) });
+                }
+                drop_word(opened);
+                drop_word(key);
+            }
+        });
+    });
 }

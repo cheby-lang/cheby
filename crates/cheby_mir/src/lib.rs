@@ -10,6 +10,9 @@
 //!   external wrappers and entry thunks. Every THIR construct lowers, so
 //!   lowering reports no diagnostics (D-554); its only error is an
 //!   internal one.
+//! - [`lookup`]: a `list::get` or `map::get` whose `Option` is taken
+//!   apart at once reads the element without the `Some`, at the end of
+//!   lowering.
 //! - [`hoist`]: field reads move up to the consumption of a sibling
 //!   projection, at the end of lowering, under every RC mode (D-911).
 //! - [`rc`]: naive dup/drop placement by the last-use rule (D7, D-205).
@@ -34,7 +37,11 @@ pub mod builder;
 mod call_locs_tests;
 pub mod const_prop;
 mod defs;
+#[cfg(test)]
+mod devirt_tests;
 pub mod dump;
+pub mod export;
+pub mod fold_consts;
 pub mod fuse;
 #[cfg(test)]
 mod fuse_tests;
@@ -43,10 +50,18 @@ mod golden_tests;
 pub mod hoist;
 #[cfg(test)]
 mod hoist_tests;
+pub mod inline;
+#[cfg(test)]
+mod inline_across_tests;
+#[cfg(test)]
+mod inline_tests;
 pub mod ir;
 pub mod kernels_in_place;
+pub mod kernels_instr;
+pub mod kernels_reading;
 pub mod layout;
 mod liveness;
+pub mod lookup;
 pub mod lower;
 #[cfg(test)]
 mod lower_tests;
@@ -62,11 +77,18 @@ pub mod repr;
 pub mod reuse;
 #[cfg(test)]
 mod reuse_tests;
+pub mod simplify;
+mod specialize;
+#[cfg(test)]
+mod specialize_tests;
 pub mod stats;
 #[cfg(test)]
 mod test_support;
 #[cfg(test)]
 mod tests;
+mod unbox;
+#[cfg(test)]
+mod unbox_tests;
 #[cfg(test)]
 mod unit_facts_tests;
 pub mod unwind;
@@ -92,9 +114,13 @@ pub use ir::{
 };
 pub use layout::{FieldDesc, LayoutDesc, ctor_layout, type_key, type_layouts};
 pub use lower::{
-    EntryRequest, LowerCx, lower_entries, lower_fn, lower_items, lower_module, lower_tests,
+    EntryRequest, LowerCx, lower_entries, lower_fn, lower_items, lower_items_late_bound,
+    lower_module, lower_tests, scalar_literal,
 };
-pub use options::{MirOptions, RcMode, check_lowered, count_and_check_with, count_lowered_with};
+pub use options::{
+    MirOptions, Profile, RcMode, ReleaseOptions, check_lowered, count_and_check_with,
+    count_lowered_with,
+};
 pub use positions::{Pos, PosRef, Positions};
 pub use reach::{Program, Reach, Root, reachable};
 pub use repr::{CType, ForeignSig, Repr, ctype_of, foreign_sig, repr_of};

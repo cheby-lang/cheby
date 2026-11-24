@@ -118,7 +118,8 @@ pub fn fixed_sig(key: FnKey) -> Option<AbiSig> {
         | FnKey::Closure { .. }
         | FnKey::TupleDictFn { .. }
         | FnKey::DynForward { .. }
-        | FnKey::Continuation { .. } => None,
+        | FnKey::Continuation { .. }
+        | FnKey::Specialized { .. } => None,
     }
 }
 
@@ -247,6 +248,7 @@ mod tests {
             clamped: Box::new([]),
             initializer: None,
             call_site: None,
+            kernel: None,
         }
     }
 

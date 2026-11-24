@@ -184,7 +184,13 @@ unsafe extern "C" fn t0(ctx: *mut ExecCtx, function: u64) -> u64 {
                 0
             }
             op::MAKE_EXHAUSTED => {
-                let made = values::string("made on the spawned fiber");
+                // A pair holding a string: marking it shared walks it with
+                // a worklist, whose growth the exhausted budget refuses (a
+                // string alone is marked without one).
+                let made = values::tuple(&[
+                    values::string("made on the spawned fiber"),
+                    values::int_word(0),
+                ]);
                 limit_to(me, 0);
                 made
             }
@@ -1092,7 +1098,9 @@ fn a_raise_marking_a_fibers_result_fails_its_scope() {
 fn a_spawn_whose_marking_raises_leaves_no_member() {
     let (outcome, domain) = outcome(1, |me| {
         let scope = open(me);
-        let function = closure(&[values::int_word(op::RETURN), values::int_word(1)]);
+        // A capture of its own, so that marking the closure walks it with
+        // a worklist (one with no counted capture needs none).
+        let function = closure(&[values::int_word(op::RETURN), values::string("captured")]);
         // Room for the `Fiber` handle, not for the walk's worklist.
         limit_to(me, 64);
         // SAFETY: the running fiber's context, a live scope and closure.

@@ -60,7 +60,10 @@
 //! A list pattern step read in one call (D-909): a `list_uncons` defines
 //! its result and the next statement of its block is the
 //! `list_uncons_head` that takes its element, which follows nothing else;
-//! `list_uncons_owned` appears only after counting.
+//! `list_uncons_owned` appears only after counting, and so do the reads
+//! of an element as a raw number that counting makes of a head or a
+//! `list_get` and its `unbox` (`list_uncons_head_float`,
+//! `list_get_float` and their `F32` forms).
 //!
 //! Canonical pads, blocks `drop _l; goto <pad>` or `resume` that lead
 //! only to `resume` and that normal control flow does not reach, are left
@@ -429,6 +432,7 @@ impl FnCx<'_> {
         self.check_reprs(stage)?;
         self.check_init_fields();
         self.check_uncons(stage);
+        self.check_upsert_address();
         self.check_reuse(stage)?;
         if self.counted(stage) && self.errors.is_empty() {
             if let (Some(recorded), Some(reachable)) = (self.recorded, &reachable) {
@@ -827,7 +831,9 @@ impl FnCx<'_> {
         }
         match f.abi {
             Abi::Cheby => {
-                if f.ret != Repr::Value {
+                // A clone, called only by key from its unit, may return a
+                // raw value (design T14, D-453's unboxed entry).
+                if f.ret != Repr::Value && !matches!(f.key, FnKey::Specialized { .. }) {
                     self.err("a Cheby-ABI function returns a uniform value");
                 }
                 if f.entry_loc.is_none() {
@@ -976,11 +982,92 @@ impl FnCx<'_> {
         }
     }
 
+    /// The steps of an upsert (`lower/upsert.rs`): each
+    /// `map_upsert_address(m)` reads the word that the `map_upsert` which
+    /// defined `m` kept, so that `map_upsert` comes before it in its
+    /// block, with no other `map_upsert` between them.
+    fn check_upsert_address(&mut self) {
+        let f = self.f;
+        for (id, block) in f.blocks.iter_enumerated() {
+            // The map the last `map_upsert` of the block so far defined.
+            let mut opened: Option<Local> = None;
+            for (j, stmt) in block.stmts.iter().enumerate() {
+                let Stmt::Assign {
+                    dst,
+                    value: Rvalue::CallRuntime { func, args },
+                } = stmt
+                else {
+                    continue;
+                };
+                match func {
+                    RuntimeFn::MapUpsert => opened = Some(*dst),
+                    RuntimeFn::MapUpsertAddress => {
+                        let reads = match args.as_slice() {
+                            [Operand::Local(m)] => Some(*m),
+                            _ => None,
+                        };
+                        if reads.is_none() || reads != opened {
+                            self.err(format!(
+                                "bb{} statement {j}: map_upsert_address does not read the map \
+                                 of the last map_upsert before it in its block",
+                                id.as_u32()
+                            ));
+                        }
+                    }
+                    RuntimeFn::StrWithCapacity
+                    | RuntimeFn::StrAppend
+                    | RuntimeFn::StrEq
+                    | RuntimeFn::ListPush
+                    | RuntimeFn::ListAppend
+                    | RuntimeFn::ListLength
+                    | RuntimeFn::ListGet
+                    | RuntimeFn::ListSlice
+                    | RuntimeFn::ListSliceOwned
+                    | RuntimeFn::Equal
+                    | RuntimeFn::Debug
+                    | RuntimeFn::EffectCheck
+                    | RuntimeFn::ScopeOpen
+                    | RuntimeFn::ScopeClose
+                    | RuntimeFn::ListUncons
+                    | RuntimeFn::ListUnconsOwned
+                    | RuntimeFn::ListUnconsHead
+                    | RuntimeFn::ListPrepend
+                    | RuntimeFn::MapFind
+                    | RuntimeFn::MapValueAt
+                    | RuntimeFn::ListSet
+                    | RuntimeFn::ListUnconsHeadFloat
+                    | RuntimeFn::ListUnconsHeadF32
+                    | RuntimeFn::ListGetFloat
+                    | RuntimeFn::ListGetF32
+                    | RuntimeFn::MapSlotTake
+                    | RuntimeFn::MapUpsertFound
+                    | RuntimeFn::MapUpsertStore
+                    | RuntimeFn::SortStart
+                    | RuntimeFn::HeapListStart
+                    | RuntimeFn::BufferStep
+                    | RuntimeFn::BufferFinish
+                    | RuntimeFn::HeapSlot
+                    | RuntimeFn::HeapPush
+                    | RuntimeFn::HeapPop
+                    | RuntimeFn::HeapHeapify
+                    | RuntimeFn::HeapFirst
+                    | RuntimeFn::HeapStep
+                    | RuntimeFn::PairLeft
+                    | RuntimeFn::PairRight
+                    | RuntimeFn::LoopCheck
+                    | RuntimeFn::BytesInRange
+                    | RuntimeFn::BytesByte => {}
+                }
+            }
+        }
+    }
+
     /// A list pattern step read in one call (D-909): each `list_uncons`
     /// and `list_uncons_owned` defines its result and is followed at once,
     /// in its block, by the `list_uncons_head` that takes the element it
-    /// kept, and each `list_uncons_head` follows one; `list_uncons_owned`,
-    /// which the RC pass emits, only once counts are placed.
+    /// kept, and each `list_uncons_head` follows one; `list_uncons_owned`
+    /// and the reads as a raw number, which the RC pass emits, only once
+    /// counts are placed.
     fn check_uncons(&mut self, stage: Stage) {
         let f = self.f;
         let counted = self.counted(stage);
@@ -1006,8 +1093,15 @@ impl FnCx<'_> {
                 let Some((func, assigned)) = call else {
                     continue;
                 };
+                if func.scalar_read().is_some() && !counted {
+                    self.err(format!(
+                        "bb{} statement {j}: {} before counting",
+                        id.as_u32(),
+                        func.name()
+                    ));
+                }
                 let uncons = matches!(func, RuntimeFn::ListUncons | RuntimeFn::ListUnconsOwned);
-                if !uncons && func != RuntimeFn::ListUnconsHead {
+                if !uncons && !func.is_uncons_head() {
                     continue;
                 }
                 if !assigned {
@@ -1024,10 +1118,11 @@ impl FnCx<'_> {
                     ));
                 }
                 let paired = if uncons {
-                    matches!(
-                        j.checked_add(1).and_then(|k| funcs.get(k)),
-                        Some(Some((RuntimeFn::ListUnconsHead, _)))
-                    )
+                    j.checked_add(1)
+                        .and_then(|k| funcs.get(k))
+                        .copied()
+                        .flatten()
+                        .is_some_and(|(next, _)| next.is_uncons_head())
                 } else {
                     matches!(
                         j.checked_sub(1).and_then(|k| funcs.get(k)),
@@ -1631,16 +1726,19 @@ impl FnCx<'_> {
         sig
     }
 
-    fn check_call(&mut self, callee: &Callee, args: &[Operand]) {
+    /// Checks a Cheby call's callee and arguments, and gives the
+    /// representation of its result: uniform, but for a clone's raw one
+    /// (design T14).
+    fn check_call(&mut self, callee: &Callee, args: &[Operand]) -> Repr {
         if let Callee::Indirect(_) = callee {
             self.callee_sig(callee);
             for arg in args {
                 self.expect_repr(arg, Repr::Value, "indirect call argument");
             }
-            return;
+            return Repr::Value;
         }
         let Some(sig) = self.callee_sig(callee) else {
-            return;
+            return Repr::Value;
         };
         if sig.params.len() != args.len() {
             self.err(format!(
@@ -1648,11 +1746,12 @@ impl FnCx<'_> {
                 args.len(),
                 sig.params.len()
             ));
-            return;
+            return sig.ret;
         }
         for (arg, &want) in args.iter().zip(&sig.params) {
             self.expect_repr(arg, want, "call argument");
         }
+        sig.ret
     }
 
     /// The representation a foreign call with the C signature `sig`
@@ -1702,10 +1801,7 @@ impl FnCx<'_> {
                 self.check_const(op, false);
                 self.repr(op)
             }
-            Rvalue::Call { callee, args } => {
-                self.check_call(callee, args);
-                Some(Repr::Value)
-            }
+            Rvalue::Call { callee, args } => Some(self.check_call(callee, args)),
             Rvalue::CallForeign {
                 sig,
                 args,
@@ -1806,6 +1902,9 @@ impl FnCx<'_> {
             | Rvalue::Bitwise { .. }
             | Rvalue::FloatNeg { .. }
             | Rvalue::Not(_) => self.check_arith(value),
+            Rvalue::Convert { .. } | Rvalue::FloatSqrt { .. } | Rvalue::Wrapping { .. } => {
+                self.check_instr(value)
+            }
         }
     }
 
@@ -1885,6 +1984,64 @@ impl FnCx<'_> {
             | Rvalue::LoadConst(_)
             | Rvalue::Box { .. }
             | Rvalue::Unbox { .. }
+            | Rvalue::ReadTag { .. }
+            | Rvalue::Convert { .. }
+            | Rvalue::FloatSqrt { .. }
+            | Rvalue::Wrapping { .. }
+            | Rvalue::DropReuse { .. }
+            | Rvalue::AllocReuse { .. } => None,
+        }
+    }
+
+    /// The operations of the std kernels that are instructions
+    /// (`crate::kernels_instr`), on raw values.
+    fn check_instr(&mut self, value: &Rvalue) -> Option<Repr> {
+        let integer = |r: Repr| r.is_signed_int() || r.is_unsigned_int();
+        let float = |r: Repr| matches!(r, Repr::Float | Repr::F32);
+        match value {
+            Rvalue::Convert { value, from, to } => {
+                if !from.converts_exactly(*to) {
+                    self.err(format!("convert {from} {to}"));
+                }
+                self.expect_repr(value, *from, "convert operand");
+                Some(*to)
+            }
+            Rvalue::FloatSqrt { value, repr } => {
+                if !float(*repr) {
+                    self.err(format!("float_sqrt on {repr}"));
+                }
+                self.expect_repr(value, *repr, "float_sqrt operand");
+                Some(*repr)
+            }
+            Rvalue::Wrapping { op, lhs, rhs, repr } => {
+                if !integer(*repr) {
+                    self.err(format!("wrapping {} on {repr}", op.name()));
+                }
+                if !matches!(op, ArithOp::Add | ArithOp::Sub | ArithOp::Mul) {
+                    self.err(format!("wrapping {}", op.name()));
+                }
+                self.expect_repr(lhs, *repr, "wrapping operand");
+                self.expect_repr(rhs, *repr, "wrapping operand");
+                Some(*repr)
+            }
+            Rvalue::Use(_)
+            | Rvalue::Call { .. }
+            | Rvalue::CallForeign { .. }
+            | Rvalue::CallRuntime { .. }
+            | Rvalue::Alloc { .. }
+            | Rvalue::AllocPlaceholder { .. }
+            | Rvalue::InitField { .. }
+            | Rvalue::Field { .. }
+            | Rvalue::ReadLayout { .. }
+            | Rvalue::LoadConst(_)
+            | Rvalue::Box { .. }
+            | Rvalue::Unbox { .. }
+            | Rvalue::Checked { .. }
+            | Rvalue::Compare { .. }
+            | Rvalue::FloatArith { .. }
+            | Rvalue::Bitwise { .. }
+            | Rvalue::FloatNeg { .. }
+            | Rvalue::Not(_)
             | Rvalue::ReadTag { .. }
             | Rvalue::DropReuse { .. }
             | Rvalue::AllocReuse { .. } => None,
@@ -2132,7 +2289,12 @@ impl FnCx<'_> {
                 if f.abi != Abi::Cheby {
                     self.err("a tail call in a C-ABI function");
                 }
-                self.check_call(callee, args);
+                if self.check_call(callee, args) != f.ret {
+                    self.err(format!(
+                        "a tail call of {callee:?}, whose result is not the caller's {}",
+                        f.ret
+                    ));
+                }
             }
             Terminator::Goto { target, args } => {
                 let params = f.block(*target)?.params.clone();
@@ -2191,7 +2353,7 @@ impl FnCx<'_> {
 /// Whether `stmt` only releases or adds references, running nothing a
 /// handle could observe (D-851): `dup`, `drop`,
 /// `drop_reuse` and specialized drops, and the `list_uncons_head` that
-/// completes the instruction before it (D-909).
+/// completes the instruction before it (D-909), also as a raw number.
 fn releases_only(stmt: &Stmt) -> bool {
     matches!(
         stmt,
@@ -2204,7 +2366,9 @@ fn releases_only(stmt: &Stmt) -> bool {
                     // code: what counting releases after that instruction
                     // follows it (D-909).
                     | Rvalue::CallRuntime {
-                        func: RuntimeFn::ListUnconsHead,
+                        func: RuntimeFn::ListUnconsHead
+                            | RuntimeFn::ListUnconsHeadFloat
+                            | RuntimeFn::ListUnconsHeadF32,
                         ..
                     },
                 ..
@@ -2516,6 +2680,9 @@ fn is_void_call(value: &Rvalue) -> bool {
         | Rvalue::FloatArith { .. }
         | Rvalue::Bitwise { .. }
         | Rvalue::FloatNeg { .. }
+        | Rvalue::Convert { .. }
+        | Rvalue::FloatSqrt { .. }
+        | Rvalue::Wrapping { .. }
         | Rvalue::Not(_)
         | Rvalue::ReadTag { .. }
         | Rvalue::DropReuse { .. }

@@ -1,0 +1,63 @@
+// @mode: run-pass
+// @milestone: M3
+// @decisions: D-687, D-1448, D-1613
+//! A comparison that suspends its fiber, here on a send over a channel of
+//! capacity 0 or a yield, works inside `list::sort_with` and a heap's
+//! updates: the caller's code calls it between the runtime's steps, so no
+//! kernel frame is below it while the fiber waits.
+
+import std::channel
+import std::fiber
+import std::heap
+import std::int
+import std::io
+import std::list
+
+type Job {
+  rank: Int,
+}
+
+/// Yields before every comparison.
+fn compare(a: Job, b: Job) -> Order {
+  fiber::yield_now()
+  int::compare(a.rank, b.rank)
+}
+
+/// Sorts `xs` and sends a 1 for every comparison.
+fn counted_sort(tx: channel::Sender<Int>, xs: List<Int>) -> List<Int> {
+  list::sort_with(xs, fn(a, b) {
+    let assert Ok(Nil) = channel::send(tx, 1)
+    int::compare(a, b)
+  })
+}
+
+fn total(rx: channel::Receiver<Int>, sum: Int) -> Int {
+  case channel::receive(rx) {
+    Ok(n) => total(rx, sum + n)
+    Err(Nil) => sum
+  }
+}
+
+fn main() {
+  let (tx, rx) = channel::new::<Int>(0)
+  let outcome = {
+    use owner <- fiber::scope()
+    let counter = fiber::spawn(owner, fn() { total(rx, 0) })
+    let sorted = counted_sort(tx, [5, 3, 9, 1, 3, 7, 2, 8, 6, 4])
+    (sorted, fiber::join(counter))
+  }
+  io::println("{outcome:?}")
+  let ranks = {
+    use owner <- fiber::scope()
+    let worker = fiber::spawn(owner, fn() {
+      let built = list::fold([4, 1, 3, 5, 2], heap::new_max(), fn(h, r) {
+        heap::push(h, Job { rank: r })
+      })
+      let assert Some((top, rest)) = heap::pop(built)
+      let others = list::map(heap::to_list(rest), fn(job) { job.rank })
+      list::prepend(others, top.rank)
+    })
+    fiber::join(worker)
+  }
+  io::println("{ranks:?}")
+}

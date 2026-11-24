@@ -1,0 +1,15 @@
+// @mode: run-fail
+// @milestone: M3
+// @decisions: D-096, D-318, D-1773, D-1774
+//! A `let assert Some(x) = list::get(xs, i)` whose index is outside the
+//! list fails as it always did: the panic is at the pattern and shows the
+//! `None` it did not match, though no `Option` was built for the lookup.
+
+import std::io
+import std::list
+
+fn main() {
+  let xs = ["a", "b"]
+  let assert Some(x) = list::get(xs, 5)
+  io::println(x)
+}

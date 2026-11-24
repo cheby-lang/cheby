@@ -10,7 +10,7 @@ fn listed() -> OrderedMap<String, Int> {
 }
 
 /// The same entries in the same order, built by inserts after a removal,
-/// so their insertion numbers differ from `listed`'s.
+/// so their histories differ from `listed`'s.
 fn grown() -> OrderedMap<String, Int> {
   let start = ordered_map::from_list([("z", 0), ("a", 1)])
   let added = ordered_map::insert(ordered_map::remove(start, "z"), "b", 2)

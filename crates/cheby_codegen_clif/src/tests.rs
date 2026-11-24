@@ -146,16 +146,48 @@ fn runtime_helper_signatures() {
     use runtime::RuntimeFunc;
     for helper in RuntimeFn::ALL {
         // The element a `list_uncons` keeps is read from its stack slot.
-        if helper == RuntimeFn::ListUnconsHead {
+        if helper.is_uncons_head() {
+            continue;
+        }
+        // `map_value_at`'s map only keeps the map held; the C function
+        // takes the address alone, and so do an upsert's `map_slot_take`
+        // and `map_upsert_found`.
+        if matches!(
+            helper,
+            RuntimeFn::MapValueAt | RuntimeFn::MapSlotTake | RuntimeFn::MapUpsertFound
+        ) {
+            let (f, takes_ctx) = RuntimeFunc::of(helper);
+            assert_eq!(
+                f.ctypes().0.len(),
+                helper.params().len() - 1 + usize::from(takes_ctx),
+                "{helper:?}"
+            );
+            continue;
+        }
+        // An upsert's address is read from the stack slot its
+        // `map_upsert` wrote; a heap's slot is a stack address and its
+        // first pair a load from it; the loop's check calls the entry
+        // check's slow path with the function's location; a `Bytes`'s
+        // bounds test and byte are loads.
+        if matches!(
+            helper,
+            RuntimeFn::MapUpsertAddress
+                | RuntimeFn::HeapSlot
+                | RuntimeFn::HeapFirst
+                | RuntimeFn::LoopCheck
+                | RuntimeFn::BytesInRange
+                | RuntimeFn::BytesByte
+        ) {
             continue;
         }
         let (f, takes_ctx) = RuntimeFunc::of(helper);
         let (params, ret) = f.ctypes();
         let ctx = usize::from(takes_ctx);
-        // `list_uncons` also takes the address it writes the element to.
+        // `list_uncons` also takes the address it writes the element to,
+        // and `map_upsert` the address of its word.
         let out = usize::from(matches!(
             helper,
-            RuntimeFn::ListUncons | RuntimeFn::ListUnconsOwned
+            RuntimeFn::ListUncons | RuntimeFn::ListUnconsOwned | RuntimeFn::MapUpsert
         ));
         assert_eq!(
             params.len(),
@@ -667,9 +699,10 @@ fn blocking_calls_go_through_one_shim_per_symbol_and_signature() {
         // Two words: the `Int` at offset 0, the `Float`'s bits at 8.
         assert!(text.contains("stack_addr.i64 ss0+8"), "{text}");
         assert!(!text.contains("ss0+16"), "{text}");
-        // The edge after the blocking call tests the flag; the box tests
-        // its own result, and the entry check releases nothing.
-        assert_eq!(text.matches(&load_flag).count(), 1, "{text}");
+        // The edge after the blocking call tests the flag, and so does
+        // the entry check's releasing slow path, which releases nothing
+        // (D-775); the box tests its own result.
+        assert_eq!(text.matches(&load_flag).count(), 2, "{text}");
         assert!(
             !text.contains("= kern"),
             "the function calls the shim:\n{text}"
@@ -731,18 +764,22 @@ fn blocking_shim_names() {
 fn slice_runtime_functions() {
     use cheby_mir::RuntimeFn;
     use runtime::{RuntimeFunc, STATIC_DATA};
-    let words = [CType::Ptr; 4];
-    let plain: Vec<CType> = [CType::Ptr, CType::Ptr, CType::U32]
-        .into_iter()
-        .chain(words)
-        .collect();
-    let frame: Vec<CType> = [CType::Ptr, CType::Ptr, CType::U64, CType::U32]
-        .into_iter()
-        .chain(words)
-        .collect();
+    // `ctx`, the location and four words: six, which System V x86-64
+    // passes in registers.
+    let releasing = [CType::Ptr; 6];
     let expected = [
-        (RuntimeFunc::StackSlowUnwind, 27, (&*plain), CType::U32),
-        (RuntimeFunc::StackSlowFrameUnwind, 28, (&*frame), CType::U32),
+        (
+            RuntimeFunc::StackSlowUnwind,
+            27,
+            &releasing[..],
+            CType::Void,
+        ),
+        (
+            RuntimeFunc::StackSlowFrameUnwind,
+            28,
+            &releasing[..],
+            CType::Void,
+        ),
         (
             RuntimeFunc::StackSlowFrame,
             24,
@@ -775,11 +812,47 @@ fn slice_runtime_functions() {
         assert_eq!(f.ctypes(), (params, ret), "{f:?}");
         assert!(f.on_demand(), "{f:?}");
     }
-    assert_eq!(RuntimeFunc::ALL.len(), 38);
+    assert_eq!(RuntimeFunc::ALL.len(), 58);
     assert_eq!(
         RuntimeFunc::ALL.iter().filter(|f| f.on_demand()).count(),
-        14,
-        "only the M2 functions are declared on demand"
+        34,
+        "only the functions added since M2 are declared on demand"
+    );
+    // The lookups taken apart at once and `list::set` at a direct call.
+    for (f, index, helper, takes_ctx) in [
+        (RuntimeFunc::MapFind, 39, RuntimeFn::MapFind, true),
+        (RuntimeFunc::MapValueAt, 40, RuntimeFn::MapValueAt, false),
+        (RuntimeFunc::ListSet, 41, RuntimeFn::ListSet, true),
+    ] {
+        assert_eq!(f.index(), index, "{f:?}");
+        assert!(f.on_demand(), "{f:?}");
+        assert_eq!(RuntimeFunc::of(helper), (f, takes_ctx), "{f:?}");
+    }
+    assert_eq!(
+        RuntimeFunc::MapFind.ctypes(),
+        (&[CType::Ptr, CType::U64, CType::U64][..], CType::U64)
+    );
+    assert_eq!(
+        RuntimeFunc::MapValueAt.ctypes(),
+        (&[CType::U64][..], CType::U64)
+    );
+    assert_eq!(
+        RuntimeFunc::ListSet.ctypes(),
+        (
+            &[CType::Ptr, CType::U64, CType::I64, CType::U64][..],
+            CType::U64
+        )
+    );
+    // `cheby_rt_list_prepend(ctx, list, elem)`, as `cheby_rt_list_push`.
+    assert_eq!(RuntimeFunc::ListPrepend.index(), 38);
+    assert_eq!(
+        RuntimeFunc::ListPrepend.ctypes(),
+        RuntimeFunc::ListPush.ctypes()
+    );
+    assert!(RuntimeFunc::ListPrepend.on_demand() && !RuntimeFunc::ListPush.on_demand());
+    assert_eq!(
+        RuntimeFunc::of(RuntimeFn::ListPrepend),
+        (RuntimeFunc::ListPrepend, true)
     );
     assert_eq!(
         RuntimeFunc::of(RuntimeFn::ScopeOpen),
@@ -790,6 +863,66 @@ fn slice_runtime_functions() {
         (RuntimeFunc::ScopeClose, true)
     );
     assert!(STATIC_DATA.contains(&cheby_runtime::abi::sym::STATIC_ERR_NIL));
+}
+
+/// The steps of std's stepped intrinsics (`cheby_mir`'s
+/// `lower/intrinsic.rs`): indexes 50 to 57, declared on demand; a pair's
+/// reads are `map_value_at`'s, and the loop's check is the entry check's
+/// slow path.
+#[test]
+fn step_runtime_functions() {
+    use cheby_mir::RuntimeFn;
+    use runtime::RuntimeFunc;
+    for (f, index, helper, takes_ctx) in [
+        (RuntimeFunc::SortStart, 50, RuntimeFn::SortStart, true),
+        (
+            RuntimeFunc::HeapListStart,
+            51,
+            RuntimeFn::HeapListStart,
+            true,
+        ),
+        (RuntimeFunc::BufferStep, 52, RuntimeFn::BufferStep, false),
+        (RuntimeFunc::BufferFinish, 53, RuntimeFn::BufferFinish, true),
+        (RuntimeFunc::HeapPush, 54, RuntimeFn::HeapPush, true),
+        (RuntimeFunc::HeapPop, 55, RuntimeFn::HeapPop, true),
+        (RuntimeFunc::HeapHeapify, 56, RuntimeFn::HeapHeapify, true),
+        (RuntimeFunc::HeapStep, 57, RuntimeFn::HeapStep, true),
+    ] {
+        assert_eq!(f.index(), index, "{f:?}");
+        assert!(f.on_demand(), "{f:?}");
+        assert_eq!(RuntimeFunc::of(helper), (f, takes_ctx), "{f:?}");
+    }
+    assert_eq!(
+        RuntimeFunc::of(RuntimeFn::PairLeft),
+        (RuntimeFunc::MapValueAt, false)
+    );
+    assert_eq!(
+        RuntimeFunc::of(RuntimeFn::LoopCheck),
+        (RuntimeFunc::StackSlow, true)
+    );
+}
+
+/// The slow paths of inline allocations and sized frees, and the cold drop
+/// of a shared object on a reuse's path (`crate::alloc_inline`): saving
+/// stubs at indexes 42 to 45, declared on demand, like the entry check's
+/// slow paths and the count of a reuse hit, which is a saving stub too.
+#[test]
+fn inline_allocation_runtime_functions() {
+    use runtime::RuntimeFunc;
+    let sized = &[CType::Ptr, CType::U64, CType::U64][..];
+    for (f, index, params) in [
+        (RuntimeFunc::AllocSlow, 42, sized),
+        (RuntimeFunc::AllocMissSlow, 43, sized),
+        (RuntimeFunc::FreeUniqueSlow, 44, sized),
+        (RuntimeFunc::DropSaving, 45, &[CType::Ptr, CType::Ptr][..]),
+    ] {
+        assert_eq!(f.index(), index, "{f:?}");
+        assert_eq!(RuntimeFunc::ALL[index], f);
+        assert_eq!(f.ctypes(), (params, CType::Void), "{f:?}");
+        assert!(f.on_demand() && f.preserves_all(), "{f:?}");
+    }
+    assert!(RuntimeFunc::ReuseHit.preserves_all());
+    assert!(!RuntimeFunc::Alloc.preserves_all() && !RuntimeFunc::FreeUnique.preserves_all());
 }
 
 /// Reuse's runtime entries (D-716), inline and checked, and fusion's
@@ -828,7 +961,7 @@ fn reuse_runtime_functions() {
         (
             RuntimeFunc::FreeUnique,
             35,
-            &[CType::Ptr, CType::U64][..],
+            &[CType::Ptr, CType::U64, CType::U64][..],
             CType::Void,
         ),
     ];
@@ -1141,9 +1274,10 @@ fn unwind_pads_are_translated_as_cold_blocks() {
         cheby_runtime::abi::CTX_UNWIND
     );
     assert_eq!(plain.matches(&load_flag).count(), 0, "{plain}");
-    // The foreign call's; the entry check goes through the releasing slow
-    // path, which tests its own result (D-775).
-    assert_eq!(padded_text.matches(&load_flag).count(), 1, "{padded_text}");
+    // The foreign call's, and the entry check's: it goes through the
+    // releasing slow path, which returns nothing, so the flag tells
+    // (D-775).
+    assert_eq!(padded_text.matches(&load_flag).count(), 2, "{padded_text}");
     assert!(
         padded_text.contains("= cb$imp$cheby_rt_stack_slow_unwind"),
         "{padded_text}"
@@ -1328,10 +1462,10 @@ fn the_flag_lowers_every_edge() {
     );
     // With edges.
     let loads = flag.matches(&load_flag).count();
-    // The foreign call; the Cheby call, the allocation, the panic and the
-    // entry check's releasing slow path (D-775) do not
-    // load the flag.
-    assert_eq!(loads, 1, "{flag}");
+    // The foreign call and the entry check's releasing slow path (D-775),
+    // which returns nothing; the Cheby call, the allocation and the panic
+    // do not load the flag.
+    assert_eq!(loads, 2, "{flag}");
     assert!(
         flag.contains("= cb$imp$cheby_rt_stack_slow_unwind"),
         "{flag}"
@@ -1384,11 +1518,14 @@ fn counted_params_unit(n: u32) -> MirModule {
 }
 
 /// D-775: the entry check's slow path of a function
-/// with at most four counted parameters is `r = call
-/// cheby_rt_stack_slow_unwind(ctx, loc, n, p…, 0…); brif r, resume, bb0`,
-/// with no flag load, no continuation block and no translated entry pad
-/// chain; with five, it calls `cheby_rt_stack_slow`, loads the flag and
-/// translates the chain, whose drops call `cheby_rt_drop` out of line.
+/// with at most four counted parameters is `call
+/// cheby_rt_stack_slow_unwind(ctx, loc, p…, 0…); v = load.i32 ctx+12;
+/// brif v, resume, bb0`, six arguments with 0 for each word the function
+/// lacks, with no continuation block and no translated
+/// entry pad chain; with five, it calls `cheby_rt_stack_slow`, loads the
+/// flag and translates the chain, whose drops call `cheby_rt_drop` out of
+/// line. Both helpers are called with `preserve_all` where the runtime's
+/// stubs save every register, and return nothing.
 #[test]
 #[cfg_attr(
     windows,
@@ -1405,26 +1542,45 @@ fn entry_unwind_through_the_releasing_slow_path() {
         let lines: Vec<&str> = text.lines().map(str::trim).collect();
         let at = lines
             .iter()
-            .position(|line| line.contains("= call_indirect") && line.contains("(v0, "))
+            .position(|line| line.starts_with("call_indirect") && line.contains("(v0, "))
             .unwrap_or_else(|| panic!("{n}: no helper call in:\n{text}"));
         let call = lines[at];
-        let result = call.split(" = ").next().unwrap();
-        // The parameters after `ctx` and the `Int` are `v2` on, and the
-        // unused words are one zero.
+        let flag = lines[at + 1]
+            .strip_suffix(&format!(" = {load_flag}"))
+            .unwrap_or_else(|| panic!("{n}: the flag is loaded after the call:\n{text}"));
+        // `ctx`, the location, then the parameters after `ctx` and the
+        // `Int`, `v2` on, in the entry pad's order, and one zero for the
+        // unused words.
+        let (head, consts) = call.split_once("  ; ").unwrap_or((call, ""));
+        let args: Vec<&str> = head
+            .rsplit_once('(')
+            .and_then(|(_, rest)| rest.strip_suffix(')'))
+            .unwrap_or_else(|| panic!("{n}: {call}"))
+            .split(", ")
+            .collect();
+        assert_eq!(args.len(), 6, "{n}: {call}");
+        assert_eq!(args[0], "v0", "{n}: {call}");
         let words: Vec<String> = (0..n).map(|i| format!("v{}", i + 2)).collect();
+        let used = usize::try_from(n).unwrap().checked_add(2).unwrap();
+        let mut passed = args[2..used].to_vec();
+        passed.sort_unstable();
+        assert_eq!(passed, words, "{n}: {call}");
+        let zero = format!("{} = 0", args[5]);
         assert!(
-            words.iter().all(|word| call.contains(word.as_str())),
-            "{n}: {call}"
+            n == 4 || (args[used..].iter().all(|a| *a == args[5]) && consts.contains(&zero)),
+            "{n}: {call}\n{text}"
         );
         assert!(
-            lines[at + 1].starts_with(&format!("brif {result}, block"))
-                && lines[at + 1].ends_with(", block0"),
-            "{n}: the result goes to `resume` or the body:\n{text}"
+            lines[at + 2].starts_with(&format!("brif {flag}, block"))
+                && lines[at + 2].ends_with(", block0"),
+            "{n}: the flag goes to `resume` or the body:\n{text}"
         );
-        assert!(
-            text.contains(&format!("iconst.i32 {n}")),
-            "{n}: the count:\n{text}"
-        );
+        if cfg!(all(
+            any(target_arch = "aarch64", target_arch = "x86_64"),
+            not(windows)
+        )) {
+            assert!(text.contains(") preserve_all\n"), "{n}: {text}");
+        }
         assert!(
             text.lines()
                 .any(|l| l.ends_with("= cb$imp$cheby_rt_stack_slow_unwind")),
@@ -1436,7 +1592,7 @@ fn entry_unwind_through_the_releasing_slow_path() {
                 .any(|l| l.ends_with("= cb$imp$cheby_rt_stack_slow")),
             "{n}: {text}"
         );
-        assert!(!text.contains(&load_flag), "{n}: no flag load:\n{text}");
+        assert_eq!(text.matches(&load_flag).count(), 1, "{n}: {text}");
         // Only the shared `resume` of the entry pad chain is translated:
         // its `return 0` is the only return of 0 besides the body's.
         assert_eq!(text.matches("return").count(), 2, "{n}: {text}");
@@ -1761,16 +1917,16 @@ fn unboxed_result_call_tests_the_flag_not_the_result() {
         !unboxed.contains(&format!("brif {result},")),
         "the unboxed result {result} is never tested:\n{unboxed}"
     );
-    // Only the call: the entry check's releasing slow path tests its own
-    // result (D-775).
-    assert_eq!(unboxed.matches(&load_flag).count(), 1, "{unboxed}");
+    // The call and the entry check's releasing slow path, which returns
+    // nothing (D-775).
+    assert_eq!(unboxed.matches(&load_flag).count(), 2, "{unboxed}");
     let uniform = clif_of(&[unboxed_call_unit(Repr::Value)], &opts);
     let (_, result, next) = call_and_next(&uniform);
     assert!(
         next.starts_with(&format!("brif {result},")),
         "a uniform word is tested:\n{uniform}"
     );
-    assert_eq!(uniform.matches(&load_flag).count(), 0, "{uniform}");
+    assert_eq!(uniform.matches(&load_flag).count(), 1, "{uniform}");
 }
 
 /// `f(x) { t = alloc_placeholder tuple/<arity>; init_field t.<last> = x;
@@ -1895,6 +2051,118 @@ fn uncons_unit() -> MirModule {
     u
 }
 
+/// `f(xs) { n = list_length(xs); m = n - 1 (as a constant here: the
+/// length itself); rest = list_uncons_owned(xs, at, start, end); x =
+/// list_uncons_head(); ... }` for the step that takes the first
+/// (`front`) or the last element, as pattern lowering and the RC pass
+/// leave it.
+fn owned_step_unit(front: bool) -> MirModule {
+    use cheby_mir::{Local, RuntimeFn, Rvalue};
+    let mut u = uncons_unit();
+    let l = Local::from_u32;
+    let (at, start) = if front {
+        (Operand::Const(Const::Int(0)), 1)
+    } else {
+        (Operand::Local(l(1)), 0)
+    };
+    let step = Stmt::Assign {
+        dst: l(2),
+        value: Rvalue::CallRuntime {
+            func: RuntimeFn::ListUnconsOwned,
+            args: vec![
+                Operand::Local(l(0)),
+                at,
+                Operand::Const(Const::Int(start)),
+                Operand::Local(l(1)),
+            ],
+        },
+    };
+    u.functions[0].blocks.iter_mut().next().unwrap().stmts[1] = step;
+    u
+}
+
+/// An owned pattern step at either end of a list is written inline for a
+/// unique list whose leaf at that end is at hand, with the helper's call
+/// in a cold block for every other list: it tests the root's header
+/// against the two unique roots', the leaf's layout and the counting
+/// flag, then takes the element into the step's stack slot and writes the
+/// position and the length. The element moves out of a leaf whose header
+/// is a unique leaf's, and is dup'd from one that another list holds, a
+/// walk over a list the caller still uses. With `checked_rc` only the
+/// call is left.
+#[test]
+#[cfg_attr(
+    windows,
+    ignore = "runs JIT-compiled code; Windows support is M6 (D-545)"
+)]
+fn owned_list_steps_are_written_inline() {
+    use cheby_runtime::abi::{list, sym};
+    for front in [true, false] {
+        let text = clif_of(&[owned_step_unit(front)], &CodegenOptions::default());
+        for header in [list::UNIQUE_ROOT, list::UNIQUE_BIG_ROOT, list::UNIQUE_LEAF] {
+            // As CLIF prints a constant: hexadecimal, in groups of four.
+            let digits = format!("{header:x}");
+            let grouped: Vec<&str> = digits
+                .as_bytes()
+                .rchunks(4)
+                .rev()
+                .map(|group| std::str::from_utf8(group).unwrap())
+                .collect();
+            let constant = format!("iconst.i64 0x{}", grouped.join("_"));
+            assert!(text.contains(&constant), "{front}: no {constant}\n{text}");
+        }
+        assert!(text.contains(sym::STATS_COUNTING), "{front}\n{text}");
+        // The leaf's layout, read from its header, and the dup of an
+        // element under a shared leaf, whose slow path is a call.
+        let shift = cheby_runtime::abi::HEADER_LAYOUT_SHIFT;
+        assert!(
+            text.contains(&format!("iconst.i64 {shift}\n")),
+            "{front}\n{text}"
+        );
+        assert!(
+            text.contains(&format!("iconst.i64 {}\n", list::LEAF_LAYOUT)),
+            "{front}\n{text}"
+        );
+        assert!(text.contains(sym::DUP), "{front}\n{text}");
+        // One slot: the inline code stores the element there, the
+        // helper gets its address in a cold block, and the head is read
+        // back from it.
+        assert_eq!(
+            text.matches("explicit_slot 8").count(),
+            1,
+            "{front}\n{text}"
+        );
+        assert_eq!(
+            text.matches("stack_addr.i64 ss0").count(),
+            3,
+            "{front}\n{text}"
+        );
+        assert!(text.contains(sym::LIST_UNCONS_OWNED), "{front}\n{text}");
+        assert!(text.contains(" cold:"), "{front}\n{text}");
+        // The front step stores the cleared word, a constant, in the
+        // slot it empties; the back step shortens the leaf instead.
+        assert_eq!(list::CLEARED, 1);
+        let slots = list::LEAF_SLOTS_OFFSET;
+        let clears = text
+            .lines()
+            .any(|line| line.contains(&format!("+{slots}  ; ")) && line.ends_with(" = 1"));
+        assert_eq!(clears, front, "{front}\n{text}");
+        let checked = CodegenOptions {
+            checked_rc: true,
+            ..CodegenOptions::default()
+        };
+        let text = clif_of(&[owned_step_unit(front)], &checked);
+        assert_eq!(
+            text.matches("stack_addr.i64 ss0").count(),
+            2,
+            "{front}\n{text}"
+        );
+        assert!(!text.contains(sym::STATS_COUNTING), "{front}\n{text}");
+        assert!(!text.contains(sym::DUP), "{front}\n{text}");
+        assert!(text.contains(sym::LIST_UNCONS_OWNED), "{front}\n{text}");
+    }
+}
+
 /// A list's length is a load of its root's length word, with no call
 /// (D-910), and a pattern step passes the address of one stack slot that
 /// the head is then loaded from (D-909).
@@ -1921,4 +2189,546 @@ fn list_lengths_load_and_steps_pass_a_slot() {
         text.contains(cheby_runtime::abi::sym::LIST_UNCONS),
         "{text}"
     );
+}
+
+/// `f(xs) { x = helper(xs, args…); return x }`, counts left out: one call
+/// of a list or map helper on the parameter.
+fn index_unit(helper: cheby_mir::RuntimeFn, rest: Vec<Operand>, result: Repr) -> MirModule {
+    use cheby_mir::{Local, Rvalue};
+    let mut u = unit();
+    let function = &mut u.functions[0];
+    function.locals = IndexVec::from_raw(
+        [Repr::Value, result]
+            .into_iter()
+            .map(|repr| LocalDecl {
+                repr,
+                name: None,
+                ty: None,
+            })
+            .collect(),
+    )
+    .unwrap();
+    let l = Local::from_u32;
+    let mut args = vec![Operand::Local(l(0))];
+    args.extend(rest);
+    function.blocks = IndexVec::from_raw(vec![Block {
+        pos: Vec::new(),
+        params: Vec::new(),
+        stmts: vec![Stmt::Assign {
+            dst: l(1),
+            value: Rvalue::CallRuntime { func: helper, args },
+        }],
+        term: Terminator::Return(Operand::Local(l(1))),
+        unwind: Vec::new(),
+    }])
+    .unwrap();
+    u
+}
+
+/// A header word as CLIF prints a constant: hexadecimal, in groups of
+/// four.
+fn clif_constant(word: u64) -> String {
+    let digits = format!("{word:x}");
+    let grouped: Vec<&str> = digits
+        .as_bytes()
+        .rchunks(4)
+        .rev()
+        .map(|group| std::str::from_utf8(group).unwrap())
+        .collect();
+    format!("iconst.i64 0x{}", grouped.join("_"))
+}
+
+/// `list_get` of a list that is one leaf is a load of the slot and an
+/// inline `dup`, after tests of the root's and the leaf's layouts, with
+/// the helper's call in a cold block for every other list; no count and
+/// no counting flag is read. With `checked_rc` only the call is left.
+#[test]
+#[cfg_attr(
+    windows,
+    ignore = "runs JIT-compiled code; Windows support is M6 (D-545)"
+)]
+fn list_reads_at_an_index_are_written_inline() {
+    use cheby_mir::RuntimeFn;
+    use cheby_runtime::abi::{list, sym};
+    let get = || {
+        index_unit(
+            RuntimeFn::ListGet,
+            vec![Operand::Const(Const::Int(1))],
+            Repr::Value,
+        )
+    };
+    let text = clif_of(&[get()], &CodegenOptions::default());
+    for offset in [list::ROOT_TREE_OFFSET, list::ROOT_OFFSET_OFFSET] {
+        assert!(text.contains(&format!("+{offset}\n")), "{offset}\n{text}");
+    }
+    assert!(
+        text.contains(&format!("+{}\n", list::LEAF_SLOTS_OFFSET)),
+        "{text}"
+    );
+    assert!(text.contains(sym::LIST_GET), "{text}");
+    assert!(text.contains(" cold:"), "{text}");
+    assert!(!text.contains(sym::STATS_COUNTING), "{text}");
+    assert!(
+        !text.contains(&clif_constant(list::UNIQUE_ROOT)),
+        "a read tests no count\n{text}"
+    );
+    let checked = CodegenOptions {
+        checked_rc: true,
+        ..CodegenOptions::default()
+    };
+    let text = clif_of(&[get()], &checked);
+    assert!(text.contains(sym::LIST_GET), "{text}");
+    assert!(
+        !text.contains(&format!("+{}\n", list::ROOT_OFFSET_OFFSET)),
+        "{text}"
+    );
+}
+
+/// `owned_step_unit` with the head read as a number of `repr`
+/// (`list_uncons_head_float`), boxed again to be returned.
+fn scalar_step_unit(front: bool, repr: Repr) -> MirModule {
+    use cheby_mir::{Local, RuntimeFn, Rvalue};
+    let mut u = owned_step_unit(front);
+    let l = Local::from_u32;
+    let function = &mut u.functions[0];
+    function.locals.get_mut(l(3)).unwrap().repr = repr;
+    function
+        .locals
+        .push(LocalDecl {
+            repr: Repr::Value,
+            name: None,
+            ty: None,
+        })
+        .unwrap();
+    let block = function.blocks.iter_mut().next().unwrap();
+    block.stmts[2] = Stmt::Assign {
+        dst: l(3),
+        value: Rvalue::CallRuntime {
+            func: RuntimeFn::as_scalar(RuntimeFn::ListUnconsHead, repr).unwrap(),
+            args: Vec::new(),
+        },
+    };
+    block.stmts.push(Stmt::Assign {
+        dst: l(4),
+        value: Rvalue::Box {
+            value: Operand::Local(l(3)),
+            from: repr,
+        },
+    });
+    block.term = Terminator::Return(Operand::Local(l(4)));
+    u
+}
+
+/// `f(xs) { x = list_get_float(xs, 1); return box x }`, or its `F32`
+/// form.
+fn scalar_index_unit(repr: Repr) -> MirModule {
+    use cheby_mir::{Local, RuntimeFn, Rvalue};
+    let get = RuntimeFn::as_scalar(RuntimeFn::ListGet, repr).unwrap();
+    let mut u = index_unit(get, vec![Operand::Const(Const::Int(1))], repr);
+    let l = Local::from_u32;
+    let function = &mut u.functions[0];
+    function
+        .locals
+        .push(LocalDecl {
+            repr: Repr::Value,
+            name: None,
+            ty: None,
+        })
+        .unwrap();
+    let block = function.blocks.iter_mut().next().unwrap();
+    block.stmts.push(Stmt::Assign {
+        dst: l(2),
+        value: Rvalue::Box {
+            value: Operand::Local(l(1)),
+            from: repr,
+        },
+    });
+    block.term = Terminator::Return(Operand::Local(l(2)));
+    u
+}
+
+/// The lines of `text` that load a number of `ty` (`f64`, `f32`), each
+/// with the line before it.
+fn number_loads<'t>(text: &'t str, ty: &str) -> Vec<(&'t str, &'t str)> {
+    let lines: Vec<&str> = text.lines().collect();
+    lines
+        .windows(2)
+        .filter(|pair| pair[1].contains(&format!("= load.{ty} ")))
+        .map(|pair| (pair[0], pair[1]))
+        .collect()
+}
+
+/// Whether `load`, a load of a number, reads through the value that
+/// `before`, a load of a word, defines: the two loads are next to each
+/// other, with no call and no yield point between them.
+fn loads_through(before: &str, load: &str) -> bool {
+    let defined = before.trim().split(' ').next().unwrap_or_default();
+    (before.contains("= load.i64 ") || before.contains("= stack_load.i64 "))
+        && load.contains(&format!(" {defined}+"))
+}
+
+/// A pattern step whose head reads the element as a number yields it from
+/// the inline step: on every path the number is loaded right after the
+/// word of its box, with nothing between the two loads. No path dups the
+/// element: a shared leaf keeps its box and no count changes, and an
+/// element moved out of a unique leaf is dropped after the read, as is
+/// the word the helper writes to the slot. The slot is written only by
+/// the helper and read only on its path. With `checked_rc` the head
+/// reads the slot, unboxes and drops, as a head and its `unbox` and
+/// `drop` would.
+#[test]
+#[cfg_attr(
+    windows,
+    ignore = "runs JIT-compiled code; Windows support is M6 (D-545)"
+)]
+fn float_steps_read_the_number_without_a_count() {
+    use cheby_runtime::abi::sym;
+    for (repr, ty) in [(Repr::Float, "f64"), (Repr::F32, "f32")] {
+        for front in [true, false] {
+            let text = clif_of(&[scalar_step_unit(front, repr)], &CodegenOptions::default());
+            let loads = number_loads(&text, ty);
+            // The inline paths, one for each kind of leaf at the back but
+            // a shared load before the branch at the front, and the
+            // helper's.
+            assert_eq!(
+                loads.len(),
+                if front { 2 } else { 3 },
+                "{front}
+{text}"
+            );
+            for (before, load) in &loads {
+                assert!(
+                    loads_through(before, load),
+                    "{before}
+{load}
+{text}"
+                );
+            }
+            assert!(
+                !text.contains(sym::DUP),
+                "{front}
+{text}"
+            );
+            assert!(
+                text.contains(sym::DROP),
+                "{front}
+{text}"
+            );
+            // The helper gets the slot's address and its path reads the
+            // word back through it; the inline paths store nothing there.
+            assert_eq!(text.matches("stack_addr.i64 ss0").count(), 2, "{text}");
+            assert!(!text.contains("stack_store"), "{text}");
+            assert!(
+                text.contains(sym::LIST_UNCONS_OWNED),
+                "{front}
+{text}"
+            );
+            let checked = CodegenOptions {
+                checked_rc: true,
+                ..CodegenOptions::default()
+            };
+            let text = clif_of(&[scalar_step_unit(front, repr)], &checked);
+            let loads = number_loads(&text, ty);
+            assert_eq!(
+                loads.len(),
+                1,
+                "{front}
+{text}"
+            );
+            assert!(loads_through(loads[0].0, loads[0].1), "{text}");
+            assert!(
+                text.contains(sym::DROP),
+                "{front}
+{text}"
+            );
+            assert!(
+                !text.contains(sym::STATS_COUNTING),
+                "{front}
+{text}"
+            );
+        }
+    }
+}
+
+/// `list_get_float` of a list that is one leaf loads the slot's word and
+/// the number through it, with no count touched, and the helper's path
+/// unboxes the word the helper returns and drops it. With `checked_rc`
+/// only that path is left.
+#[test]
+#[cfg_attr(
+    windows,
+    ignore = "runs JIT-compiled code; Windows support is M6 (D-545)"
+)]
+fn float_index_reads_load_the_number() {
+    use cheby_runtime::abi::{list, sym};
+    for (repr, ty) in [(Repr::Float, "f64"), (Repr::F32, "f32")] {
+        let text = clif_of(&[scalar_index_unit(repr)], &CodegenOptions::default());
+        let loads = number_loads(&text, ty);
+        assert_eq!(loads.len(), 2, "{text}");
+        let (before, load) = loads[0];
+        assert!(
+            loads_through(before, load),
+            "{before}
+{load}
+{text}"
+        );
+        assert!(
+            before.contains(
+                &format!(
+                    "+{}
+",
+                    list::LEAF_SLOTS_OFFSET
+                )
+                .trim_end()
+                .to_owned()
+            ),
+            "the slot's word
+{text}"
+        );
+        assert!(!text.contains(sym::DUP), "{text}");
+        assert!(text.contains(sym::LIST_GET), "{text}");
+        assert!(
+            text.contains(sym::DROP),
+            "the helper's word
+{text}"
+        );
+        let checked = CodegenOptions {
+            checked_rc: true,
+            ..CodegenOptions::default()
+        };
+        let text = clif_of(&[scalar_index_unit(repr)], &checked);
+        assert_eq!(number_loads(&text, ty).len(), 1, "{text}");
+        assert!(text.contains(sym::LIST_GET), "{text}");
+        assert!(text.contains(sym::DROP), "{text}");
+        assert!(
+            !text.contains(&format!(
+                "+{}
+",
+                list::ROOT_OFFSET_OFFSET
+            )),
+            "{text}"
+        );
+    }
+}
+
+/// `list_set` of a unique list that is one leaf stores the item and
+/// releases the old element inline, after tests of the counting flag, the
+/// root's and the leaf's headers and an unsigned bounds test, with the
+/// helper's call in a cold block for every other list. With `checked_rc`
+/// only the call is left.
+#[test]
+#[cfg_attr(
+    windows,
+    ignore = "runs JIT-compiled code; Windows support is M6 (D-545)"
+)]
+fn list_writes_at_an_index_are_written_inline() {
+    use cheby_mir::RuntimeFn;
+    use cheby_runtime::abi::{list, sym};
+    let set = || {
+        index_unit(
+            RuntimeFn::ListSet,
+            vec![Operand::Const(Const::Int(2)), Operand::Const(Const::Nil)],
+            Repr::Value,
+        )
+    };
+    let text = clif_of(&[set()], &CodegenOptions::default());
+    for header in [list::UNIQUE_ROOT, list::UNIQUE_LEAF] {
+        let constant = clif_constant(header);
+        assert!(text.contains(&constant), "no {constant}\n{text}");
+    }
+    assert!(text.contains(sym::STATS_COUNTING), "{text}");
+    assert!(text.contains("icmp ult"), "{text}");
+    assert!(
+        text.contains(&format!("+{}\n", list::LEAF_SLOTS_OFFSET)),
+        "{text}"
+    );
+    assert!(text.contains("store notrap aligned"), "{text}");
+    assert!(text.contains(sym::LIST_SET), "{text}");
+    assert!(text.contains(" cold:"), "{text}");
+    let checked = CodegenOptions {
+        checked_rc: true,
+        ..CodegenOptions::default()
+    };
+    let text = clif_of(&[set()], &checked);
+    assert!(text.contains(sym::LIST_SET), "{text}");
+    assert!(!text.contains(sym::STATS_COUNTING), "{text}");
+    assert!(!text.contains("store notrap aligned"), "{text}");
+}
+
+/// The helpers of a direct `map::upsert`: `map_upsert` takes `ctx`, the map,
+/// the key and the address of its word, its address step needs only its
+/// declaration, `map_slot_take` takes the address alone, and the
+/// `Option` and the store take `ctx` too.
+#[test]
+fn upsert_runtime_functions() {
+    use cheby_mir::RuntimeFn;
+    use runtime::RuntimeFunc;
+    for (f, index, helper, takes_ctx) in [
+        (RuntimeFunc::MapUpsert, 46, RuntimeFn::MapUpsert, true),
+        (
+            RuntimeFunc::MapUpsert,
+            46,
+            RuntimeFn::MapUpsertAddress,
+            true,
+        ),
+        (RuntimeFunc::MapSlotTake, 47, RuntimeFn::MapSlotTake, false),
+        (
+            RuntimeFunc::MapUpsertFound,
+            48,
+            RuntimeFn::MapUpsertFound,
+            true,
+        ),
+        (
+            RuntimeFunc::MapUpsertStore,
+            49,
+            RuntimeFn::MapUpsertStore,
+            true,
+        ),
+    ] {
+        assert_eq!(f.index(), index, "{f:?}");
+        assert!(f.on_demand(), "{f:?}");
+        assert_eq!(RuntimeFunc::of(helper), (f, takes_ctx), "{f:?}");
+    }
+    assert_eq!(
+        RuntimeFunc::MapUpsert.ctypes(),
+        (
+            &[CType::Ptr, CType::U64, CType::U64, CType::Ptr][..],
+            CType::U64
+        )
+    );
+    assert_eq!(
+        RuntimeFunc::MapUpsertFound.ctypes(),
+        (&[CType::Ptr, CType::U64][..], CType::U64)
+    );
+    assert_eq!(
+        RuntimeFunc::MapUpsertStore.ctypes(),
+        (
+            &[CType::Ptr, CType::U64, CType::U64, CType::U64, CType::U64][..],
+            CType::U64
+        )
+    );
+}
+
+/// The steps of an upsert after its `map_upsert`: the address is a load of
+/// the stack slot whose address `map_upsert` was given, the value is moved
+/// out with a load and a store, and the result is stored with a store and
+/// the map given back, with the runtime's store called only in a cold block
+/// for an empty map; with `checked_rc` the value is taken by the runtime's
+/// call.
+#[test]
+#[cfg_attr(
+    windows,
+    ignore = "runs JIT-compiled code; Windows support is M6 (D-545)"
+)]
+fn upsert_steps_are_inline() {
+    use cheby_mir::{Local, RuntimeFn, Rvalue};
+    use cheby_runtime::abi::sym;
+    let steps = || {
+        let mut u = unit();
+        let function = &mut u.functions[0];
+        function.locals = IndexVec::from_raw(
+            [
+                Repr::Value,
+                Repr::Value,
+                Repr::U64,
+                Repr::Value,
+                Repr::Value,
+            ]
+            .into_iter()
+            .map(|repr| LocalDecl {
+                repr,
+                name: None,
+                ty: None,
+            })
+            .collect(),
+        )
+        .unwrap();
+        let l = Local::from_u32;
+        let call = |func, args| Rvalue::CallRuntime { func, args };
+        let assign = |dst: u32, value| Stmt::Assign { dst: l(dst), value };
+        function.blocks = IndexVec::from_raw(vec![Block {
+            pos: Vec::new(),
+            params: Vec::new(),
+            stmts: vec![
+                assign(
+                    1,
+                    call(
+                        RuntimeFn::MapUpsert,
+                        vec![Operand::Local(l(0)), Operand::Const(Const::Nil)],
+                    ),
+                ),
+                assign(
+                    2,
+                    call(RuntimeFn::MapUpsertAddress, vec![Operand::Local(l(1))]),
+                ),
+                assign(
+                    3,
+                    call(
+                        RuntimeFn::MapSlotTake,
+                        vec![Operand::Local(l(1)), Operand::Local(l(2))],
+                    ),
+                ),
+                assign(
+                    4,
+                    call(
+                        RuntimeFn::MapUpsertStore,
+                        vec![
+                            Operand::Local(l(1)),
+                            Operand::Local(l(2)),
+                            Operand::Const(Const::Nil),
+                            Operand::Local(l(3)),
+                        ],
+                    ),
+                ),
+            ],
+            term: Terminator::Return(Operand::Local(l(4))),
+            unwind: Vec::new(),
+        }])
+        .unwrap();
+        u
+    };
+    let text = clif_of(&[steps()], &CodegenOptions::default());
+    assert!(text.contains(sym::MAP_UPSERT), "{text}");
+    assert!(text.contains("stack_addr"), "{text}");
+    assert!(text.contains("band"), "{text}");
+    assert!(text.contains("cold"), "{text}");
+    assert!(!text.contains(sym::MAP_SLOT_TAKE), "{text}");
+    let checked = CodegenOptions {
+        checked_rc: true,
+        ..CodegenOptions::default()
+    };
+    let text = clif_of(&[steps()], &checked);
+    assert!(text.contains(sym::MAP_SLOT_TAKE), "{text}");
+    assert!(text.contains(sym::MAP_UPSERT_STORE), "{text}");
+}
+
+/// `map_value_at` is a load at the address `map_find` gave and an inline
+/// `dup`; with `checked_rc` it is the runtime's call of the address.
+#[test]
+#[cfg_attr(
+    windows,
+    ignore = "runs JIT-compiled code; Windows support is M6 (D-545)"
+)]
+fn map_values_are_read_inline() {
+    use cheby_mir::RuntimeFn;
+    use cheby_runtime::abi::sym;
+    let read = || {
+        index_unit(
+            RuntimeFn::MapValueAt,
+            vec![Operand::Const(Const::Sized {
+                repr: Repr::U64,
+                bits: 64,
+            })],
+            Repr::Value,
+        )
+    };
+    let text = clif_of(&[read()], &CodegenOptions::default());
+    assert!(!text.contains(sym::MAP_VALUE_AT), "{text}");
+    assert!(text.contains(sym::DUP), "the slow path of the dup\n{text}");
+    let checked = CodegenOptions {
+        checked_rc: true,
+        ..CodegenOptions::default()
+    };
+    let text = clif_of(&[read()], &checked);
+    assert!(text.contains(sym::MAP_VALUE_AT), "{text}");
 }

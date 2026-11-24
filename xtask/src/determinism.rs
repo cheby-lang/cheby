@@ -26,21 +26,27 @@
 //!    ([`example::Example::run_args`]: 031 against the HTTP fixture,
 //!    D-1027), and for an example with tests, a `cheby test`, write into
 //!    the same cache, so code, tests, std, constant, warm-facts, reuse-line
-//!    and C object records (020) join the comparison. The runs' and tests'
+//!    and C object records (020), and the release profile's code records
+//!    and std's export record, join the comparison. The runs' and tests'
 //!    exit status and output are recorded beside the dumps and compared
 //!    with them. The two caches' `v1/blob/` and `v1/rec/` trees must be
 //!    identical byte for byte, with no exception; `v1/hint/` is left out.
 //!    The summary line names the commands that wrote into the cache, in the
-//!    order `check, build, run, test`.
+//!    order `check, build, build --release, run, test`.
 //! 4. Executables (D-934): every runnable example (one whose `test.toml`
 //!    has no `skip-run`, [`must_build`]) is also built with
-//!    `cheby build -o <dir>/<example>` from each of the two copies, into
-//!    the build's cache, with the same basename. Every one of them must
-//!    build, and its two executables must be identical byte for byte
-//!    (D-1164, D-934): a refusal of a runnable example, even one "not
-//!    available yet" (D-924) or a compile error, fails the check like any
-//!    other failure of `cheby build`. There is no list: an example joins
-//!    the moment its `skip-run` goes. Examples with `skip-run` are only
+//!    `cheby build -o <dir>/<example>` and
+//!    `cheby build --release -o <dir>/<example>` (design T16, [`PROFILES`])
+//!    from each of the two copies, into the build's cache, with the same
+//!    basename. Every one of them must build, and each profile's two
+//!    executables must be identical byte for byte (D-1164, D-934): a refusal
+//!    of a runnable example, even one "not available yet" (D-924) or a
+//!    compile error, fails the check like any other failure of
+//!    `cheby build`. The release builds write std's export record into the
+//!    caches (design T15), and the record the first build's lookup log names
+//!    must be in both caches, the same byte for byte
+//!    ([`compare_export_records`]). There is no list: an example joins the
+//!    moment its `skip-run` goes. Examples with `skip-run` are only
 //!    checked, never built into executables.
 //!    The runtime archive is built with `cheby` ([`crate::build_cheby`],
 //!    D-929).
@@ -132,8 +138,9 @@ pub(crate) fn run(root: &Path, lines: usize, filter: Option<&str>) -> Result<(),
          caches' blobs and records compared"
     );
     println!(
-        "executables: {executables} runnable examples built twice with `cheby build` from two \
-         paths into two fresh caches under one basename; executables or refusals compared"
+        "executables: {executables} executables of runnable examples, debug and release, built \
+         twice with `cheby build` from two paths into two fresh caches under one basename; \
+         executables or refusals and std's export records compared"
     );
     println!(
         "warm: {warm} examples run again warm; exit status, outputs and constant values equal \
@@ -222,7 +229,7 @@ impl Project {
     fn commands(&self) -> Vec<&'static str> {
         let mut out = vec!["check"];
         if self.run.is_some() {
-            out.extend(["build", "run"]);
+            out.extend(["build", "build --release", "run"]);
         }
         if self.tests {
             out.push("test");
@@ -338,7 +345,9 @@ fn build_project(ctx: &Ctx<'_>, project: &Project) -> Result<Outcome, String> {
         build.arg("bench-build").args(jobs_args(jobs)).arg(&copy);
         record(build, &copy, &out.join("all"), &out.join("all.out"), false)?;
         if let Some(run) = &project.run {
-            build_executable(ctx.cheby, &copy, &cache, base, label, name, jobs)?;
+            for profile in PROFILES {
+                build_executable(ctx.cheby, &copy, &cache, base, profile, label, name, jobs)?;
+            }
             let cmd = run_command(ctx.cheby, &cache, jobs, run);
             record_output(cmd, &copy, run.stdin.as_deref(), &out.join("run.out"))?;
         }
@@ -348,11 +357,17 @@ fn build_project(ctx: &Ctx<'_>, project: &Project) -> Result<Outcome, String> {
         }
     }
     if project.run.is_some() {
-        match compare_executables(base, name)? {
-            Ok(what) => {
-                outcome.executables = 1;
-                outcome.ok(format!("{name}: {what}"));
+        for profile in PROFILES {
+            match compare_executables(base, profile, name)? {
+                Ok(what) => {
+                    outcome.executables = outcome.executables.saturating_add(1);
+                    outcome.ok(format!("{name}: {what}"));
+                }
+                Err(diff) => outcome.fail(format!("{name}: {diff}")),
             }
+        }
+        match compare_export_records(base, name)? {
+            Ok(what) => outcome.ok(format!("{name}: {what}")),
             Err(diff) => outcome.fail(format!("{name}: {diff}")),
         }
     }
@@ -535,42 +550,84 @@ fn compare_caches(base: &Path, name: &str) -> Result<Result<usize, String>, Stri
     Ok(Ok(files))
 }
 
-/// Where the executable of `name` built under `label` goes: one directory
-/// per build, one basename, the example's name (D-934's basename is an
-/// input).
-fn executable_path(base: &Path, label: &str, name: &str) -> PathBuf {
-    base.join("exe").join(label).join(name).join(name)
+/// The profiles a runnable example's executables are built in (D-934,
+/// design T16): the directory of the profile's executables under the base
+/// and the flags `cheby build` gets.
+const PROFILES: [Profile; 2] = [
+    Profile {
+        dir: "exe",
+        flags: &[],
+    },
+    Profile {
+        dir: "exe-release",
+        flags: &["--release"],
+    },
+];
+
+/// A profile of [`PROFILES`].
+#[derive(Clone, Copy, Debug)]
+struct Profile {
+    dir: &'static str,
+    flags: &'static [&'static str],
 }
 
-/// The record of the executable build of `name` under `label`: its status
-/// and standard error.
-fn executable_log(base: &Path, label: &str, name: &str) -> PathBuf {
-    base.join("exe").join(label).join(format!("{name}.build"))
+/// Where the executable of `name` built in `profile` under `label` goes:
+/// one directory per profile and build, one basename, the example's name
+/// (D-934's basename is an input).
+fn executable_path(base: &Path, profile: Profile, label: &str, name: &str) -> PathBuf {
+    base.join(profile.dir).join(label).join(name).join(name)
 }
 
-/// `cheby build -o <executable>` in `copy` (D-934), with the build's cache
-/// `cache` (module documentation, item 3), recording its status and
-/// standard error.
+/// The record of the executable build of `name` in `profile` under
+/// `label`: its status and standard error.
+fn executable_log(base: &Path, profile: Profile, label: &str, name: &str) -> PathBuf {
+    base.join(profile.dir)
+        .join(label)
+        .join(format!("{name}.build"))
+}
+
+/// The `CHEBY_CACHE_LOG` of the executable build of `name` in `profile`
+/// under `label`, which names the keys it looked up.
+fn executable_cache_log(base: &Path, profile: Profile, label: &str, name: &str) -> PathBuf {
+    base.join(profile.dir)
+        .join(label)
+        .join(format!("{name}.cache-log"))
+}
+
+/// `cheby build -o <executable>` in `profile` in `copy` (D-934), with the
+/// build's cache `cache` (module documentation, item 3), recording its
+/// status and standard error.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "the build's project, cache, place and settings"
+)]
 fn build_executable(
     cheby: &Path,
     copy: &Path,
     cache: &Path,
     base: &Path,
+    profile: Profile,
     label: &str,
     name: &str,
     jobs: Option<usize>,
 ) -> Result<(), String> {
-    let exe = executable_path(base, label, name);
+    let exe = executable_path(base, profile, label, name);
     let dir = exe.parent().unwrap_or(base);
     std::fs::create_dir_all(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
     let out = Command::new(cheby)
         .args(jobs_args(jobs))
-        .args(["--color=never", "build", "-o"])
+        .args(["--color=never", "build"])
+        .args(profile.flags)
+        .arg("-o")
         .arg(&exe)
         .current_dir(copy)
         .env("CHEBY_CACHE", cache)
-        .env_remove("CHEBY_CACHE_LOG")
+        .env(
+            "CHEBY_CACHE_LOG",
+            executable_cache_log(base, profile, label, name),
+        )
         .env_remove("CHEBY_DUMP_DIR")
+        .env_remove("CHEBY_RELEASE_OFF")
         .output()
         .map_err(|e| format!("cannot run `cheby build`: {e}"))?;
     let text = format!(
@@ -579,8 +636,50 @@ fn build_executable(
         String::from_utf8_lossy(&out.stdout),
         String::from_utf8_lossy(&out.stderr)
     );
-    let log = executable_log(base, label, name);
+    let log = executable_log(base, profile, label, name);
     std::fs::write(&log, text).map_err(|e| format!("{}: {e}", log.display()))
+}
+
+/// Design T16: std's export record, which the release executable builds of
+/// `name` wrote into the two caches, is in both and the same byte for
+/// byte. The key comes from the first build's lookup log. `Ok` names the
+/// record's size; `Err` says what is missing or differs.
+fn compare_export_records(base: &Path, name: &str) -> Result<Result<String, String>, String> {
+    let [_, release] = PROFILES;
+    let [(a, top_a, _), (_, top_b, _)] = BUILDS;
+    let log = executable_cache_log(base, release, a, name);
+    let text = std::fs::read_to_string(&log).map_err(|e| format!("{}: {e}", log.display()))?;
+    let Some(key) = text
+        .lines()
+        .find_map(|l| l.strip_prefix("key export.std release "))
+    else {
+        return Ok(Err(
+            "the release build looked up no std export record".to_owned()
+        ));
+    };
+    let shard = key.get(..2).unwrap_or("00");
+    let read = |top: &str| {
+        let path = cache_dir(base, top, name)
+            .join("v1/rec")
+            .join(shard)
+            .join(key);
+        std::fs::read(&path).map_err(|e| format!("{}: {e}", path.display()))
+    };
+    let (bytes_a, bytes_b) = match (read(top_a), read(top_b)) {
+        (Ok(x), Ok(y)) => (x, y),
+        (Err(e), _) | (_, Err(e)) => return Ok(Err(format!("std's export record: {e}"))),
+    };
+    if bytes_a != bytes_b {
+        return Ok(Err(format!(
+            "std's export records differ ({} and {} bytes)",
+            bytes_a.len(),
+            bytes_b.len()
+        )));
+    }
+    Ok(Ok(format!(
+        "std's export record identical ({} bytes)",
+        bytes_a.len()
+    )))
 }
 
 /// The generator's part (module documentation, 1): each shape generated
@@ -625,10 +724,14 @@ fn generate(base: &Path, lines: usize) -> Result<(Vec<(String, PathBuf)>, usize)
 /// byte. `Ok` says what was compared, naming the executable; `Err` gives
 /// the first difference, or the failure of a build that did not succeed
 /// twice, which no runnable example may have (D-1164).
-fn compare_executables(base: &Path, name: &str) -> Result<Result<String, String>, String> {
+fn compare_executables(
+    base: &Path,
+    profile: Profile,
+    name: &str,
+) -> Result<Result<String, String>, String> {
     let [(a, _, _), (b, _, _)] = BUILDS;
     let read_log = |label: &str| {
-        let log = executable_log(base, label, name);
+        let log = executable_log(base, profile, label, name);
         std::fs::read_to_string(&log).map_err(|e| format!("{}: {e}", log.display()))
     };
     let (log_a, log_b) = (read_log(a)?, read_log(b)?);
@@ -638,8 +741,8 @@ fn compare_executables(base: &Path, name: &str) -> Result<Result<String, String>
         )));
     }
     let (exe_a, exe_b) = (
-        executable_path(base, a, name),
-        executable_path(base, b, name),
+        executable_path(base, profile, a, name),
+        executable_path(base, profile, b, name),
     );
     if !log_a.starts_with("exit: Some(0)\n") {
         return Ok(Err(failed_build(&log_a)));
@@ -861,10 +964,11 @@ mod tests {
     /// records them: each label's log and, if given, its executable.
     fn builds(base: &Path, name: &str, logs: [&str; 2], exes: Option<[&[u8]; 2]>) {
         let [(a, _, _), (b, _, _)] = BUILDS;
+        let [debug, _] = PROFILES;
         for (i, label) in [a, b].into_iter().enumerate() {
-            let exe = executable_path(base, label, name);
+            let exe = executable_path(base, debug, label, name);
             std::fs::create_dir_all(exe.parent().unwrap()).unwrap();
-            std::fs::write(executable_log(base, label, name), logs[i]).unwrap();
+            std::fs::write(executable_log(base, debug, label, name), logs[i]).unwrap();
             if let Some(bytes) = exes {
                 std::fs::write(&exe, bytes[i]).unwrap();
             }
@@ -913,7 +1017,9 @@ mod tests {
         for (i, failed) in refused.iter().enumerate() {
             let name = format!("{i:03}_example");
             builds(&base, &name, [failed, failed], None);
-            let diff = compare_executables(&base, &name).unwrap().unwrap_err();
+            let diff = compare_executables(&base, PROFILES[0], &name)
+                .unwrap()
+                .unwrap_err();
             assert!(
                 diff.contains("must build every runnable example (D-1164, D-934)"),
                 "{diff}"
@@ -922,10 +1028,12 @@ mod tests {
 
         let ok = log("Some(0)", "");
         builds(&base, "100_same", [&ok, &ok], Some([b"exe", b"exe"]));
-        let same = compare_executables(&base, "100_same").unwrap().unwrap();
+        let same = compare_executables(&base, PROFILES[0], "100_same")
+            .unwrap()
+            .unwrap();
         assert!(same.contains("identical"), "{same}");
         builds(&base, "101_other", [&ok, &ok], Some([b"exe", b"exf"]));
-        let other = compare_executables(&base, "101_other")
+        let other = compare_executables(&base, PROFILES[0], "101_other")
             .unwrap()
             .unwrap_err();
         assert!(other.contains("differ at byte 2"), "{other}");
@@ -935,10 +1043,58 @@ mod tests {
             [&ok, &refused[0]],
             Some([b"exe", b"exe"]),
         );
-        let one = compare_executables(&base, "102_one_failed")
+        let one = compare_executables(&base, PROFILES[0], "102_one_failed")
             .unwrap()
             .unwrap_err();
         assert!(one.contains("differs between the two builds"), "{one}");
+        std::fs::remove_dir_all(&base).unwrap();
+    }
+
+    /// Module documentation item 4 (design T16): std's export record that
+    /// the first release build's log names must be in both caches, the same
+    /// byte for byte; a log without its key, a missing record or two
+    /// different records fail.
+    #[test]
+    fn determinism_export_records_compare() {
+        let base = scratch("exports");
+        let [(a, top_a, _), (_, top_b, _)] = BUILDS;
+        let [_, release] = PROFILES;
+        let key = "c901199209f782e80165fe5e1a48d047";
+        let record = |name: &str, top: &str, bytes: &[u8]| {
+            let path = cache_dir(&base, top, name).join("v1/rec/c9").join(key);
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(path, bytes).unwrap();
+        };
+        let log = |name: &str, text: &str| {
+            let path = executable_cache_log(&base, release, a, name);
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(path, text).unwrap();
+        };
+        let line = format!("export.std release hit\nkey export.std release {key}\n");
+        log("same", &line);
+        record("same", top_a, b"rec");
+        record("same", top_b, b"rec");
+        let same = compare_export_records(&base, "same").unwrap().unwrap();
+        assert!(same.contains("identical (3 bytes)"), "{same}");
+        log("other", &line);
+        record("other", top_a, b"rec");
+        record("other", top_b, b"red");
+        let other = compare_export_records(&base, "other").unwrap().unwrap_err();
+        assert!(other.contains("differ"), "{other}");
+        log("missing", &line);
+        record("missing", top_a, b"rec");
+        let missing = compare_export_records(&base, "missing")
+            .unwrap()
+            .unwrap_err();
+        assert!(missing.contains("std's export record"), "{missing}");
+        log("unread", "code.std std::io hit\n");
+        let unread = compare_export_records(&base, "unread")
+            .unwrap()
+            .unwrap_err();
+        assert!(
+            unread.contains("looked up no std export record"),
+            "{unread}"
+        );
         std::fs::remove_dir_all(&base).unwrap();
     }
 
@@ -994,6 +1150,9 @@ mod tests {
             stdin: None,
             args: example::RunArgs::default(),
         });
-        assert_eq!(project.commands(), ["check", "build", "run", "test"]);
+        assert_eq!(
+            project.commands(),
+            ["check", "build", "build --release", "run", "test"]
+        );
     }
 }

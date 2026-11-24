@@ -247,13 +247,18 @@ bb0:
   _2: value = call linked_list::linked_list::to_list(_1) ; unwind bb2
   _3: value = alloc closure/1(const code <closure linked_list::linked_list::show#0>, _0) ; unwind bb4
   _4: value = call std::list::map(_2, _3) ; unwind bb1
-  _6: value = call std::string::join(_4, const str#1) ; unwind bb1
-  _7: value = call_runtime str_with_capacity(borrow const int 18) ; unwind bb5
-  _8: value = call_runtime str_append(_7, borrow const str#2) ; unwind bb5
-  _9: value = call_runtime str_append(_8, borrow _6) ; unwind bb5
+  _5: value = const str#1
+  _6: value = _4
+  _7: value = _5
+  _8: value = call_foreign "cheby_string_join"(borrow _6, borrow _7) -> ptr ; unwind bb6
   drop _6
-  _10: value = call_runtime str_append(_9, borrow const str#3) ; unwind bb1
-  return _10
+  drop _7
+  _9: value = call_runtime str_with_capacity(borrow const int 18) ; unwind bb7
+  _10: value = call_runtime str_append(_9, borrow const str#2) ; unwind bb7
+  _11: value = call_runtime str_append(_10, borrow _8) ; unwind bb7
+  drop _8
+  _12: value = call_runtime str_append(_11, borrow const str#3) ; unwind bb1
+  return _12
 bb1:
   resume
 bb2:
@@ -267,6 +272,12 @@ bb4:
   goto bb2()
 bb5:
   drop _6
+  goto bb1()
+bb6:
+  drop _7
+  goto bb5()
+bb7:
+  drop _8
   goto bb1()
 }
 
@@ -320,7 +331,6 @@ callee linked_list::linked_list::reverse(value) -> value
 callee std::list::map(value, value) -> value
 callee std::list::reverse(value) -> value
 callee std::list::fold(value, value, value) -> value
-callee std::string::join(value, value) -> value
 
 module linked_list
 
@@ -374,7 +384,7 @@ bb1:
   drop _5 of tuple/2 keep [_8 @1]
   _9: value = call_runtime str_with_capacity(borrow const int 49) ; unwind bb7
   _10: value = call_runtime str_append(_9, borrow const str#1) ; unwind bb7
-  _11: value = call std::int::show(_7) ; unwind bb8
+  _11: value = call_foreign "cheby_int_show"(borrow _7) -> ptr ; unwind bb8
   _12: value = call_runtime str_append(_10, borrow _11) ; unwind bb9
   drop _11
   _13: value = call_runtime str_append(_12, borrow const str#2) ; unwind bb7
@@ -429,11 +439,11 @@ bb3(_16: value):
   _46: value = call_runtime list_push(_41, _45) ; unwind bb36
   _47: value = call_runtime str_with_capacity(borrow const int 45) ; unwind bb40
   _48: value = call_runtime str_append(_47, borrow const str#8) ; unwind bb40
-  _49: value = call std::int::show(_22) ; unwind bb41
+  _49: value = call_foreign "cheby_int_show"(borrow _22) -> ptr ; unwind bb41
   _50: value = call_runtime str_append(_48, borrow _49) ; unwind bb42
   drop _49
   _51: value = call_runtime str_append(_50, borrow const str#9) ; unwind bb40
-  _52: value = call std::int::show(_24) ; unwind bb43
+  _52: value = call_foreign "cheby_int_show"(borrow _24) -> ptr ; unwind bb43
   _53: value = call_runtime str_append(_51, borrow _52) ; unwind bb44
   drop _52
   _54: value = call_runtime list_push(_46, _53) ; unwind bb36

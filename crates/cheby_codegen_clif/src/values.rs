@@ -12,6 +12,7 @@ use cheby_mir::{BuiltinLayout, Const, LayoutRef, Local, Operand, Repr, RuntimeFn
 use cheby_runtime::abi;
 
 use crate::CodegenError;
+use crate::alloc_inline::AllocKind;
 use crate::data::is_user_ctor;
 use crate::decls::{ctor_header, escaped_count_index, header};
 use crate::func::{Translator, unsupported};
@@ -79,6 +80,20 @@ struct Shape {
     /// and value of its field count, the number of fields after it, stored
     /// as a tagged integer (D-279, `escaped_count_index`).
     escaped: Option<(i32, u64)>,
+}
+
+/// The allocation size of an object of `shape`: its size rounded up to the
+/// header and the object alignment, as `cheby_rt_alloc` rounds it. A
+/// drop specialized by constructor hands it to `cheby_rt_free_unique`.
+fn alloc_size(shape: &Shape) -> Result<i64, CodegenError> {
+    u64::try_from(shape.size)
+        .ok()
+        .and_then(|s| {
+            s.max(abi::HEADER_SIZE)
+                .checked_next_multiple_of(abi::OBJECT_ALIGN)
+        })
+        .and_then(|s| i64::try_from(s).ok())
+        .ok_or_else(|| CodegenError::ice(format!("an object of {} bytes", shape.size)))
 }
 
 fn offset(index: u64, first: i64) -> Result<i32, CodegenError> {
@@ -293,8 +308,7 @@ impl Translator<'_, '_> {
                     .load(types::I64, MemFlagsData::trusted(), address, 0)
             }
         };
-        let size = self.b.ins().iconst(types::I64, shape.size);
-        let object = self.edge_runtime_value(RuntimeFunc::Alloc, &[ctx, size, header])?;
+        let object = self.alloc_object(ctx, shape.size, header, AllocKind::Fresh)?;
         if let Some((at, count)) = shape.escaped {
             let tagged = abi::tag_int(i64::try_from(count).unwrap_or(i64::MAX))
                 .ok_or_else(|| CodegenError::ice("a field count out of range"))?;
@@ -412,7 +426,7 @@ impl Translator<'_, '_> {
             .ins()
             .brif(static_object, join, &[BlockArg::Value(zero)], slow, &[]);
         self.b.switch_to_block(slow);
-        self.drop_call(v)?;
+        self.drop_shared(v)?;
         self.b.ins().jump(join, &[BlockArg::Value(zero)]);
         self.b.switch_to_block(join);
         Ok(token)
@@ -442,8 +456,8 @@ impl Translator<'_, '_> {
         let t = self.local(token)?;
         let ctx = self.ctx()?;
         let header = self.header_value(&shape);
-        let size = self.b.ins().iconst(types::I64, shape.size);
         let object = if self.opts.checked_rc {
+            let size = self.b.ins().iconst(types::I64, shape.size);
             self.edge_runtime_value(RuntimeFunc::AllocReuseChecked, &[ctx, t, size, header])?
         } else {
             let hit = self.b.create_block();
@@ -473,7 +487,7 @@ impl Translator<'_, '_> {
             self.runtime_call(RuntimeFunc::ReuseHit, &[])?;
             self.b.ins().jump(join, &[BlockArg::Value(t)]);
             self.b.switch_to_block(miss);
-            let fresh = self.edge_runtime_value(RuntimeFunc::AllocMiss, &[ctx, size, header])?;
+            let fresh = self.alloc_object(ctx, shape.size, header, AllocKind::ReuseMiss)?;
             self.b.ins().jump(join, &[BlockArg::Value(fresh)]);
             self.b.switch_to_block(join);
             object
@@ -548,12 +562,12 @@ impl Translator<'_, '_> {
     /// (D-716, D-850). Inline, an object of count 1 hands each
     /// kept field's reference to its projection, releases its other value
     /// fields ([`Self::release_on_hit`]) and frees its block through
-    /// `cheby_rt_free_unique`; any other count first `dup`s each kept
-    /// projection, then gives up a reference as `drop` does: a count above
-    /// 1 is decremented, a static object (count 0) is skipped and a shared
-    /// one goes to `cheby_rt_drop`. A field read of `layout` pins the
-    /// object, so it is never a tagged integer. With `checked_rc`, the
-    /// `dup`s and the checked `drop`.
+    /// `cheby_rt_free_unique`, given the block's size; any other count
+    /// first `dup`s each kept projection, then gives up a reference as
+    /// `drop` does: a count above 1 is decremented, a static object (count
+    /// 0) is skipped and a shared one goes to `cheby_rt_drop`. A field read
+    /// of `layout` pins the object, so it is never a tagged integer. With
+    /// `checked_rc`, the `dup`s and the checked `drop`.
     pub(crate) fn drop_keep(
         &mut self,
         local: Local,
@@ -583,7 +597,7 @@ impl Translator<'_, '_> {
         self.b.ins().brif(unique, hit, &[], not_unique, &[]);
         self.b.switch_to_block(hit);
         self.release_on_hit(v, &kept, &rest, false)?;
-        self.runtime_call(RuntimeFunc::FreeUnique, &[ctx, v])?;
+        self.free_sized(ctx, v, alloc_size(&shape)?)?;
         self.b.ins().jump(done, &[]);
         self.b.switch_to_block(not_unique);
         self.dup_kept(keep)?;
@@ -597,7 +611,7 @@ impl Translator<'_, '_> {
         let static_object = self.b.ins().icmp_imm_s(IntCC::Equal, rc, 0);
         self.b.ins().brif(static_object, done, &[], slow, &[]);
         self.b.switch_to_block(slow);
-        self.drop_call(v)?;
+        self.drop_shared(v)?;
         self.b.ins().jump(done, &[]);
         self.b.switch_to_block(done);
         Ok(())
@@ -645,8 +659,7 @@ impl Translator<'_, '_> {
         };
         let ctx = self.ctx()?;
         let header = self.b.ins().iconst(types::I64, word.cast_signed());
-        let size = self.b.ins().iconst(types::I64, shape.size);
-        let object = self.edge_runtime_value(RuntimeFunc::Alloc, &[ctx, size, header])?;
+        let object = self.alloc_object(ctx, shape.size, header, AllocKind::Fresh)?;
         if let Some((at, count)) = shape.escaped {
             let tagged = abi::tag_int(i64::try_from(count).unwrap_or(i64::MAX))
                 .ok_or_else(|| CodegenError::ice("a field count out of range"))?;
@@ -822,17 +835,78 @@ impl Translator<'_, '_> {
                 abi::list::ROOT_LEN_OFFSET,
             )));
         }
+        if let Some(value) = self.text_inline(helper, args)? {
+            // A byte of a `Bytes` or a test of two strings' lengths.
+            return Ok(Some(value));
+        }
+        if let Some(value) = self.steps_inline(helper, args)? {
+            // A read of a pair or a heap's slot (`cheby_mir`'s
+            // `lower/intrinsic.rs`).
+            return Ok(Some(value));
+        }
+        if let (RuntimeFn::LoopCheck, []) = (helper, args) {
+            self.loop_check()?;
+            return Ok(None);
+        }
+        if let (RuntimeFn::MapValueAt, [_, address]) = (helper, args) {
+            // The value word a `map_find` of the map found: loaded and
+            // dup'd inline, as a field read and its `dup` are. The map
+            // operand only keeps the map held; the runtime's helper takes
+            // the address alone.
+            let address = self.operand(address)?;
+            if self.opts.checked_rc {
+                return Ok(Some(
+                    self.runtime_value(RuntimeFunc::MapValueAt, &[address])?,
+                ));
+            }
+            let value = self
+                .b
+                .ins()
+                .load(types::I64, MemFlagsData::trusted(), address, 0);
+            self.dup(value)?;
+            return Ok(Some(value));
+        }
+        if let Some(value) = self.upsert_read_inline(helper, args)? {
+            // A read of an upsert after its `map_upsert`.
+            return Ok(Some(value));
+        }
+        if let (RuntimeFn::MapUpsertStore, [map, address, key, value]) = (helper, args) {
+            // The upsert's store, inline but for an empty map.
+            return self.upsert_store(map, address, key, value).map(Some);
+        }
+        if let (RuntimeFn::MapUpsertFound, [_, address]) = (helper, args) {
+            // The map operand only keeps the map held; the runtime's
+            // helper takes the address alone.
+            let address = self.operand(address)?;
+            let ctx = self.ctx()?;
+            return Ok(Some(self.edge_runtime_value(
+                RuntimeFunc::MapUpsertFound,
+                &[ctx, address],
+            )?));
+        }
         if helper == RuntimeFn::ListUnconsHead {
             // The word the `list_uncons` right before it wrote (D-909).
-            let slot = self.uncons_slot.ok_or_else(|| {
-                CodegenError::ice("a `list_uncons_head` without its `list_uncons`")
-            })?;
-            return Ok(Some(self.b.ins().stack_load(
-                types::I64,
-                types::I64,
-                slot,
-                0,
-            )));
+            return self.uncons_word().map(Some);
+        }
+        if let Some((RuntimeFn::ListUnconsHead, repr)) = helper.scalar_read() {
+            // The number the inline step right before it yielded
+            // (`list_ends`), or else the number in the word the helper
+            // wrote, which the head owns and releases.
+            if let Some(number) = self.uncons_scalar.take() {
+                return Ok(Some(number));
+            }
+            let word = self.uncons_word()?;
+            let number = self.unbox_word(word, repr);
+            self.drop_value(word)?;
+            return Ok(Some(number));
+        }
+        if let Some(value) = self.list_end_inline(helper, args)? {
+            // An end of a unique list, written in place.
+            return Ok(Some(value));
+        }
+        if let Some(value) = self.list_index_inline(helper, args)? {
+            // An index of a list that is one leaf.
+            return Ok(Some(value));
         }
         let (f, takes_ctx) = RuntimeFunc::of(helper);
         let mut vals = Vec::with_capacity(args.len().saturating_add(2));
@@ -846,6 +920,12 @@ impl Translator<'_, '_> {
             // reads (D-909). A stack slot, not a second result register,
             // so every target's C ABI passes it the same way.
             let slot = self.make_uncons_slot();
+            vals.push(self.b.ins().stack_addr(types::I64, slot, 0));
+        }
+        if helper == RuntimeFn::MapUpsert {
+            // Where it writes the word the `map_upsert_address` after it
+            // reads, as `list_uncons` writes its element.
+            let slot = self.make_upsert_slot();
             vals.push(self.b.ins().stack_addr(types::I64, slot, 0));
         }
         if helper == RuntimeFn::ScopeClose {
@@ -862,9 +942,276 @@ impl Translator<'_, '_> {
         }
     }
 
+    /// The reads of text objects that call nothing, or `None` for every
+    /// other helper: `bytes_in_range` and `bytes_byte` (`cheby_mir`'s
+    /// `lookup`), and `str_eq`'s test of the lengths.
+    fn text_inline(
+        &mut self,
+        helper: RuntimeFn,
+        args: &[Operand],
+    ) -> Result<Option<Value>, CodegenError> {
+        if let (RuntimeFn::BytesInRange, [data, index]) = (helper, args) {
+            // A `Bytes` keeps its length in a raw word, a static one too
+            // (D-454). Unsigned, a negative index is above every length.
+            let data = self.operand(data)?;
+            let index = self.operand(index)?;
+            let len = self.b.ins().load(
+                types::I64,
+                MemFlagsData::trusted(),
+                data,
+                abi::string::LEN_OFFSET,
+            );
+            return Ok(Some(self.b.ins().icmp(IntCC::UnsignedLessThan, index, len)));
+        }
+        if let (RuntimeFn::BytesByte, [data, index]) = (helper, args) {
+            // The byte at an index the lookup pass checked is below the
+            // length: a load from the object's bytes, which no count guards.
+            let data = self.operand(data)?;
+            let index = self.operand(index)?;
+            let at = self.b.ins().iadd(data, index);
+            return Ok(Some(self.b.ins().load(
+                types::I8,
+                MemFlagsData::trusted(),
+                at,
+                abi::string::BYTES_OFFSET,
+            )));
+        }
+        if let (RuntimeFn::StrEq, [a, b]) = (helper, args)
+            && !self.opts.checked_rc
+        {
+            return self.str_eq(a, b).map(Some);
+        }
+        Ok(None)
+    }
+
+    /// `str_eq(a, b)`: strings of different lengths differ, which two
+    /// loads tell, and only strings of one length are compared by the
+    /// helper. Both lengths are raw words of the objects, static strings
+    /// included (D-454). Under `checked_rc` the helper's call is the
+    /// whole test, so it checks both objects.
+    fn str_eq(&mut self, a: &Operand, b: &Operand) -> Result<Value, CodegenError> {
+        let a = self.operand(a)?;
+        let b = self.operand(b)?;
+        let compare = self.b.create_block();
+        let join = self.b.create_block();
+        let result = self.b.append_block_param(join, types::I8);
+        let len_a = self.b.ins().load(
+            types::I64,
+            MemFlagsData::trusted(),
+            a,
+            abi::string::LEN_OFFSET,
+        );
+        let len_b = self.b.ins().load(
+            types::I64,
+            MemFlagsData::trusted(),
+            b,
+            abi::string::LEN_OFFSET,
+        );
+        let same_len = self.b.ins().icmp(IntCC::Equal, len_a, len_b);
+        let differ = self.b.ins().iconst(types::I8, 0);
+        self.b
+            .ins()
+            .brif(same_len, compare, &[], join, &[BlockArg::Value(differ)]);
+        self.b.switch_to_block(compare);
+        let equal = self.runtime_value(RuntimeFunc::StrEq, &[a, b])?;
+        self.b.ins().jump(join, &[BlockArg::Value(equal)]);
+        self.b.switch_to_block(join);
+        Ok(result)
+    }
+
+    /// The word the `list_uncons` right before the head being translated
+    /// wrote to its stack slot (D-909).
+    pub(crate) fn uncons_word(&mut self) -> Result<Value, CodegenError> {
+        let slot = self
+            .uncons_slot
+            .ok_or_else(|| CodegenError::ice("a `list_uncons_head` without its `list_uncons`"))?;
+        Ok(self.b.ins().stack_load(types::I64, types::I64, slot, 0))
+    }
+
+    /// The reads of an upsert after its `map_upsert` (`cheby_mir`'s
+    /// `lower/upsert.rs`), which call nothing: `map_upsert_address` loads
+    /// the word that `map_upsert` wrote to its stack slot, and
+    /// `map_slot_take` loads the value at the address and stores the
+    /// placeholder `HOLE` (the tagged word 1) there; under `checked_rc` the
+    /// latter calls the runtime's helper. `None` for every other helper.
+    fn upsert_read_inline(
+        &mut self,
+        helper: RuntimeFn,
+        args: &[Operand],
+    ) -> Result<Option<Value>, CodegenError> {
+        match (helper, args) {
+            (RuntimeFn::MapUpsertAddress, [_]) => {
+                let slot = self.upsert_slot.ok_or_else(|| {
+                    CodegenError::ice("a map_upsert_address without its map_upsert")
+                })?;
+                Ok(Some(self.b.ins().stack_load(
+                    types::I64,
+                    types::I64,
+                    slot,
+                    0,
+                )))
+            }
+            (RuntimeFn::MapSlotTake, [_, address]) => {
+                let address = self.operand(address)?;
+                if self.opts.checked_rc {
+                    return Ok(Some(
+                        self.runtime_value(RuntimeFunc::MapSlotTake, &[address])?,
+                    ));
+                }
+                let flags = MemFlagsData::trusted();
+                let value = self.b.ins().load(types::I64, flags, address, 0);
+                let hole = self.b.ins().iconst(types::I64, abi::map::HOLE);
+                self.b.ins().store(flags, hole, address, 0);
+                Ok(Some(value))
+            }
+            _ => Ok(None),
+        }
+    }
+
+    /// The reads of a stepped intrinsic's body (`cheby_mir`'s
+    /// `lower/intrinsic.rs`), which call nothing: `heap_slot` is the
+    /// address of a stack slot of its own for the steps of a heap's sift,
+    /// `heap_first` loads the first pair's address from such a slot,
+    /// and `pair_left` and `pair_right` load the word at offset 0 or 8 of
+    /// a pair's address and dup it; under `checked_rc` the runtime's read of
+    /// a word at an address does the load and the dup. `None` for every
+    /// other helper.
+    fn steps_inline(
+        &mut self,
+        helper: RuntimeFn,
+        args: &[Operand],
+    ) -> Result<Option<Value>, CodegenError> {
+        let offset = match (helper, args) {
+            (RuntimeFn::HeapSlot, []) => {
+                let slot = self.b.create_sized_stack_slot(StackSlotData::new(
+                    StackSlotKind::ExplicitSlot,
+                    abi::heap::STEPS_SLOT_SIZE,
+                    3,
+                ));
+                return Ok(Some(self.b.ins().stack_addr(types::I64, slot, 0)));
+            }
+            (RuntimeFn::HeapFirst, [slot]) => {
+                let slot = self.operand(slot)?;
+                return Ok(Some(self.b.ins().load(
+                    types::I64,
+                    MemFlagsData::trusted(),
+                    slot,
+                    abi::heap::STEPS_FIRST_OFFSET,
+                )));
+            }
+            (RuntimeFn::PairLeft, [_]) => 0,
+            (RuntimeFn::PairRight, [_]) => 8,
+            _ => return Ok(None),
+        };
+        let address = args
+            .first()
+            .ok_or_else(|| CodegenError::ice("a pair's read without its address"))?;
+        let address = self.operand(address)?;
+        if self.opts.checked_rc {
+            let at = self.b.ins().iadd_imm_u(address, offset);
+            return Ok(Some(self.runtime_value(RuntimeFunc::MapValueAt, &[at])?));
+        }
+        let value = self.b.ins().load(
+            types::I64,
+            MemFlagsData::trusted(),
+            address,
+            i32::try_from(offset).unwrap_or(0),
+        );
+        self.dup(value)?;
+        Ok(Some(value))
+    }
+
+    /// `loop_check`: the entry check inside a loop of a stepped
+    /// intrinsic's body, `sp <u [ctx+0]` with the runtime's slow path at the
+    /// function's entry location in a cold block, whose unwinding leaves
+    /// through the statement's edge (D-124, D-698).
+    fn loop_check(&mut self) -> Result<(), CodegenError> {
+        let ctx = self.ctx()?;
+        let loc = self
+            .func
+            .entry_loc
+            .ok_or_else(|| CodegenError::ice("a loop check without an entry location"))?;
+        let sp = self.b.ins().get_stack_pointer(types::I64);
+        let limit = self.b.ins().load(
+            types::I64,
+            MemFlagsData::trusted(),
+            ctx,
+            abi::CTX_STACK_LIMIT,
+        );
+        let below = self.b.ins().icmp(IntCC::UnsignedLessThan, sp, limit);
+        let slow = self.b.create_block();
+        self.b.set_cold_block(slow);
+        let after = self.b.create_block();
+        self.b.ins().brif(below, slow, &[], after, &[]);
+        self.b.switch_to_block(slow);
+        let loc = self.string(loc)?;
+        self.edge_runtime_call(RuntimeFunc::StackSlow, &[ctx, loc])?;
+        self.b.ins().jump(after, &[]);
+        self.b.switch_to_block(after);
+        Ok(())
+    }
+
+    /// `map_upsert_store`, the last step of an upsert: the value stored at
+    /// the address with its lowest bit cleared and the map as the result,
+    /// or for an empty map (address 1) the runtime's helper, which inserts
+    /// the key and may raise, in a cold block. Under `checked_rc` the
+    /// helper does both.
+    fn upsert_store(
+        &mut self,
+        map: &Operand,
+        address: &Operand,
+        key: &Operand,
+        value: &Operand,
+    ) -> Result<Value, CodegenError> {
+        let map = self.operand(map)?;
+        let address = self.operand(address)?;
+        let key = self.operand(key)?;
+        let value = self.operand(value)?;
+        if self.opts.checked_rc {
+            let ctx = self.ctx()?;
+            return self.edge_runtime_value(
+                RuntimeFunc::MapUpsertStore,
+                &[ctx, map, address, key, value],
+            );
+        }
+        let store = self.b.create_block();
+        let empty = self.b.create_block();
+        self.b.set_cold_block(empty);
+        let join = self.b.create_block();
+        let result = self.b.append_block_param(join, types::I64);
+        let is_empty = self.b.ins().icmp_imm_u(IntCC::Equal, address, 1);
+        self.b.ins().brif(is_empty, empty, &[], store, &[]);
+        self.b.switch_to_block(store);
+        let slot = self.b.ins().band_imm_s(address, -2);
+        self.b.ins().store(MemFlagsData::trusted(), value, slot, 0);
+        self.b.ins().jump(join, &[BlockArg::Value(map)]);
+        self.b.switch_to_block(empty);
+        let ctx = self.ctx()?;
+        let inserted = self.edge_runtime_value(
+            RuntimeFunc::MapUpsertStore,
+            &[ctx, map, address, key, value],
+        )?;
+        self.b.ins().jump(join, &[BlockArg::Value(inserted)]);
+        self.b.switch_to_block(join);
+        Ok(result)
+    }
+
+    /// The stack slot where a `map_upsert` writes the word for its
+    /// `map_upsert_address`, made at the function's first one.
+    pub(crate) fn make_upsert_slot(&mut self) -> StackSlot {
+        if let Some(slot) = self.upsert_slot {
+            return slot;
+        }
+        let slot =
+            self.b
+                .create_sized_stack_slot(StackSlotData::new(StackSlotKind::ExplicitSlot, 8, 3));
+        self.upsert_slot = Some(slot);
+        slot
+    }
+
     /// The stack slot where a `list_uncons` writes its element (D-909),
     /// made at the function's first one.
-    fn make_uncons_slot(&mut self) -> StackSlot {
+    pub(crate) fn make_uncons_slot(&mut self) -> StackSlot {
         if let Some(slot) = self.uncons_slot {
             return slot;
         }
@@ -909,15 +1256,7 @@ impl Translator<'_, '_> {
                 let wide = self.b.ins().uextend(types::I64, v);
                 self.tag(wide)
             }
-            Repr::Float | Repr::F32 => {
-                let f = if from == Repr::Float {
-                    RuntimeFunc::BoxF64
-                } else {
-                    RuntimeFunc::BoxF32
-                };
-                let ctx = self.ctx()?;
-                self.edge_runtime_value(f, &[ctx, v])?
-            }
+            Repr::Float | Repr::F32 => self.box_float(v, from)?,
             Repr::Bool => {
                 let truth = self.static_object(abi::sym::STATIC_TRUE)?;
                 let falsity = self.static_object(abi::sym::STATIC_FALSE)?;
@@ -985,17 +1324,25 @@ impl Translator<'_, '_> {
                 let untagged = self.b.ins().sshr_imm_u(w, 1);
                 self.b.ins().ireduce(repr_type(to), untagged)
             }
-            Repr::Float | Repr::F32 => {
-                self.b
-                    .ins()
-                    .load(repr_type(to), MemFlagsData::trusted(), w, payload)
-            }
+            Repr::Float | Repr::F32 => self.unbox_word(w, to),
             Repr::Bool => {
                 let truth = self.static_object(abi::sym::STATIC_TRUE)?;
                 self.b.ins().icmp(IntCC::Equal, w, truth)
             }
             Repr::Value => return Err(unsupported("`unbox` to a uniform word")),
         })
+    }
+
+    /// The number in `word`, a uniform word of a `Float` or an `F32`, which
+    /// is always a box of the number (D-521): a load of the box's payload.
+    /// The word is borrowed.
+    pub(crate) fn unbox_word(&mut self, word: Value, repr: Repr) -> Value {
+        self.b.ins().load(
+            repr_type(repr),
+            MemFlagsData::trusted(),
+            word,
+            abi::FIRST_FIELD_OFFSET,
+        )
     }
 
     /// One more reference to the uniform word `v` (D-273). Inline: tagged

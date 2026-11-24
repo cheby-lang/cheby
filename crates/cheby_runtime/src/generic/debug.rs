@@ -24,6 +24,7 @@ use crate::alloc::scratch::{ScratchString, ScratchVec};
 use crate::desc::{self, Shape};
 use crate::hamt::{self, Collection};
 use crate::layout::{FieldKind, LayoutInfo};
+use crate::num::text::{DECIMAL_ROOM, SignMagnitude, write_decimal};
 use crate::object::{ptr_to_word, read_field, to_usize, word_to_ptr};
 use crate::unwind::guard::DropOnUnwind;
 use crate::{rc, string};
@@ -49,6 +50,23 @@ enum Piece {
     /// Ends the innermost sorted group: its items, sorted, separated by
     /// `, `.
     SortedEnd,
+    /// An integer, written in decimal when the piece is written, so its
+    /// text needs no heap allocation.
+    Decimal {
+        negative: bool,
+        magnitude: u64,
+    },
+}
+
+impl Piece {
+    /// The decimal text of `n`.
+    fn decimal(n: impl SignMagnitude) -> Self {
+        let (negative, magnitude) = n.sign_magnitude();
+        Self::Decimal {
+            negative,
+            magnitude,
+        }
+    }
 }
 
 /// One entry of a group printed in sorted order.
@@ -317,6 +335,15 @@ unsafe fn walk(word: Word, out: &mut dyn Sink) {
                 }
             }
             Piece::SortedEnd => ropes.end_group(out),
+            Piece::Decimal {
+                negative,
+                magnitude,
+            } => {
+                let mut buffer = [0; DECIMAL_ROOM];
+                let digits = write_decimal(negative, magnitude, &mut buffer);
+                // ASCII digits and `-`, so always UTF-8.
+                ropes.put(out, std::str::from_utf8(digits).unwrap_or_default());
+            }
         }
     }
 }
@@ -525,8 +552,8 @@ impl<'r> Iterator for Chunks<'r> {
 unsafe fn step(word: Word, p: &mut Printer) {
     // SAFETY: forwarded from the caller.
     match unsafe { view(word, "debug printing") } {
-        View::Tagged(value) | View::Int(value) => p.text_owned(value.to_string()),
-        View::U64(value) => p.text_owned(value.to_string()),
+        View::Tagged(value) | View::Int(value) => p.pending.push(Piece::decimal(value)),
+        View::U64(value) => p.pending.push(Piece::decimal(value)),
         View::Float(value) => p.text_owned(float_text(value)),
         View::F32(value) => p.text_owned(f32_text(value)),
         // Escaped as they are written, in chunks (D-617).
@@ -656,20 +683,20 @@ fn ctor(word: Word, info: &'static LayoutInfo, p: &mut Printer) {
         if field.kind == FieldKind::Value {
             p.value(bits);
         } else {
-            p.text_owned(raw_text(Raw::decode(field.kind, bits)));
+            p.pending.push(raw_piece(Raw::decode(field.kind, bits)));
         }
     }
     p.text(if info.record { " }" } else { ")" });
 }
 
-fn raw_text(raw: Raw) -> String {
+fn raw_piece(raw: Raw) -> Piece {
     match raw {
-        Raw::Int(value) => value.to_string(),
-        Raw::Unsigned(value) => value.to_string(),
-        Raw::Float(value) => float_text(value),
-        Raw::F32(value) => f32_text(value),
-        Raw::Bool(true) => "True".to_owned(),
-        Raw::Bool(false) => "False".to_owned(),
+        Raw::Int(value) => Piece::decimal(value),
+        Raw::Unsigned(value) => Piece::decimal(value),
+        Raw::Float(value) => Piece::Text(Cow::Owned(float_text(value))),
+        Raw::F32(value) => Piece::Text(Cow::Owned(f32_text(value))),
+        Raw::Bool(true) => Piece::Text(Cow::Borrowed("True")),
+        Raw::Bool(false) => Piece::Text(Cow::Borrowed("False")),
     }
 }
 

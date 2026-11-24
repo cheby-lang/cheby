@@ -456,6 +456,40 @@ Logged in [`../decisions/LOG.md`](../decisions/LOG.md#2026-10-04-implementation-
 | D-1726    | E0042's help in a std checkout lists the checkout's items, from a list its run owns                 |
 | D-1735    | A fix within one file is formatted, and the applied-edit check holds it to `cheby fmt`'s form       |
 | D-1738    | A kept set of hunks widens until closed, at most eight rounds, with a cancel check before each      |
+| D-1757    | A list of several leaves keeps the leaf at each end under a big root (id 29); ends cost O(1)        |
+| D-1758    | `list::push` and `list::prepend` are std intrinsics over helpers that own their arguments           |
+| D-1759    | Owned pattern steps at an end of a list are written inline; `abi::list` joins the ABI               |
+| D-1760    | Budget bounds and failure rules for the fold of a big root's leaves into its tree                   |
+| D-1761    | A self tail call is a jump inside its function, with the entry check in the loop                    |
+| D-1762    | `ordered_map` keeps its order as links through its hashed index, with no sorted tree                |
+| D-1763    | A list literal prepends up to eight leading elements onto its first spread                          |
+| D-1764    | A scalar literal constant is not evaluated, and its own module reads the literal                    |
+| D-1765    | A direct call of a plain std kernel is its foreign call at the call site                            |
+| D-1766    | The release profile is built now, in parts: `--release` on `build`, `run` and `test`                |
+| D-1767    | Code keys hold the profile; constants run on debug code; release compiles a package anew            |
+| D-1768    | Release code calls Cheby functions directly, with the borrow mask in the symbol                     |
+| D-1769    | Release code is compiled with Cranelift's `speed`                                                   |
+| D-1770    | Release inlines calls on lowered MIR within a budget, then cleans up boxes and branches             |
+| D-1771    | Release backtraces lack inlined frames; panics, output and exit status match debug                  |
+| D-1772    | A free that kills no field skips the worklist; `free_unique` takes the size from generated code     |
+| D-1773    | `list::get` and `map::get` matched at once build no `Some`; helpers `map_find`, `map_value_at`      |
+| D-1774    | Reading kernels borrow their arguments; `list::get`/`set` on a one-leaf list are inline             |
+| D-1775    | The entry check's slow paths save every register and are called with `preserve_all`                 |
+| D-1776    | Release inlining takes bodies from the build's other units and std's by name                        |
+| D-1777    | Std's kernel bindings, release masks and bodies may cross into a package's build (ADR-0082)         |
+| D-1778    | Std's release bodies and masks are one sealed cache record, decoded on demand                       |
+| D-1779    | A numeric std kernel that is one instruction compiles to it: `convert`, `float_sqrt`, `wrapping`    |
+| D-1780    | Release devirtualizes, clones functions for known dictionaries and callbacks, unboxes in clones     |
+| D-1781    | A list pattern step on a shared leaf is inline; raw `Float`s in list leaves measured, not built     |
+| D-1782    | Release reads scalar constants of every module as their values, computed ones from images           |
+| D-1783    | A list element that is only unboxed to a `Float` is read as the number, with no count update        |
+| D-1784    | Generated code takes and gives back cached blocks inline; slow paths save every register            |
+| D-1785    | A direct `map::upsert` calls its callback from generated code, in steps around one slot             |
+| D-1786    | The entry check's slow paths take six arguments, all in registers on x86-64                         |
+| D-1787    | `list::sort_with` and `heap`'s updates call their comparison from generated code, in steps          |
+| D-1788    | A matched `bytes::get` is a bounds test and a load in generated code                                |
+| D-1789    | String `==` tests the lengths first; the JSON escape scans read eight bytes at a time               |
+| D-1790    | The global allocator calls `mi_malloc` for word-aligned requests, through `libmimalloc-sys`         |
 
 ## Open questions
 

@@ -13,14 +13,13 @@ bb2:
   _4: value = call_runtime list_uncons_head()
   _5: int = unbox int _4
   drop _4
-  _6: value = call std::list::length(_3) ; unwind bb4
-  _7: int = unbox int _6
-  drop _6
-  _8: int = checked add int _5, _7 at str#1 ; unwind bb4
-  goto bb3(_8)
+  _6: int = call_foreign "cheby_list_length"(borrow _3) -> i64
+  drop _3
+  _7: int = checked add int _5, _6 at str#1 ; unwind bb4
+  goto bb3(_7)
 bb3(_2: int):
-  _9: value = box int _2 ; unwind bb4
-  return _9
+  _8: value = box int _2 ; unwind bb4
+  return _8
 bb4:
   resume
 bb5:
@@ -45,14 +44,13 @@ bb2:
   _5: value = call_runtime list_uncons_head()
   _6: int = unbox int _5
   drop _5
-  _7: value = call std::list::length(_4) ; unwind bb4
-  _8: int = unbox int _7
-  drop _7
-  _9: int = checked add int _6, _8 at str#2 ; unwind bb4
-  goto bb3(_9)
+  _7: int = call_foreign "cheby_list_length"(borrow _4) -> i64
+  drop _4
+  _8: int = checked add int _6, _7 at str#2 ; unwind bb4
+  goto bb3(_8)
 bb3(_2: int):
-  _10: value = box int _2 ; unwind bb4
-  return _10
+  _9: value = box int _2 ; unwind bb4
+  return _9
 bb4:
   resume
 bb5:
@@ -78,14 +76,13 @@ bb2:
   drop _4
   _6: int = checked sub int _1, const int 2 at str#1 ; unwind bb5
   _7: value = call_runtime list_slice_owned(_0, borrow const int 0, borrow _6) ; unwind bb4
-  _8: value = call std::list::length(_7) ; unwind bb4
-  _9: int = unbox int _8
-  drop _8
-  _10: int = checked add int _5, _9 at str#2 ; unwind bb4
-  goto bb3(_10)
+  _8: int = call_foreign "cheby_list_length"(borrow _7) -> i64
+  drop _7
+  _9: int = checked add int _5, _8 at str#2 ; unwind bb4
+  goto bb3(_9)
 bb3(_2: int):
-  _11: value = box int _2 ; unwind bb4
-  return _11
+  _10: value = box int _2 ; unwind bb4
+  return _10
 bb4:
   resume
 bb5:
@@ -126,18 +123,16 @@ bb5:
   _11: int = unbox int _10
   drop _10
   _12: int = checked add int _11, _8 at str#2 ; unwind bb12
-  _13: value = call std::list::length(_9) ; unwind bb11
-  _14: int = unbox int _13
-  drop _13
-  _15: int = checked add int _12, _14 at str#2 ; unwind bb11
-  _16: value = call std::list::length(_7) ; unwind bb7
-  _17: int = unbox int _16
-  drop _16
-  _18: int = checked add int _15, _17 at str#2 ; unwind bb7
-  goto bb6(_18)
-bb6(_19: int):
-  _20: value = box int _19 ; unwind bb7
-  return _20
+  _13: int = call_foreign "cheby_list_length"(borrow _9) -> i64
+  drop _9
+  _14: int = checked add int _12, _13 at str#2 ; unwind bb11
+  _15: int = call_foreign "cheby_list_length"(borrow _7) -> i64
+  drop _7
+  _16: int = checked add int _14, _15 at str#2 ; unwind bb7
+  goto bb6(_16)
+bb6(_17: int):
+  _18: value = box int _17 ; unwind bb7
+  return _18
 bb7:
   resume
 bb8:

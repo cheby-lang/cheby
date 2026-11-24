@@ -327,7 +327,12 @@ fn equality_and_ordering_by_type() {
 fn ordering_through_compare() {
     let l = scalars();
     let lt = f(&l, "lt_strings");
-    assert!(lt.contains("call std::string::compare(_0, _1)"), "{lt}");
+    // `string::compare` only reads, so it borrows the parameters
+    // themselves.
+    assert!(
+        lt.contains("_2: value = call_foreign \"cheby_string_compare\"(borrow _0, borrow _1)"),
+        "{lt}"
+    );
     assert!(lt.contains("read_tag _2 of order"), "{lt}");
     assert!(lt.contains("compare eq int _3, const int 0"), "{lt}");
     let gt = f(&l, "gt_money");
@@ -345,10 +350,12 @@ fn ordering_through_compare() {
 fn operator_calls() {
     let l = scalars();
     let concat = f(&l, "concat");
+    // `string::add` is a kernel, called at the call site (D-525).
     assert!(
-        concat.contains("tail_call std::string::add(_0, _1)"),
+        concat.contains("_4: value = call_foreign \"cheby_string_add\"(borrow _2, borrow _3)"),
         "{concat}"
     );
+    assert!(concat.contains("return _4"), "{concat}");
     let add = f(&l, "add_money");
     assert!(add.contains("= call app::add("), "{add}");
     assert!(add.contains("tail_call app::add("), "{add}");
@@ -472,7 +479,11 @@ fn assert_messages() {
     assert!(plain.contains("panic assert _"), "{plain}");
     assert!(!plain.contains("left"), "{plain}");
     let ints = f(&l, "check_ints");
-    assert_eq!(ints.matches("call std::list::length(").count(), 1, "{ints}");
+    assert_eq!(
+        ints.matches("call_foreign \"cheby_list_length\"(").count(),
+        1,
+        "{ints}"
+    );
     assert!(
         ints.contains("\"assertion failed: list::length(items) == 3\""),
         "{ints}"
@@ -485,10 +496,13 @@ fn assert_messages() {
     // `"different " + a` is built only in the failing block, after the
     // branch.
     let branch = strings.find("branch").unwrap();
-    let add = strings.find("call std::string::add(").unwrap();
+    let add = strings.find("call_foreign \"cheby_string_add\"(").unwrap();
     assert!(branch < add, "{strings}");
     let order = f(&l, "check_order");
-    assert!(order.contains("call std::string::compare("), "{order}");
+    assert!(
+        order.contains("call_foreign \"cheby_string_compare\"("),
+        "{order}"
+    );
     assert!(order.contains("\"\\n right: \""), "{order}");
 }
 

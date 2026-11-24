@@ -20,17 +20,27 @@ use std::ptr;
 
 use crate::abi::sym;
 use crate::alloc::cheby_rt_alloc;
+use crate::alloc::slow::{
+    cheby_rt_alloc_miss_slow, cheby_rt_alloc_slow, cheby_rt_drop_saving, cheby_rt_free_unique_slow,
+    cheby_rt_reuse_hit,
+};
 use crate::consteval::{cheby_rt_const_missing, cheby_rt_effect_check, cheby_rt_unresolved};
 use crate::fiber_ops::scope::{cheby_rt_scope_close, cheby_rt_scope_open};
+use crate::hamt::{
+    cheby_rt_map_find, cheby_rt_map_slot_take, cheby_rt_map_upsert, cheby_rt_map_upsert_found,
+    cheby_rt_map_upsert_store, cheby_rt_map_value_at,
+};
 use crate::helpers::{
     cheby_rt_box_f32, cheby_rt_box_f64, cheby_rt_box_i64, cheby_rt_box_u64, cheby_rt_debug,
     cheby_rt_equal, cheby_rt_fmod_f32, cheby_rt_fmod_f64, cheby_rt_str_append, cheby_rt_str_eq,
     cheby_rt_str_with_capacity,
 };
 use crate::list::{
-    cheby_rt_list_append, cheby_rt_list_get, cheby_rt_list_length, cheby_rt_list_push,
-    cheby_rt_list_slice, cheby_rt_list_slice_owned, cheby_rt_list_uncons,
-    cheby_rt_list_uncons_owned, cheby_rt_static_empty_list,
+    cheby_rt_buffer_finish, cheby_rt_buffer_step, cheby_rt_heap_heapify, cheby_rt_heap_list_start,
+    cheby_rt_heap_pop, cheby_rt_heap_push, cheby_rt_heap_step, cheby_rt_list_append,
+    cheby_rt_list_get, cheby_rt_list_length, cheby_rt_list_prepend, cheby_rt_list_push,
+    cheby_rt_list_set, cheby_rt_list_slice, cheby_rt_list_slice_owned, cheby_rt_list_uncons,
+    cheby_rt_list_uncons_owned, cheby_rt_sort_start, cheby_rt_static_empty_list,
 };
 use crate::object::{
     cheby_rt_static_equal, cheby_rt_static_err_nil, cheby_rt_static_false, cheby_rt_static_greater,
@@ -40,7 +50,7 @@ use crate::panic::{cheby_rt_panic, cheby_rt_stack_slow, cheby_rt_stack_slow_fram
 use crate::rc::{cheby_rt_drop, cheby_rt_dup};
 use crate::reuse::{
     cheby_rt_alloc_miss, cheby_rt_alloc_reuse_checked, cheby_rt_drop_reuse_checked,
-    cheby_rt_free_unique, cheby_rt_release_fields, cheby_rt_reuse_hit,
+    cheby_rt_free_unique, cheby_rt_release_fields,
 };
 use crate::sched::blocking::cheby_rt_blocking_call;
 use crate::unwind::entry_slow::{cheby_rt_stack_slow_frame_unwind, cheby_rt_stack_slow_unwind};
@@ -60,7 +70,11 @@ fn data<T>(object: &'static T) -> *const u8 {
     clippy::as_conversions,
     reason = "taking the address of a function needs an `as` cast"
 )]
-fn runtime_symbols() -> [(&'static str, *const u8); 49] {
+#[expect(
+    clippy::too_many_lines,
+    reason = "one entry per runtime symbol, in the order of `sym::ALL`"
+)]
+fn runtime_symbols() -> [(&'static str, *const u8); 69] {
     [
         (sym::ALLOC, cheby_rt_alloc as *const u8),
         (sym::DUP, cheby_rt_dup as *const u8),
@@ -134,6 +148,35 @@ fn runtime_symbols() -> [(&'static str, *const u8); 49] {
             sym::LIST_UNCONS_OWNED,
             cheby_rt_list_uncons_owned as *const u8,
         ),
+        (sym::LIST_PREPEND, cheby_rt_list_prepend as *const u8),
+        (sym::MAP_FIND, cheby_rt_map_find as *const u8),
+        (sym::MAP_VALUE_AT, cheby_rt_map_value_at as *const u8),
+        (sym::LIST_SET, cheby_rt_list_set as *const u8),
+        (sym::ALLOC_SLOW, cheby_rt_alloc_slow as *const u8),
+        (sym::ALLOC_MISS_SLOW, cheby_rt_alloc_miss_slow as *const u8),
+        (
+            sym::FREE_UNIQUE_SLOW,
+            cheby_rt_free_unique_slow as *const u8,
+        ),
+        (sym::DROP_SAVING, cheby_rt_drop_saving as *const u8),
+        (sym::MAP_UPSERT, cheby_rt_map_upsert as *const u8),
+        (sym::MAP_SLOT_TAKE, cheby_rt_map_slot_take as *const u8),
+        (
+            sym::MAP_UPSERT_FOUND,
+            cheby_rt_map_upsert_found as *const u8,
+        ),
+        (
+            sym::MAP_UPSERT_STORE,
+            cheby_rt_map_upsert_store as *const u8,
+        ),
+        (sym::SORT_START, cheby_rt_sort_start as *const u8),
+        (sym::BUFFER_STEP, cheby_rt_buffer_step as *const u8),
+        (sym::BUFFER_FINISH, cheby_rt_buffer_finish as *const u8),
+        (sym::HEAP_LIST_START, cheby_rt_heap_list_start as *const u8),
+        (sym::HEAP_PUSH, cheby_rt_heap_push as *const u8),
+        (sym::HEAP_POP, cheby_rt_heap_pop as *const u8),
+        (sym::HEAP_HEAPIFY, cheby_rt_heap_heapify as *const u8),
+        (sym::HEAP_STEP, cheby_rt_heap_step as *const u8),
         (sym::STATS_COUNTING, data(crate::stats::counting_flag())),
     ]
 }
@@ -846,14 +889,18 @@ mod tests {
 
     /// `std::heap`'s kernels have the C signatures of their `@external`
     /// declarations in `std/heap.cheby`, and none is `@std_context`: they
-    /// call `compare` back through `callback::call`, as `list::sort_with`
-    /// does (D-1613, D-526).
+    /// call `compare` back through `callback::call`, as
+    /// `list::sort_with`'s kernel does (D-1613, D-526). The updates a direct
+    /// call reaches are intrinsics, which have no kernel (D-693).
     #[test]
     fn heap_kernels_match_their_declarations() {
         let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../std");
         let source = std::fs::read_to_string(root.join("heap.cheby")).unwrap();
         let mut declared = BTreeMap::new();
         for (symbol, context, signature) in kernel_declarations(&source) {
+            if sym::INTRINSICS.contains(&symbol.as_str()) {
+                continue;
+            }
             assert!(!context, "{symbol} is `@std_context`");
             assert!(
                 declared.insert(symbol.clone(), signature).is_none(),

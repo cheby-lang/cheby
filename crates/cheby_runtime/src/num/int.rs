@@ -75,7 +75,7 @@ macro_rules! int_family {
             #[doc = concat!("`", $std, "::show`: decimal digits, `-` when negative.")]
             #[unsafe(export_name = concat!("cheby_", $std, "_show"))]
             pub(crate) extern "C" fn show(n: $t) -> Word {
-                guarded(None, || values::string(&n.to_string()))
+                guarded(None, || values::decimal_string(n))
             }
 
             #[doc = concat!("`", $std, "::checked_add` (D-309).")]

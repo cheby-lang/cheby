@@ -1853,8 +1853,8 @@ fn doubled_weight() -> Int {
             case.rename_refused("std/probe_cell.cheby", "  ‸probe_weight: Int", "heft"),
             "cannot tell what `.probe_weight` at `std/probe_reader.cheby:7` refers to"
         );
-        // The case the review found in std: `std/ordered_map.cheby`'s test
-        // bodies read a field `next` while it is closed.
+        // The case the review found in std: test bodies in std that read a
+        // field `next` while it is closed, as `std/ordered_map.cheby`'s did.
         let json = Case::new("rename_item_next", &[], &["std/json.cheby"]);
         let plan = json.plan("std/json.cheby", "priv fn ‸next(", "advance");
         let edited: Vec<String> = json.applied(&plan).into_iter().map(|(d, _)| d).collect();

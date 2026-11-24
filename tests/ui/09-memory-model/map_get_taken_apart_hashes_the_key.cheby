@@ -1,0 +1,21 @@
+// @mode: run-fail
+// @milestone: M3
+// @decisions: D-233, D-1773, D-1774
+//! A `map::get` matched at once hashes its key as the kernel does, so a
+//! key that is a function value panics, even in an empty map.
+
+import std::io
+import std::map
+
+fn one() -> Int {
+  1
+}
+
+fn main() {
+  let m: map::Map<fn() -> Int, Int> = map::new()
+  let found = case map::get(m, one) {
+    Some(_) => "some"
+    None => "none"
+  }
+  io::println(found)
+}

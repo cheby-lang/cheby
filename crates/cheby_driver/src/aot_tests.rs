@@ -303,9 +303,11 @@ fn lowered_and_compiled(root: &Path) -> (Vec<MirModule>, Vec<(String, CodeRecord
 /// A unit that defines no user layout or external type writes the module
 /// record it wrote before the records carried types (d13dbbf): 001's
 /// `hello_world` code record, encoded, is pinned on macOS arm64 by its
-/// size and digest (4397 bytes at version 3 with the functions' names,
-/// D-1041; 4352 at version 2 with positions, D-938; 4320 at version 1,
-/// D-1115), and on every target its module record lists no
+/// size and digest (4382 bytes at version 4 since the releasing slow path
+/// takes no count; 4390 since it is called with `preserve_all` and tested
+/// through the flag; 4398 before, at version 4 with the profile byte; 4397
+/// at version 3 with the functions' names, D-1041; 4352 at version 2 with
+/// positions, D-938; 4320 at version 1, D-1115), and on every target its module record lists no
 /// type, external type, hook or free shape. `std::io`'s record grows by its types' tables; both sizes are
 /// printed for the report (`--nocapture`).
 #[test]
@@ -323,10 +325,14 @@ fn aot_001_hello_world_record_unchanged() {
         sizes.insert(path.as_str(), (encoded.len(), digest(&encoded)));
     }
     if cfg!(all(target_os = "macos", target_arch = "aarch64")) {
-        // The version-3 record (D-1041, N7b): version 2's 4352 bytes with
-        // positions (D-938; 4320 at version 1, D-1115), plus 8 bytes per
-        // function entry and the functions' names in its string table.
-        assert_eq!(sizes["hello_world"], (4397, 0x3bb0_2bed_2390_d3de));
+        // The version-4 record: version 3's 4397 bytes (D-1041, N7b: version
+        // 2's 4352 bytes with positions, D-938, 4320 at version 1, D-1115,
+        // plus 8 bytes per function entry and the functions' names in its
+        // string table), plus the profile byte.
+        // The entry checks' slow paths then became `preserve_all` calls
+        // followed by the flag's test, which made the code 8 bytes shorter,
+        // and the releasing slow path lost its count, 8 bytes more.
+        assert_eq!(sizes["hello_world"], (4382, 0x00d6_d311_54f8_e6bb));
     }
     let (_, hello) = &records[1];
     let (bytes, _) = record_object(hello, "cb$mod$hello_world");

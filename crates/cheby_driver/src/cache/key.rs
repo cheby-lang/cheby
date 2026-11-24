@@ -39,6 +39,10 @@ pub enum KeyKind {
     /// A package index (a hint, D-962), over the package root's absolute
     /// path and the command family.
     Index,
+    /// Std's export record (design T15): what a release build takes from
+    /// std besides its code, under the build ID and std's release
+    /// settings.
+    Export,
 }
 
 impl KeyKind {
@@ -57,6 +61,7 @@ impl KeyKind {
             Self::CObj => "cobj",
             Self::NativeLib => "nlib",
             Self::Index => "index",
+            Self::Export => "export",
         }
     }
 }
@@ -90,7 +95,8 @@ impl BuildKind {
     }
 }
 
-/// The settings that change code (D-958), and nothing else: `--jobs`,
+/// The settings that change code (D-958), the profile among them, and
+/// nothing else: `--jobs`,
 /// `--deny-warnings`, `--reuse-report`, color, `CHEBY_DUMP_DIR` and
 /// `[runtime]` key nothing, and `[const-eval]` limits key only constant
 /// results, as their own field.
@@ -112,6 +118,11 @@ pub struct Settings {
     pub stack_check: bool,
     /// The target triple.
     pub target: String,
+    /// The profile: `None` for debug, the release levers for release
+    /// (`--release`, `CHEBY_RELEASE_OFF`). Constant entries always hold
+    /// debug, since constants are evaluated on debug code in every profile
+    /// (D-978).
+    pub release: Option<cheby_mir::ReleaseOptions>,
 }
 
 /// A cache key: names a record or a hint.
@@ -175,16 +186,25 @@ impl KeyBuilder {
         self.bytes(&field.0)
     }
 
-    /// Appends the settings as six fields: the kind's tag, the four
-    /// switches as one byte each (0 or 1), and the target.
+    /// Appends the settings as eight fields: the kind's tag, the four
+    /// switches as one byte each (0 or 1), the target, the profile's name
+    /// and the release levers that are off as one byte
+    /// ([`cheby_mir::ReleaseOptions::off_bits`], 0 for debug).
     #[must_use]
     pub fn settings(self, s: &Settings) -> Self {
+        let profile = match s.release {
+            None => cheby_mir::Profile::Debug,
+            Some(_) => cheby_mir::Profile::Release,
+        };
+        let off = s.release.map_or(0, |r| r.off_bits());
         self.str(s.kind.tag())
             .bytes(&[u8::from(s.rc_naive)])
             .bytes(&[u8::from(s.unwind_edges)])
             .bytes(&[u8::from(s.checked_counts)])
             .bytes(&[u8::from(s.stack_check)])
             .str(&s.target)
+            .str(profile.name())
+            .bytes(&[off])
     }
 
     /// The key.

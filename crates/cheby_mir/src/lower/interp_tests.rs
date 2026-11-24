@@ -140,7 +140,7 @@ bb1:
   str#0 = \"src/main.cheby:14:4\"
 bb0:
   _2: value = call_runtime str_with_capacity(borrow const int 32) ; unwind bb1
-  _3: value = call std::int::show(_0) ; unwind bb2
+  _3: value = call_foreign \"cheby_int_show\"(borrow _0) -> ptr ; unwind bb2
   _4: value = call_runtime str_append(_2, borrow _3) ; unwind bb3
   drop _3
   _5: value = call_runtime str_append(_4, borrow _1) ; unwind bb1
@@ -285,8 +285,12 @@ fn interp_leading_string_appends_to_the_value() {
             .is_some_and(|s| s.contains("= call_runtime str_append(_0, borrow const str#1)")),
         "{kept}"
     );
+    // The buffer and `acc` go to `string::add`'s kernel, each moved into
+    // its own temporary (D-525).
+    assert!(kept.contains("_6: value = _5\n"), "{kept}");
+    assert!(kept.contains("_7: value = _0\n"), "{kept}");
     assert!(
-        kept.contains("tail_call std::string::add(_5, _0)"),
+        kept.contains("call_foreign \"cheby_string_add\"(borrow _6, borrow _7)"),
         "{kept}"
     );
 }
@@ -360,7 +364,7 @@ fn interp_leading_string_source_order() {
     let q_name = at(&f, "= field _1.0 of ctor app::Person");
     let first_append = at(&f, "= call_runtime str_append(");
     let point = at(&f, "= call app::show(");
-    let int = at(&f, "= call std::int::show(");
+    let int = at(&f, "= call_foreign \"cheby_int_show\"(");
     assert!(
         p_name < q_name && q_name < first_append && first_append < point && point < int,
         "{f}"

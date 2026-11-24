@@ -34,7 +34,10 @@
 //!   so the allocation paths that know their fiber skip an accessor call
 //!   ([`with_cache_of`], [`with_fiber_and_cache`]; GATE1-1). The address
 //!   is used only while that fiber is current here, so it never names
-//!   another thread's cache.
+//!   another thread's cache. The same switch rewrites the fiber's inline
+//!   allocation record, the cache generated code takes blocks from, which
+//!   generated code loads again at every allocation
+//!   (`crate::alloc::inline_record`).
 //!
 //! A source test checks the whole crate for thread-locals declared or
 //! accessed elsewhere.
@@ -162,7 +165,7 @@ thread_local! {
     /// so that its capacity is reused across frees.
     static WORKLIST: Cell<Vec<Word>> = const { Cell::new(Vec::new()) };
     /// Freed blocks of small objects kept for the next allocation.
-    static CACHE: RefCell<BlockCache> = const { RefCell::new(BlockCache::new()) };
+    static CACHE: BlockCache = const { BlockCache::new() };
     /// Poisoned blocks kept out of the allocator.
     static QUARANTINE: RefCell<Quarantine> = const { RefCell::new(Quarantine::new()) };
     /// The drop-function mark (D-946, D-949): `Some` while a user external
@@ -290,7 +293,7 @@ pub(crate) fn with_worklist<R>(f: impl FnOnce(&Cell<Vec<Word>>) -> R) -> Option<
 /// Calls `f` with this thread's block cache; `None` during thread
 /// teardown. `f` never suspends.
 #[inline(never)]
-pub(crate) fn with_cache<R>(f: impl FnOnce(&RefCell<BlockCache>) -> R) -> Option<R> {
+pub(crate) fn with_cache<R>(f: impl FnOnce(&BlockCache) -> R) -> Option<R> {
     CACHE.try_with(f).ok()
 }
 
@@ -301,9 +304,7 @@ pub(crate) fn with_cache<R>(f: impl FnOnce(&RefCell<BlockCache>) -> R) -> Option
 /// ([`set_current_fiber`]), so only one thread-local is read. `None`
 /// during thread teardown, when the cache is gone. `f` never suspends.
 #[inline(never)]
-pub(crate) fn with_fiber_and_cache<R>(
-    f: impl FnOnce(*mut ExecCtx, &RefCell<BlockCache>) -> R,
-) -> Option<R> {
+pub(crate) fn with_fiber_and_cache<R>(f: impl FnOnce(*mut ExecCtx, &BlockCache) -> R) -> Option<R> {
     let fiber = black_box(CURRENT_FIBER.try_with(Cell::get).unwrap_or(ptr::null_mut()));
     // SAFETY: the current fiber is null or a live control block current on
     // this thread (`set_current_fiber`'s contract).
@@ -328,7 +329,7 @@ pub(crate) fn with_fiber_and_cache<R>(
 #[inline]
 pub(crate) fn with_cache_of<R>(
     ctx: Option<&ExecCtx>,
-    f: impl FnOnce(&RefCell<BlockCache>) -> R,
+    f: impl FnOnce(&BlockCache) -> R,
 ) -> Option<R> {
     if let Some(ctx) = ctx {
         debug_assert!(
@@ -592,7 +593,7 @@ mod tests {
         };
         let ctx = new_ctx();
         let other = new_ctx();
-        let address = |cache: &RefCell<BlockCache>| ptr::from_ref(cache).addr();
+        let address = |cache: &BlockCache| ptr::from_ref(cache).addr();
         let here = with_cache(address).unwrap();
         // SAFETY: live control blocks; each is current until replaced, and
         // both are freed at the end, after they stop being current.

@@ -11,6 +11,13 @@
 //! source positions off (D-938's measurement, D-1173): no
 //! position in MIR, no source location in code, no rows in code records
 //! and no DWARF in objects; the machine code is the same either way.
+//!
+//! The profile ([`Profile`]) is the command's: `--release` on `cheby
+//! build`, `cheby run` and `cheby test` sets [`MirOptions::release`],
+//! and every other build is debug. `CHEBY_RELEASE_OFF` turns release
+//! levers off one by one ([`ReleaseOptions::from_env`]), so `bench-run`
+//! can measure each lever with one `cheby`; it is read only with
+//! `--release`.
 
 use cheby_iface::Ice;
 
@@ -42,6 +49,156 @@ impl RcMode {
             Self::Perceus => "perceus",
             Self::Naive => "naive",
         }
+    }
+}
+
+/// The profile a build compiles with (spec §13.12.5). Debug is the
+/// default of every command; `--release` on `cheby build`, `cheby run`
+/// and `cheby test` selects release. `cheby check`, the REPL, the
+/// language server, the dumps and constant evaluation are always debug.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, Default)]
+pub enum Profile {
+    /// No optimization across functions; the default.
+    #[default]
+    Debug,
+    /// The release levers of [`ReleaseOptions`].
+    Release,
+}
+
+impl Profile {
+    /// The profile's name, as cache keys and messages write it.
+    #[must_use]
+    pub const fn name(self) -> &'static str {
+        match self {
+            Self::Debug => "debug",
+            Self::Release => "release",
+        }
+    }
+}
+
+/// The levers of a release build, each switchable on its own
+/// (`CHEBY_RELEASE_OFF`, [`ReleaseOptions::from_env`]). All are on in a
+/// release build, and each enters the cache keys.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "independent levers, each switched off on its own"
+)]
+pub struct ReleaseOptions {
+    /// Inlining inside each unit with its clean-up pass (`inline`,
+    /// [`crate::inline::optimize`]), on the package's lowered units before
+    /// borrowing inference.
+    pub inline: bool,
+    /// Specialization of clones for known dictionaries and functions
+    /// (`spec`).
+    pub spec: bool,
+    /// Unboxing of scalar parameters and results in clones (`unbox`).
+    pub unbox: bool,
+    /// Constants whose values the build knows folded into their readers
+    /// (`consts`, [`crate::fold_consts`]).
+    pub consts: bool,
+    /// Calls between Cheby functions go to the callee's symbol, not
+    /// through its slot (`direct`).
+    pub direct: bool,
+    /// Cranelift's `opt_level=speed` instead of `none` (`clif`).
+    pub clif: bool,
+}
+
+impl ReleaseOptions {
+    /// Every lever on: a release build without `CHEBY_RELEASE_OFF`.
+    pub const ALL: Self = Self {
+        inline: true,
+        spec: true,
+        unbox: true,
+        consts: true,
+        direct: true,
+        clif: true,
+    };
+
+    /// The environment variable that turns levers off: a comma-separated
+    /// list of lever names. It is honored only with `--release`.
+    pub const OFF_ENV: &'static str = "CHEBY_RELEASE_OFF";
+
+    /// The lever names of `CHEBY_RELEASE_OFF`, in the order of
+    /// [`ReleaseOptions::off_bits`].
+    pub const LEVERS: [&'static str; 6] = ["inline", "spec", "unbox", "consts", "direct", "clif"];
+
+    /// The release levers of this process: [`ReleaseOptions::ALL`] with
+    /// the levers `CHEBY_RELEASE_OFF` names turned off. Unset or empty
+    /// keeps every lever on.
+    ///
+    /// # Errors
+    ///
+    /// The message to report for a name that is no lever, or a value that
+    /// is not Unicode.
+    pub fn from_env() -> Result<Self, String> {
+        match std::env::var_os(Self::OFF_ENV) {
+            None => Ok(Self::ALL),
+            Some(value) => match value.to_str() {
+                Some(text) => Self::parse_off(text),
+                None => Err(format!(
+                    "{} must be a list of levers, not a value that is not Unicode",
+                    Self::OFF_ENV
+                )),
+            },
+        }
+    }
+
+    /// [`ReleaseOptions::ALL`] with the levers `text` names turned off:
+    /// names separated by commas; spaces around a name and empty names
+    /// are ignored.
+    ///
+    /// # Errors
+    ///
+    /// The message to report for a name that is no lever.
+    pub fn parse_off(text: &str) -> Result<Self, String> {
+        let mut options = Self::ALL;
+        for name in text.split(',').map(str::trim).filter(|n| !n.is_empty()) {
+            let lever = match name {
+                "inline" => &mut options.inline,
+                "spec" => &mut options.spec,
+                "unbox" => &mut options.unbox,
+                "consts" => &mut options.consts,
+                "direct" => &mut options.direct,
+                "clif" => &mut options.clif,
+                _ => {
+                    return Err(format!(
+                        "{} names levers among {}, not `{}`",
+                        Self::OFF_ENV,
+                        Self::LEVERS.join(", "),
+                        name.escape_debug()
+                    ));
+                }
+            };
+            *lever = false;
+        }
+        Ok(options)
+    }
+
+    /// The levers that are off, one bit each in the order of
+    /// [`ReleaseOptions::LEVERS`] (bit 0 `inline`): what cache keys hold.
+    #[must_use]
+    pub const fn off_bits(&self) -> u8 {
+        let mut bits = 0_u8;
+        if !self.inline {
+            bits |= 1;
+        }
+        if !self.spec {
+            bits |= 2;
+        }
+        if !self.unbox {
+            bits |= 4;
+        }
+        if !self.consts {
+            bits |= 8;
+        }
+        if !self.direct {
+            bits |= 16;
+        }
+        if !self.clif {
+            bits |= 32;
+        }
+        bits
     }
 }
 
@@ -100,6 +257,11 @@ pub struct MirOptions {
     /// [`count_lowered_with`] clears any a unit holds. It changes no code
     /// and no dump.
     pub positions: bool,
+    /// The release levers of a release build, `None` in a debug build
+    /// ([`MirOptions::profile`]). The driver sets it only for `--release`
+    /// on `cheby build`, `cheby run` and `cheby test`, and clears it for
+    /// constant evaluation, which runs debug code in every profile (D-978).
+    pub release: Option<ReleaseOptions>,
 }
 
 impl Default for MirOptions {
@@ -113,11 +275,38 @@ impl Default for MirOptions {
             fuse: true,
             record_sites: false,
             positions: true,
+            release: None,
         }
     }
 }
 
 impl MirOptions {
+    /// The profile these options compile with: release when
+    /// [`MirOptions::release`] holds levers.
+    #[must_use]
+    pub const fn profile(&self) -> Profile {
+        match self.release {
+            Some(_) => Profile::Release,
+            None => Profile::Debug,
+        }
+    }
+
+    /// These options in `profile`: with [`ReleaseOptions::from_env`]'s
+    /// levers for release, and without levers for debug.
+    ///
+    /// # Errors
+    ///
+    /// The message of an invalid `CHEBY_RELEASE_OFF`.
+    pub fn in_profile(self, profile: Profile) -> Result<Self, String> {
+        Ok(Self {
+            release: match profile {
+                Profile::Debug => None,
+                Profile::Release => Some(ReleaseOptions::from_env()?),
+            },
+            ..self
+        })
+    }
+
     /// The environment variable that selects the reference-counting mode.
     pub const RC_ENV: &'static str = "CHEBY_RC";
 
@@ -540,5 +729,46 @@ mod tests {
             ..MirOptions::default()
         };
         assert!(!repl.borrows());
+    }
+
+    #[test]
+    fn release_levers_parse_by_name() {
+        // `CHEBY_RELEASE_OFF` lists the levers to turn off; empty keeps
+        // them all, and an unknown name is an error, as for `CHEBY_RC`.
+        assert_eq!(ReleaseOptions::parse_off(""), Ok(ReleaseOptions::ALL));
+        assert_eq!(ReleaseOptions::ALL.off_bits(), 0);
+        let off = ReleaseOptions::parse_off("direct, clif,").unwrap();
+        assert!(!off.direct && !off.clif && off.inline && off.spec && off.unbox && off.consts);
+        assert_eq!(off.off_bits(), 0b11_0000);
+        let all = ReleaseOptions::parse_off(&ReleaseOptions::LEVERS.join(",")).unwrap();
+        assert_eq!(all.off_bits(), 0b11_1111);
+        // Each lever has its own bit.
+        let bits: Vec<u8> = ReleaseOptions::LEVERS
+            .iter()
+            .map(|name| ReleaseOptions::parse_off(name).unwrap().off_bits())
+            .collect();
+        assert_eq!(bits, [1, 2, 4, 8, 16, 32]);
+        assert_eq!(
+            ReleaseOptions::parse_off("inline,fast").unwrap_err(),
+            "CHEBY_RELEASE_OFF names levers among inline, spec, unbox, consts, direct, clif, \
+             not `fast`"
+        );
+    }
+
+    #[test]
+    fn the_default_profile_is_debug() {
+        let options = MirOptions::default();
+        assert_eq!(options.profile(), Profile::Debug);
+        assert_eq!(Profile::default(), Profile::Debug);
+        let release = MirOptions {
+            release: Some(ReleaseOptions::ALL),
+            ..options
+        };
+        assert_eq!(release.profile(), Profile::Release);
+        assert_eq!(
+            release.in_profile(Profile::Debug).unwrap().profile(),
+            Profile::Debug
+        );
+        assert_eq!(Profile::Release.name(), "release");
     }
 }

@@ -1,0 +1,1 @@
+reuse: tests/ui/09-memory-model/reuse_report/release_inlined.cheby:22:3: building `Point` reuses `p` when it is unique

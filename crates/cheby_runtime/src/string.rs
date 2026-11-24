@@ -11,6 +11,7 @@
 
 use crate::abi::{self, LayoutId, Word};
 use crate::alloc;
+use crate::ctx::ExecCtx;
 use crate::object::{
     self, abi_offset, read_field, scan_and_layout, to_u64, to_usize, word_to_ptr, write_field,
 };
@@ -29,10 +30,24 @@ const BYTES: i32 = abi::string::BYTES_OFFSET;
 /// evaluation's memory limit, an `out of memory` panic otherwise.
 #[must_use]
 pub fn alloc_text(cap: u64, layout: LayoutId) -> *mut u8 {
+    // SAFETY: null asks for the running fiber to be looked up.
+    unsafe { alloc_text_for(std::ptr::null_mut(), cap, layout) }
+}
+
+/// [`alloc_text`] for `ctx`, the fiber running on this thread, or null to
+/// look it up: a caller that has its fiber's control block allocates
+/// without a thread-local lookup.
+///
+/// # Safety
+///
+/// As for [`alloc::alloc_for`].
+#[must_use]
+pub(crate) unsafe fn alloc_text_for(ctx: *mut ExecCtx, cap: u64, layout: LayoutId) -> *mut u8 {
     let Some(size) = abi::string::alloc_size(cap) else {
         alloc::out_of_memory(u64::MAX)
     };
-    let obj = alloc::alloc_object(size, abi::header(abi::RC_UNIQUE, 0, layout));
+    // SAFETY: forwarded from the caller.
+    let obj = unsafe { alloc::alloc_for(ctx, size, abi::header(abi::RC_UNIQUE, 0, layout)) };
     // SAFETY: a fresh text object: `len` and `cap` are within it.
     unsafe {
         write_field(obj, abi_offset(LEN), 0);
@@ -58,12 +73,25 @@ pub fn alloc_bytes(cap: u64) -> *mut u8 {
 /// with `cap == len`.
 #[must_use]
 pub fn new_text(data: &[u8], layout: LayoutId) -> Word {
+    // SAFETY: null asks for the running fiber to be looked up.
+    unsafe { new_text_for(std::ptr::null_mut(), data, layout) }
+}
+
+/// [`new_text`] for `ctx`, the fiber running on this thread, or null to
+/// look it up.
+///
+/// # Safety
+///
+/// As for [`alloc::alloc_for`].
+#[must_use]
+pub(crate) unsafe fn new_text_for(ctx: *mut ExecCtx, data: &[u8], layout: LayoutId) -> Word {
     let len = to_u64(data.len());
-    let obj = alloc_text(len, layout);
+    // SAFETY: forwarded from the caller.
+    let obj = unsafe { alloc_text_for(ctx, len, layout) };
     // SAFETY: the object has room for `len` bytes after `BYTES`, and `data`
     // does not overlap a fresh allocation.
     unsafe {
-        std::ptr::copy_nonoverlapping(data.as_ptr(), obj.add(abi_offset(BYTES)), data.len());
+        copy_bytes(data.as_ptr(), obj.add(abi_offset(BYTES)), data.len());
         write_field(obj, abi_offset(LEN), len);
     }
     object::ptr_to_word(obj)
@@ -104,7 +132,7 @@ unsafe fn text_layout(word: Word) -> Option<LayoutId> {
 ///
 /// `word` points to a live text object that outlives `'a` and is not
 /// changed during `'a`.
-unsafe fn contents<'a>(word: Word) -> &'a [u8] {
+pub(crate) unsafe fn contents<'a>(word: Word) -> &'a [u8] {
     let obj = word_to_ptr(word);
     // SAFETY: a text object has `len` at this offset, and `len` bytes after
     // `BYTES`, live for `'a`.
@@ -209,6 +237,21 @@ pub unsafe fn to_rust_string(word: Word) -> Option<String> {
 /// gives up.
 #[must_use]
 pub unsafe fn reserve(text: Word, extra: u64) -> Word {
+    // SAFETY: forwarded from the caller; null looks the fiber up.
+    let (text, _, _) = unsafe { reserve_in(std::ptr::null_mut(), text, extra) };
+    text
+}
+
+/// [`reserve`] for `ctx`, the fiber running on this thread, or null to
+/// look it up, which allocates the new object and releases the old one.
+/// Also returns the length of the contents and the path it took. Inline,
+/// so an append in place costs no call; [`move_text`] does the rest.
+///
+/// # Safety
+///
+/// As for [`reserve`]; `ctx` as for [`alloc::alloc_for`].
+#[inline]
+unsafe fn reserve_in(ctx: *mut ExecCtx, text: Word, extra: u64) -> (Word, u64, Growth) {
     // SAFETY: forwarded from the caller.
     let Some(layout) = (unsafe { text_layout(text) }) else {
         fatal(format_args!("{text:#x} is not a text object"));
@@ -227,16 +270,34 @@ pub unsafe fn reserve(text: Word, extra: u64) -> Word {
     // SAFETY: a live object.
     let unique = unsafe { rc::is_unique(text) };
     if need <= cap && unique {
-        return text;
+        return (text, len, Growth::InPlace);
     }
     let path = if unique {
         Growth::Grown
     } else {
         Growth::Copied
     };
-    let new = alloc_text(grown_capacity(path, len, cap, need), layout);
+    // SAFETY: forwarded from the caller.
+    let new = unsafe { move_text(ctx, text, layout, grown_capacity(path, len, cap, need)) };
+    (new, len, path)
+}
+
+/// Moves the contents of the text object `text` to a new one of the same
+/// layout with capacity `cap`, at least its length, then releases `text`.
+///
+/// # Safety
+///
+/// `text` points to a live text object of layout `layout` whose reference
+/// the caller gives up; `ctx` as for [`alloc::alloc_for`].
+#[inline(never)]
+unsafe fn move_text(ctx: *mut ExecCtx, text: Word, layout: LayoutId, cap: u64) -> Word {
+    let obj = word_to_ptr(text);
+    // SAFETY: a live text object.
+    let len = unsafe { read_field(obj, abi_offset(LEN)) };
+    // SAFETY: forwarded from the caller.
+    let new = unsafe { alloc_text_for(ctx, cap, layout) };
     // SAFETY: both are live; the new object has room for `len` bytes and
-    // does not overlap the old one.
+    // does not overlap the old one, whose reference the caller gave up.
     unsafe {
         std::ptr::copy_nonoverlapping(
             obj.add(abi_offset(BYTES)),
@@ -244,7 +305,7 @@ pub unsafe fn reserve(text: Word, extra: u64) -> Word {
             to_usize(len),
         );
         write_field(new, abi_offset(LEN), len);
-        rc::drop(text);
+        rc::cheby_rt_drop(ctx, text);
     }
     object::ptr_to_word(new)
 }
@@ -259,14 +320,73 @@ pub unsafe fn reserve(text: Word, extra: u64) -> Word {
 /// As for [`reserve`].
 #[must_use]
 pub unsafe fn append(text: Word, piece: &[u8]) -> Word {
+    // SAFETY: forwarded from the caller; null looks the fiber up.
+    let (text, _) = unsafe { append_in(std::ptr::null_mut(), text, piece) };
+    text
+}
+
+/// [`append`] for `ctx`, the fiber running on this thread, or null to
+/// look it up, and the path it took.
+///
+/// # Safety
+///
+/// As for [`append`]; `ctx` as for [`alloc::alloc_for`].
+#[must_use]
+pub(crate) unsafe fn append_in(ctx: *mut ExecCtx, text: Word, piece: &[u8]) -> (Word, Growth) {
     // SAFETY: forwarded from the caller.
-    let text = unsafe { reserve(text, to_u64(piece.len())) };
-    let obj = word_to_ptr(text);
+    let (text, len, path) = unsafe { reserve_in(ctx, text, to_u64(piece.len())) };
     // SAFETY: `text` is unique with room for `piece` after its `len` bytes,
     // and `piece` lies outside it.
+    unsafe { write_at(word_to_ptr(text), len, piece) };
+    (text, path)
+}
+
+/// Appends `piece` to a unique text object that has room for it: the
+/// kernels' writes into the object [`alloc_text`] or [`with_room`] made
+/// for exactly their pieces, with none of [`append`]'s checks of layout
+/// and count. A text without room for `piece` is grown as [`append`]
+/// grows it, so a size the caller got wrong costs a copy, never a write
+/// past the end.
+///
+/// # Safety
+///
+/// `text` points to a live, unique `String` or `Bytes` whose reference the
+/// caller gives up, and `piece` lies outside it.
+#[must_use]
+pub(crate) unsafe fn append_in_room(text: Word, piece: &[u8]) -> Word {
+    let obj = word_to_ptr(text);
+    // SAFETY: a live text object.
+    let (len, cap) = unsafe {
+        (
+            read_field(obj, abi_offset(LEN)),
+            read_field(obj, abi_offset(CAP)),
+        )
+    };
+    if len
+        .checked_add(to_u64(piece.len()))
+        .is_some_and(|need| need <= cap)
+    {
+        // SAFETY: unique (the caller's contract) with room for `piece`
+        // after its `len` bytes, and `piece` lies outside it.
+        unsafe { write_at(obj, len, piece) };
+        return text;
+    }
+    // SAFETY: forwarded from the caller.
+    unsafe { append(text, piece) }
+}
+
+/// Copies `piece` after the first `len` bytes of the text object `obj`
+/// and makes its length `len + piece.len()`.
+///
+/// # Safety
+///
+/// `obj` is a live text object that nobody else reads, with room for
+/// `piece` after `len` bytes, and `piece` lies outside it.
+#[inline]
+unsafe fn write_at(obj: *mut u8, len: u64, piece: &[u8]) {
+    // SAFETY: forwarded from the caller.
     unsafe {
-        let len = read_field(obj, abi_offset(LEN));
-        std::ptr::copy_nonoverlapping(
+        copy_bytes(
             piece.as_ptr(),
             obj.add(abi_offset(BYTES)).add(to_usize(len)),
             piece.len(),
@@ -277,7 +397,6 @@ pub unsafe fn append(text: Word, piece: &[u8]) -> Word {
             len.saturating_add(to_u64(piece.len())),
         );
     }
-    text
 }
 
 /// A unique text object with the contents of a borrowed `text` and room
@@ -317,8 +436,15 @@ pub unsafe fn with_room(text: Word, extra: u64, reuse: bool) -> (Word, bool) {
     let Some(need) = len.checked_add(extra) else {
         alloc::out_of_memory(u64::MAX)
     };
+    // Copied unless it may be reused, then in place when it has room.
     // SAFETY: a live object.
-    let path = unsafe { growth(text, extra, reuse) };
+    let path = if !reuse || !unsafe { rc::is_unique(text) } {
+        Growth::Copied
+    } else if need <= cap {
+        Growth::InPlace
+    } else {
+        Growth::Grown
+    };
     stats::record(match path {
         Growth::InPlace => Event::TextKernelInPlace,
         Growth::Grown => Event::TextKernelGrown,
@@ -398,29 +524,55 @@ pub(crate) enum Growth {
     Copied,
 }
 
-/// The path adding `extra` bytes to `text` takes when `reuse` holds (see
-/// [`with_room`]); [`Growth::Copied`] when it does not.
+/// Copies `len` bytes from `from` to `to`. Up to 32 bytes, the size of
+/// most pieces of an interpolation, are copied inline with two loads and
+/// two stores that may overlap, instead of a call to `memcpy`.
 ///
 /// # Safety
 ///
-/// `text` points to a live text object.
-pub(crate) unsafe fn growth(text: Word, extra: u64, reuse: bool) -> Growth {
-    // SAFETY: forwarded from the caller.
-    if !reuse || !unsafe { rc::is_unique(text) } {
-        return Growth::Copied;
+/// As for [`std::ptr::copy_nonoverlapping`].
+#[inline(always)]
+unsafe fn copy_bytes(from: *const u8, to: *mut u8, len: usize) {
+    use std::ptr::{read_unaligned, write_unaligned};
+    /// Copies the first and the last `size_of::<T>()` bytes, which cover
+    /// the `len` bytes when `len` is from one to two times that size.
+    ///
+    /// # Safety
+    ///
+    /// As for [`copy_bytes`], and `len` is at least `size_of::<T>()`.
+    #[expect(
+        clippy::inline_always,
+        reason = "a step of `copy_bytes`, which must be inline"
+    )]
+    #[inline(always)]
+    unsafe fn ends<T>(from: *const u8, to: *mut u8, len: usize) {
+        let last = len.wrapping_sub(size_of::<T>());
+        // SAFETY: both ends lie within the `len` bytes of each side.
+        unsafe {
+            let head = read_unaligned(from.cast::<T>());
+            let tail = read_unaligned(from.add(last).cast::<T>());
+            write_unaligned(to.cast::<T>(), head);
+            write_unaligned(to.add(last).cast::<T>(), tail);
+        }
     }
-    let obj = word_to_ptr(text);
-    // SAFETY: a live text object.
-    let (len, cap) = unsafe {
-        (
-            read_field(obj, abi_offset(LEN)),
-            read_field(obj, abi_offset(CAP)),
-        )
-    };
-    if len.checked_add(extra).is_some_and(|need| need <= cap) {
-        Growth::InPlace
-    } else {
-        Growth::Grown
+    // SAFETY: forwarded from the caller; each case reads and writes only
+    // within the `len` bytes.
+    unsafe {
+        match len {
+            0 => {}
+            1..4 => {
+                let middle = len.wrapping_div(2);
+                let last = len.wrapping_sub(1);
+                let (a, b, c) = (*from, *from.add(middle), *from.add(last));
+                *to = a;
+                *to.add(middle) = b;
+                *to.add(last) = c;
+            }
+            4..8 => ends::<u32>(from, to, len),
+            8..16 => ends::<u64>(from, to, len),
+            16..=32 => ends::<u128>(from, to, len),
+            _ => std::ptr::copy_nonoverlapping(from, to, len),
+        }
     }
 }
 

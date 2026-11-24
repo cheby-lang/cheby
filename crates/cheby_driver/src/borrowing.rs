@@ -494,8 +494,8 @@ pub(crate) fn build_kind(roots: &Roots<'_>, mir: MirOptions) -> BuildKind {
 
 /// The settings that change code (D-958) of a lowering with `mir`, as a
 /// command compiles it: its kind, `CHEBY_RC`, unwind edges, the checked
-/// count operations of the poisoning mode, the stack check and the
-/// target.
+/// count operations of the poisoning mode, the stack check, the target
+/// and the profile with its release levers.
 pub(crate) fn settings(kind: BuildKind, mir: MirOptions) -> Settings {
     Settings {
         kind,
@@ -504,6 +504,7 @@ pub(crate) fn settings(kind: BuildKind, mir: MirOptions) -> Settings {
         checked_counts: cheby_runtime::alloc::poison_enabled(),
         stack_check: CodegenOptions::default().stack_check,
         target: format!("{}-{}", std::env::consts::ARCH, std::env::consts::OS),
+        release: mir.release,
     }
 }
 

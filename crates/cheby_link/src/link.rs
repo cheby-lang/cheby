@@ -429,6 +429,30 @@ fn process_alive(pid: u32) -> bool {
     result == 0 || std::io::Error::last_os_error().raw_os_error() != Some(libc::ESRCH)
 }
 
+/// Refuses a link whose records were compiled in different profiles:
+/// `records` pairs each record with the module path of its object, and
+/// the first record's profile is the link's. A release record calls its
+/// callees' masked symbols, which no debug record defines, so a mixed link
+/// would fail late or, for an all-owned callee, call code of the other
+/// profile.
+///
+/// # Errors
+///
+/// [`LinkError::Profiles`] naming the first record of another profile.
+pub fn check_profiles(records: &[(&str, &CodeRecord)]) -> Result<(), LinkError> {
+    let Some(&(_, first)) = records.first() else {
+        return Ok(());
+    };
+    match records.iter().find(|(_, r)| r.profile != first.profile) {
+        Some((module, record)) => Err(LinkError::Profiles(format!(
+            "a link of {} code holds a {} record of `{module}`",
+            first.profile.name(),
+            record.profile.name()
+        ))),
+        None => Ok(()),
+    }
+}
+
 /// D-918's check over the copies of a link: every name that several
 /// records define `Local` has the same kind, contents, alignment and
 /// relocations (by target name) in each. `records` pairs each record with

@@ -1,4 +1,4 @@
-//! The objects a list is made of (layout ids 26-28, D-524) and the only
+//! The objects a list is made of (layout ids 26-29, D-524) and the only
 //! code that reads or writes their memory.
 //!
 //! - **Root** (id 26, [`ROOT`]): the list value. Header, then the tree
@@ -10,7 +10,19 @@
 //!   hold just the slice (D-893); a slot under a shared node keeps its
 //!   element. A heap root always has a
 //!   length above 0 and a tree; the empty list is the static root
-//!   `cheby_rt_static_empty_list`.
+//!   `cheby_rt_static_empty_list`. Only a unique root that a list
+//!   outgrew is ever empty, for the moment between the move of its
+//!   contents to a big root and its release.
+//! - **Big root** (id 29, [`BIG_ROOT`], D-1757): the list value too, for
+//!   a list of more than one leaf that grows or shrinks at an end. A root's
+//!   fields, then the head leaf (0 for none), the index in it of the
+//!   list's first element, raw, and the tail leaf (0 for none). The list
+//!   is the head leaf's elements from that index, then the elements the
+//!   root's offset and length take from the tree, then the tail leaf's
+//!   ([`Pieces`]). The two leaves keep the list's ends out of the tree,
+//!   so a push, a prepend or a pattern step at an end reads and writes
+//!   one leaf, and the tree changes once per leaf (`buffers`). A big
+//!   root has a head or tail leaf only while its count is positive.
 //! - **Leaf** (id 27, [`LEAF`]): header, a raw word holding the length
 //!   (low 32 bits) and the capacity (high 32 bits), then `capacity`
 //!   element slots. The first `length` slots hold owned uniform words.
@@ -26,7 +38,18 @@
 //! from the radix position and searches the table, so balanced and
 //! relaxed nodes share one kind.
 //!
-//! Ids 29-31 stay unused. The [`CustomKind`]s below give the allocator
+//! A big root's tree may hold holes: child slots holding the word 0,
+//! where a walk from the front took a leaf, or a branch whose leaves it
+//! took, out of a unique tree (`buffers`). The sizes still count the
+//! elements that were there, and the root's offset lies past them, so a
+//! lookup from the offset never reaches a hole, and freeing a node skips
+//! the word 0. Holes are only ever the first children of the branches on
+//! the path to the offset's leaf, and only in unique branches. A big
+//! root's tree loses its holes when its leaves are folded
+//! (`buffers::settle`): before any operation but `get` and those at the
+//! list's ends reads it, and before it is shared or made static.
+//!
+//! Ids 30-31 stay unused. The [`CustomKind`]s below give the allocator
 //! each object's size and owned children, so freeing a list of any length
 //! goes through the allocator's worklist without recursion (plan §0).
 //!
@@ -60,8 +83,10 @@ pub(super) const ROOT: LayoutId = abi::layout::LIST_FIRST;
 pub(super) const LEAF: LayoutId = ROOT.wrapping_add(1);
 /// The layout id of branches.
 pub(super) const BRANCH: LayoutId = ROOT.wrapping_add(2);
+/// The layout id of big roots.
+pub(super) const BIG_ROOT: LayoutId = ROOT.wrapping_add(3);
 
-const _: () = assert!(BRANCH <= abi::layout::LIST_LAST);
+const _: () = assert!(BIG_ROOT <= abi::layout::LIST_LAST);
 
 /// Offset of the first field after the header.
 const META: usize = 8;
@@ -77,8 +102,35 @@ const ROOT_OFFSET: usize = 16;
 const ROOT_LEN: usize = 24;
 // Generated code reads the length there (D-910).
 const _: () = assert!(ROOT_LEN == 24 && abi::list::ROOT_LEN_OFFSET == 24);
+// Generated code works on the leaf at either end of a unique list
+// (`abi::list`).
+const _: () = assert!(
+    abi::list::ROOT_TREE_OFFSET == 8
+        && ROOT_TREE == 8
+        && abi::list::ROOT_OFFSET_OFFSET == 16
+        && ROOT_OFFSET == 16
+        && abi::list::LEAF_META_OFFSET == 8
+        && META == 8
+        && abi::list::LEAF_SLOTS_OFFSET == 16
+        && SLOTS == 16
+        && abi::list::ROOT_LAYOUT == ROOT
+        && abi::list::LEAF_LAYOUT == LEAF
+        && abi::list::BIG_ROOT_LAYOUT == BIG_ROOT
+);
+// A big root's further fields: the head leaf (0 for none), the index in
+// it of the list's first element, and the tail leaf (0 for none).
+const ROOT_HEAD: usize = 32;
+const ROOT_HEAD_POS: usize = 40;
+const ROOT_TAIL: usize = 48;
+const _: () = assert!(
+    abi::list::BIG_HEAD_OFFSET == 32
+        && abi::list::BIG_HEAD_POS_OFFSET == 40
+        && abi::list::BIG_TAIL_OFFSET == 48
+);
 /// Size of a root in bytes.
 pub(super) const ROOT_SIZE: usize = 32;
+/// Size of a big root in bytes.
+pub(super) const BIG_ROOT_SIZE: usize = 56;
 /// The most bytes one node takes: a branch, larger than any leaf.
 pub(super) const MAX_NODE_SIZE: usize = BRANCH_SIZE;
 
@@ -119,6 +171,22 @@ unsafe fn root_size(_: Word) -> u64 {
 unsafe fn root_children(word: Word, visit: &mut dyn FnMut(Word)) {
     // SAFETY: the allocator passes a live root.
     visit(unsafe { read_field(word_to_ptr(word), ROOT_TREE) });
+}
+
+/// Frees a big root: its size.
+unsafe fn big_root_size(_: Word) -> u64 {
+    to_u64(BIG_ROOT_SIZE)
+}
+
+/// A big root owns its tree and its head and tail leaves.
+unsafe fn big_root_children(word: Word, visit: &mut dyn FnMut(Word)) {
+    let ptr = word_to_ptr(word);
+    // SAFETY: the allocator passes a live big root.
+    unsafe {
+        visit(read_field(ptr, ROOT_TREE));
+        visit(read_field(ptr, ROOT_HEAD));
+        visit(read_field(ptr, ROOT_TAIL));
+    }
 }
 
 /// A leaf's size follows its capacity.
@@ -216,6 +284,20 @@ static ROOT_KIND: CustomKind = CustomKind {
     },
 };
 
+/// The big root kind: a list value like a root. Its owned words are not
+/// the fields from offset 8 on, so it has no declared shape.
+static BIG_ROOT_KIND: CustomKind = CustomKind {
+    name: "List",
+    size: big_root_size,
+    children: big_root_children,
+    equal: Some(root_equal),
+    hash: Some(root_hash),
+    debug: Some(root_debug),
+    handle: false,
+    finalize: None,
+    shape: KindShape::Opaque,
+};
+
 /// The leaf kind: never a value of its own.
 static LEAF_KIND: CustomKind = CustomKind {
     name: "List.Leaf",
@@ -244,7 +326,7 @@ static BRANCH_KIND: CustomKind = CustomKind {
     },
 };
 
-/// Registers the three kinds once per process. Every entry point that may
+/// Registers the four kinds once per process. Every entry point that may
 /// allocate or free list objects calls it first.
 pub(crate) fn register() {
     static ONCE: Once = Once::new();
@@ -253,6 +335,7 @@ pub(crate) fn register() {
             (ROOT, &ROOT_KIND),
             (LEAF, &LEAF_KIND),
             (BRANCH, &BRANCH_KIND),
+            (BIG_ROOT, &BIG_ROOT_KIND),
         ] {
             if let Err(error) = layout::register_builtin(id, LayoutInfo::custom(kind)) {
                 fatal(format_args!("cannot register list layout {id}: {error}"));
@@ -340,6 +423,77 @@ pub(super) struct View {
     pub(super) len: usize,
 }
 
+/// What a big root holds: the list is the head leaf's elements from `pos`
+/// on, then the tree's elements from `offset` on, as many as the length
+/// leaves for them, then the tail leaf's elements.
+#[derive(Debug, Clone, Copy)]
+pub(super) struct Pieces {
+    /// The tree, present only while it holds a part of the list.
+    pub(super) tree: Option<Node>,
+    /// The index in the tree of the first element the list takes from it.
+    pub(super) offset: usize,
+    /// The number of elements of the whole list.
+    pub(super) len: usize,
+    /// The head leaf: never one with no element left.
+    pub(super) head: Option<Node>,
+    /// The index in the head leaf of the list's first element.
+    pub(super) pos: usize,
+    /// The tail leaf: unique, and never empty.
+    pub(super) tail: Option<Node>,
+}
+
+impl Pieces {
+    /// The pieces of a list that is a view of a tree.
+    pub(super) fn of(view: View) -> Self {
+        Self {
+            tree: view.tree,
+            offset: view.offset,
+            len: view.len,
+            head: None,
+            pos: 0,
+            tail: None,
+        }
+    }
+
+    /// The elements the head leaf still holds.
+    pub(super) fn head_left(&self) -> usize {
+        self.head
+            .map_or(0, |head| head.slots().saturating_sub(self.pos))
+    }
+
+    /// The elements the tail leaf holds.
+    pub(super) fn tail_len(&self) -> usize {
+        self.tail.map_or(0, Node::slots)
+    }
+
+    /// The elements the list takes from the tree.
+    pub(super) fn tree_len(&self) -> usize {
+        self.len
+            .saturating_sub(self.head_left())
+            .saturating_sub(self.tail_len())
+    }
+}
+
+/// A unique heap root by its kind, for the fast paths of the C entry
+/// points ([`Root::fast`]).
+#[derive(Debug, Clone, Copy)]
+pub(super) enum Fast {
+    /// A root: a view of a tree.
+    Small(Root),
+    /// A big root.
+    Big(Big),
+}
+
+impl Fast {
+    /// The list value.
+    pub(super) fn root(self) -> Root {
+        match self {
+            Self::Small(root) => root,
+            Self::Big(big) => big.root(),
+        }
+    }
+}
+
 impl Root {
     /// The root behind a list word.
     ///
@@ -357,12 +511,47 @@ impl Root {
         unsafe { alloc::check_live(word, "a list operation") };
         // SAFETY: as above.
         let (_, id) = unsafe { object::scan_and_layout(word_to_ptr(word)) };
-        if id != ROOT {
+        if !is_root(id) {
             fatal(format_args!(
                 "expected a list, found an object of layout {id}"
             ));
         }
         Self(word)
+    }
+
+    /// The root behind a list word whose count is exactly one, by its
+    /// kind; `None` for any other word. The count is read first: the
+    /// static empty list has none, and the poisoning mode's check needs
+    /// the list layouts, which are registered once a heap root exists. A
+    /// freed object's poisoned header has another count, so it takes the
+    /// caller's checked path.
+    ///
+    /// # Safety
+    ///
+    /// `word` is a tagged integer, 0 or a live object.
+    #[expect(
+        clippy::inline_always,
+        reason = "the first test of every list fast path, which is inlined into its C entry point"
+    )]
+    #[inline(always)]
+    pub(super) unsafe fn fast(word: Word) -> Option<Fast> {
+        if abi::is_tagged_int(word) || word == 0 {
+            return None;
+        }
+        let ptr = word_to_ptr(word);
+        // SAFETY: a live object (the caller's guarantee).
+        if unsafe { object::load_rc(ptr) } != abi::RC_UNIQUE {
+            return None;
+        }
+        // SAFETY: as above; a heap object's layout is registered.
+        unsafe { alloc::check_live(word, "a list operation") };
+        // SAFETY: as above.
+        let (_, id) = unsafe { object::scan_and_layout(ptr) };
+        match id {
+            ROOT => Some(Fast::Small(Self(word))),
+            BIG_ROOT => Some(Fast::Big(Big(Self(word)))),
+            _ => None,
+        }
     }
 
     /// The root's word.
@@ -376,8 +565,24 @@ impl Root {
         unique(self.0)
     }
 
-    /// Reads the fields, borrowing the tree.
-    pub(super) fn view(self) -> View {
+    /// Whether the count is positive: a heap root that only this fiber
+    /// holds, so a big root's leaves may be folded into its tree in place.
+    pub(super) fn is_local(self) -> bool {
+        // SAFETY: a live root (module invariant).
+        unsafe { object::load_rc(word_to_ptr(self.0)) > 0 }
+    }
+
+    /// This root as a big root, if it is one.
+    pub(super) fn big(self) -> Option<Big> {
+        // SAFETY: a live root (module invariant).
+        let (_, id) = unsafe { object::scan_and_layout(word_to_ptr(self.0)) };
+        (id == BIG_ROOT).then_some(Big(self))
+    }
+
+    /// The tree, offset and length as stored, borrowing the tree. For a
+    /// big root with a head or tail leaf, the length is the whole list's
+    /// and the tree holds only a part of it.
+    pub(super) fn raw(self) -> View {
         let ptr = word_to_ptr(self.0);
         // SAFETY: a live root has these fields (module invariant).
         let (tree, offset, len) = unsafe {
@@ -394,10 +599,32 @@ impl Root {
         }
     }
 
+    /// Reads the fields, borrowing the tree. A big root's head and tail
+    /// leaves are folded into its tree first ([`super::buffers::settle`]),
+    /// so the view is the whole list.
+    pub(super) fn view(self) -> View {
+        if let Some(big) = self.big() {
+            super::buffers::settle(big);
+        }
+        self.raw()
+    }
+
     /// The number of elements.
     pub(super) fn len(self) -> usize {
         // SAFETY: a live root has a length field.
         to_usize(unsafe { read_field(word_to_ptr(self.0), ROOT_LEN) })
+    }
+
+    /// Writes the length of a unique heap root.
+    pub(super) fn set_len(self, len: usize) {
+        // SAFETY: the caller holds the only reference to this heap root.
+        unsafe { write_field(word_to_ptr(self.0), ROOT_LEN, to_u64(len)) };
+    }
+
+    /// Writes the offset of a unique heap root.
+    pub(super) fn set_offset(self, offset: usize) {
+        // SAFETY: the caller holds the only reference to this heap root.
+        unsafe { write_field(word_to_ptr(self.0), ROOT_OFFSET, to_u64(offset)) };
     }
 
     /// Moves the tree out of a unique heap root, leaving 0 behind, so the
@@ -409,8 +636,8 @@ impl Root {
         tree
     }
 
-    /// Writes all fields of a unique heap root; the root takes ownership of
-    /// `tree` (and must hold no tree before).
+    /// Writes the tree, offset and length of a unique heap root; the root
+    /// takes ownership of `tree` (and must hold no tree before).
     pub(super) fn store(self, view: View) {
         let ptr = word_to_ptr(self.0);
         // SAFETY: the caller holds the only reference to this heap root.
@@ -437,6 +664,125 @@ impl Root {
         )));
         root.store(view);
         root
+    }
+}
+
+/// Whether `id` is the layout of a list value: a root or a big root.
+pub(super) fn is_root(id: LayoutId) -> bool {
+    id == ROOT || id == BIG_ROOT
+}
+
+/// A big root (module invariant, as for [`Root`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) struct Big(Root);
+
+impl Big {
+    /// The list value.
+    pub(super) fn root(self) -> Root {
+        self.0
+    }
+
+    fn ptr(self) -> *mut u8 {
+        word_to_ptr(self.0.0)
+    }
+
+    /// A new big root that takes `pieces` over (their length is above 0).
+    pub(super) fn new(pieces: Pieces) -> Self {
+        register();
+        let big = Self(Root(ptr_to_word(alloc::alloc_object(
+            to_u64(BIG_ROOT_SIZE),
+            abi::header(1, 0, BIG_ROOT),
+        ))));
+        big.attach(pieces);
+        big
+    }
+
+    /// The fields, borrowing the tree and the leaves.
+    pub(super) fn pieces(self) -> Pieces {
+        let view = self.0.raw();
+        Pieces {
+            tree: view.tree,
+            offset: view.offset,
+            len: view.len,
+            head: self.head(),
+            pos: self.head_pos(),
+            tail: self.tail(),
+        }
+    }
+
+    /// Moves the tree and the leaves out of a heap root that only this
+    /// fiber holds, which is left an empty list holding nothing until
+    /// [`Self::attach`]. If the work in between unwinds, the root can be
+    /// released as it is, and what was moved out is leaked (D-738).
+    pub(super) fn detach(self) -> Pieces {
+        let pieces = self.pieces();
+        self.attach(Pieces::of(View {
+            tree: None,
+            offset: 0,
+            len: 0,
+        }));
+        pieces
+    }
+
+    /// Writes all fields; the root takes `pieces` over (and must hold
+    /// nothing before).
+    pub(super) fn attach(self, pieces: Pieces) {
+        self.0.store(View {
+            tree: pieces.tree,
+            offset: pieces.offset,
+            len: pieces.len,
+        });
+        self.set_head(pieces.head, pieces.pos);
+        self.set_tail(pieces.tail);
+    }
+
+    /// The head leaf, borrowed, if any.
+    pub(super) fn head(self) -> Option<Node> {
+        // SAFETY: a live big root has this field.
+        let word = unsafe { read_field(self.ptr(), ROOT_HEAD) };
+        (word != 0).then_some(Node(word))
+    }
+
+    /// The index in the head leaf of the list's first element.
+    pub(super) fn head_pos(self) -> usize {
+        // SAFETY: a live big root has this field.
+        to_usize(unsafe { read_field(self.ptr(), ROOT_HEAD_POS) })
+    }
+
+    /// The tail leaf, borrowed, if any.
+    pub(super) fn tail(self) -> Option<Node> {
+        // SAFETY: a live big root has this field.
+        let word = unsafe { read_field(self.ptr(), ROOT_TAIL) };
+        (word != 0).then_some(Node(word))
+    }
+
+    /// Whether the root has a head or a tail leaf.
+    pub(super) fn has_buffers(self) -> bool {
+        self.head().is_some() || self.tail().is_some()
+    }
+
+    /// Writes the head leaf and its position; the root takes the leaf over
+    /// and what it held before is not released.
+    pub(super) fn set_head(self, head: Option<Node>, pos: usize) {
+        let ptr = self.ptr();
+        // SAFETY: only this fiber holds this heap root.
+        unsafe {
+            write_field(ptr, ROOT_HEAD, head.map_or(0, Node::word));
+            write_field(ptr, ROOT_HEAD_POS, to_u64(pos));
+        }
+    }
+
+    /// Writes the head position.
+    pub(super) fn set_head_pos(self, pos: usize) {
+        // SAFETY: only this fiber holds this heap root.
+        unsafe { write_field(self.ptr(), ROOT_HEAD_POS, to_u64(pos)) };
+    }
+
+    /// Writes the tail leaf; the root takes it over and what it held
+    /// before is not released.
+    pub(super) fn set_tail(self, tail: Option<Node>) {
+        // SAFETY: only this fiber holds this heap root.
+        unsafe { write_field(self.ptr(), ROOT_TAIL, tail.map_or(0, Node::word)) };
     }
 }
 
@@ -536,6 +882,16 @@ impl Node {
         self.meta().1
     }
 
+    /// A leaf's length and capacity, in one read.
+    pub(super) fn len_cap(self) -> (usize, usize) {
+        self.meta()
+    }
+
+    /// Writes a leaf's length and capacity, which the caller has read.
+    pub(super) fn put_len_cap(self, len: usize, cap: usize) {
+        self.set_meta(len, cap);
+    }
+
     /// Element `i` (below the length), borrowed.
     pub(super) fn elem(self, i: usize) -> Word {
         // SAFETY: slot `i` of a live leaf is initialized below its length.
@@ -595,6 +951,50 @@ impl Node {
     pub(super) fn put_child(self, i: usize, child: Self) {
         // SAFETY: the caller owns this branch uniquely and `i < M`.
         unsafe { write_field(self.ptr(), slot(i), child.0) };
+    }
+
+    /// Whether child slot `i` (below the count) holds a hole: the word 0
+    /// that a walk from the front leaves where it took a child out
+    /// (`buffers`).
+    pub(super) fn is_hole(self, i: usize) -> bool {
+        // SAFETY: child slot `i` of a live branch is initialized below its
+        // count.
+        unsafe { read_field(self.ptr(), slot(i)) == 0 }
+    }
+
+    /// Writes a hole into child slot `i` (below the count) of a unique
+    /// branch, without releasing what was there.
+    pub(super) fn put_hole(self, i: usize) {
+        // SAFETY: the caller owns this branch uniquely and `i < M`.
+        unsafe { write_field(self.ptr(), slot(i), 0) };
+    }
+
+    /// Removes the first `k` children of a unique branch, which has more,
+    /// without releasing them: the rest move down `k` slots, and their
+    /// sizes lose `gone`, the elements the removed children held.
+    pub(super) fn remove_first(self, k: usize, gone: usize) {
+        let left = self.slots().saturating_sub(k);
+        let ptr = self.ptr();
+        // SAFETY: the source and target ranges lie within the child slots
+        // and within the size table, below `M`; `ptr::copy` allows
+        // overlap.
+        unsafe {
+            std::ptr::copy(ptr.add(slot(k)), ptr.add(slot(0)), left.wrapping_mul(8));
+            std::ptr::copy(
+                ptr.add(size_slot(k)),
+                ptr.add(size_slot(0)),
+                left.wrapping_mul(8),
+            );
+        }
+        self.set_count(left);
+        self.shrink_sizes(gone);
+    }
+
+    /// Subtracts `gone` from every size of a unique branch.
+    pub(super) fn shrink_sizes(self, gone: usize) {
+        for i in 0..self.slots() {
+            self.put_size(i, self.size_at(i).saturating_sub(gone));
+        }
     }
 
     /// The cumulative size of children `0..=i`.

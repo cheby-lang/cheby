@@ -203,8 +203,8 @@ dependencies = [
  "cheby_test_support",
  "clap",
  "gimli",
+ "libmimalloc-sys",
  "libtest-mimic",
- "mimalloc",
  "object",
  "rustls",
  "siphasher",
@@ -410,7 +410,7 @@ name = "cheby_rt_exe"
 version = "0.0.0"
 dependencies = [
  "cheby_runtime",
- "mimalloc",
+ "libmimalloc-sys",
  "object",
 ]
 
@@ -1070,15 +1070,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d1219ed1b7f229ee7104d281dd01d6802fe28bb6e95d292942c4daacdeb798c0"
 dependencies = [
  "libc",
-]
-
-[[package]]
-name = "mimalloc"
-version = "0.1.52"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2d4139bb28d14ad1facf21d5eb8825051b326e172d216b39f6d31df53cc97862"
-dependencies = [
- "libmimalloc-sys",
 ]
 
 [[package]]

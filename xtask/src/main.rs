@@ -30,7 +30,8 @@
 //!   at the pinned commit and with the compiler parser, and fails if they
 //!   disagree (D-272).
 //! - `test-std`: checks every shipped std module with its `test` blocks
-//!   and runs them, one batch per module (D-479, D-542).
+//!   and runs them, one batch per module (D-479, D-542); `--release`
+//!   builds them in the release profile.
 //! - `bench-compile`: compile-speed numbers on generated projects (I1,
 //!   D-247, plan §8.5), with the size of the code and its RC operations
 //!   (D-718).
@@ -140,6 +141,10 @@ enum Cmd {
     TestStd {
         /// Only run tests whose full name, `std::<module> "<name>"`, contains this text
         filter: Option<String>,
+        /// Build the tests in the release profile, std's code inlined
+        /// across its modules
+        #[arg(long)]
+        release: bool,
     },
     /// Measure compile speed on generated projects (D-247)
     BenchCompile(bench::Args),
@@ -185,7 +190,7 @@ fn main() -> ExitCode {
         Cmd::CheckNativeLibs => native_libs::run(&root),
         Cmd::Coverage => coverage(&root),
         Cmd::CrossCheck(args) => cross_check::run(&root, &args),
-        Cmd::TestStd { filter } => test_std(filter.as_deref()),
+        Cmd::TestStd { filter, release } => test_std(filter.as_deref(), release),
         Cmd::BenchCompile(args) => bench::run(&root, &args),
         Cmd::BenchRun(args) => bench_run::run(&root, &args),
         Cmd::JunitReport(args) => junit::run(&root, &args),
@@ -225,9 +230,15 @@ fn bless(root: &Path, filter: Option<&str>) -> Result<(), String> {
 /// Tests the standard library (D-542) and prints the report: a line per
 /// test, the modules and tests that did not build with their codes, a
 /// block per failure, and the counts per module and in total. Fails when a
-/// test failed or did not build.
-fn test_std(filter: Option<&str>) -> Result<(), String> {
-    let report = cheby_driver::test_std(filter).map_err(|e| e.message().to_owned())?;
+/// test failed or did not build. With `release`, the tests are built in
+/// the release profile.
+fn test_std(filter: Option<&str>, release: bool) -> Result<(), String> {
+    let profile = if release {
+        cheby_driver::Profile::Release
+    } else {
+        cheby_driver::Profile::Debug
+    };
+    let report = cheby_driver::test_std_in(filter, profile).map_err(|e| e.message().to_owned())?;
     print!("{}", report.render());
     if report.success() {
         Ok(())

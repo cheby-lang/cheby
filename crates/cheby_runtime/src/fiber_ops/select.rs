@@ -563,7 +563,7 @@ unsafe fn wait(ctx: *mut ExecCtx, selector: Word) -> Word {
             // a cancellation of this fiber's enclosing scope reached first:
             // then this fiber is being cancelled too, and takes nothing
             // (D-670).
-            if cancel::check_chain(me, me.conc.responsible_scope()).is_err() {
+            if cancel::check_chain(me, me.conc.responsible_scope().as_ref()).is_err() {
                 #[cfg(test)]
                 CLOSED_WAKES_CANCELLED.fetch_add(1, Ordering::Relaxed);
                 raise_cancel(Some(ctx));

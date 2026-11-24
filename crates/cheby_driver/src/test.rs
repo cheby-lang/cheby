@@ -95,6 +95,9 @@ pub struct TestOptions {
     /// D-717). A test build can infer other borrow masks than `cheby run`
     /// (D-779, D-813), so its report can differ.
     pub reuse_report: bool,
+    /// `--release`: the tests are compiled in the release profile; debug
+    /// by default.
+    pub profile: crate::Profile,
 }
 
 /// The outcome of [`prepare_test`].
@@ -430,7 +433,7 @@ fn prepare_test_once(
         None,
         &mut out,
         cache,
-        warm.map(|reuse| (reuse, None)),
+        warm.map(|reuse| (reuse, None, options.profile)),
     )?;
     out.sources.sort(&mut out.diagnostics);
     let Some((front, package)) = front.filter(|_| !out.has_errors()) else {
@@ -487,6 +490,7 @@ fn prepare_test_once(
             Roots::Tests(roots),
             false,
             options.reuse_report,
+            options.profile,
         ) {
             Err(_) if warm.is_some() && front.wanted_body() => {
                 return Err(crate::Restart::Again(mark));
@@ -1235,6 +1239,17 @@ const STD_TEST_PACKAGE: &str = "std_self_test";
 /// An [`Error`] for internal failures that stop the whole run, such as a
 /// std file that does not parse.
 pub fn test_std(filter: Option<&str>) -> Result<TestReport, Error> {
+    test_std_in(filter, cheby_mir::Profile::Debug)
+}
+
+/// [`test_std`] with std's tests built in `profile`: `cargo xtask test-std
+/// --release` runs them on std's release code, inlined across std's
+/// modules (design T8, T9), the oracle of the release inliner.
+///
+/// # Errors
+///
+/// As [`test_std`].
+pub fn test_std_in(filter: Option<&str>, profile: cheby_mir::Profile) -> Result<TestReport, Error> {
     let mut sources = SourceMap::new();
     let mut diagnostics = Vec::new();
     let package = std_test_package(&mut sources, &mut diagnostics)?;
@@ -1282,7 +1297,7 @@ pub fn test_std(filter: Option<&str>) -> Result<TestReport, Error> {
             continue;
         }
         report.modules.push(std_module_tests(
-            &front, &sources, module, shown, &selected,
+            &front, &sources, module, shown, &selected, profile,
         )?);
     }
     Ok(report)
@@ -1296,6 +1311,7 @@ fn std_module_tests(
     module: ModuleId,
     path: String,
     selected: &[&thir::TestDef],
+    profile: cheby_mir::Profile,
 ) -> Result<ModuleTests, Error> {
     let roots = selected
         .iter()
@@ -1305,12 +1321,12 @@ fn std_module_tests(
     // Std has no manifest: the default stacks (D-660).
     let runtime = test_runtime(STD_TEST_PACKAGE, Stacks::DEFAULT, None)?;
     let mut tests = Vec::with_capacity(selected.len());
-    let batch = match build_codes(front, sources, Roots::Tests(roots)) {
+    let batch = match build_codes(front, sources, Roots::Tests(roots), profile) {
         Ok(jit) => jit,
         Err(codes) => {
             for &test in selected {
                 let alone = vec![TestRoot { module, test }];
-                match build_codes(front, sources, Roots::Tests(alone)) {
+                match build_codes(front, sources, Roots::Tests(alone), profile) {
                     // The runner tears the test's detached fibers down
                     // before it returns, so none of them can run this
                     // test's code once `jit` is dropped here (D-708,
@@ -1427,11 +1443,17 @@ fn not_built_module(path: String, selected: &[&thir::TestDef], codes: String) ->
     }
 }
 
-/// Builds `roots`; a build that fails gives its distinct codes, sorted
-/// and joined with `, `, or the message of the error that stopped it (an
-/// internal compiler error's starts with `internal compiler error: `).
-fn build_codes(front: &Frontend, sources: &SourceMap, roots: Roots<'_>) -> Result<Jit, String> {
-    match backend::build(front, sources, roots, false) {
+/// Builds `roots` in `profile`; a build that fails gives its distinct
+/// codes, sorted and joined with `, `, or the message of the error that
+/// stopped it (an internal compiler error's starts with `internal compiler
+/// error: `).
+fn build_codes(
+    front: &Frontend,
+    sources: &SourceMap,
+    roots: Roots<'_>,
+    profile: cheby_mir::Profile,
+) -> Result<Jit, String> {
+    match backend::build_reporting(front, sources, roots, false, false, profile) {
         Ok(Ok(built)) => Ok(built.jit),
         Ok(Err(diagnostics)) => Err(join_codes(&diagnostics)),
         Err(e) => Err(e.message().to_owned()),

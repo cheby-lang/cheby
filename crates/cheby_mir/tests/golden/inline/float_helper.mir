@@ -1,0 +1,28 @@
+fn app::row_sum(_0: int, _1: int, _2: int, _3: float) -> value check str#0 {
+  entry unwind bb3
+  str#0 = "src/main.cheby:13:4"
+  str#1 = "src/main.cheby:16:25"
+  str#2 = "src/main.cheby:8:12"
+  str#3 = "src/main.cheby:9:31"
+  str#4 = "src/main.cheby:9:25"
+bb0:
+  _4: bool = compare eq int _1, _2
+  branch _4, bb2, bb1
+bb1:
+  _6: int = checked add int _1, const int 1 at str#1 ; unwind bb3
+  _11: int = checked add int _0, _1 at str#2 ; unwind bb3
+  _12: int = checked add int _11, const int 1 at str#3 ; unwind bb3
+  _13: int = checked mul int _11, _12 at str#4 ; unwind bb3
+  _14: int = checked div int _13, const int 2 at str#4 ; unwind bb3
+  _15: int = checked add int _14, _0 at str#4 ; unwind bb3
+  _16: int = checked add int _15, const int 1 at str#4 ; unwind bb3
+  _17: float = convert int float _16
+  _18: float = float_arith div float const float 1.0, _17
+  _9: float = float_arith add float _3, _18
+  tail_call app::row_sum(_0, _6, _2, _9)
+bb2:
+  _10: value = box float _3 ; unwind bb3
+  return _10
+bb3:
+  resume
+}

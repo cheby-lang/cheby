@@ -39,6 +39,11 @@
 //! binary is built with `--release` first, or `--rust-bin` names a
 //! prebuilt one and cargo is not run for it.
 //!
+//! With `--release`, every `cheby run` and `cheby build` of every binary,
+//! the `--against` one included, gets `--release`, so the programs run in
+//! the release profile; `--env CHEBY_RELEASE_OFF=<levers>` turns release
+//! levers off for every run. `cheby check` has no profile.
+//!
 //! With `--split` (D-1254, D-1271), each benchmark's timed runs and stats run are
 //! followed by the split of the time outside `main`, read only from what
 //! `cheby` already prints. Each binary first runs one untimed `cheby
@@ -91,6 +96,10 @@ const SPLIT_WARMUP: usize = 1;
 
 /// The command's options.
 #[derive(Debug, clap::Args)]
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "independent command-line switches, each read on its own"
+)]
 pub(crate) struct Args {
     /// One run per benchmark (unless `--runs` says otherwise)
     #[arg(long)]
@@ -158,6 +167,33 @@ pub(crate) struct Args {
     /// Timed runs of each command of `--split` per benchmark (default 5)
     #[arg(long, value_name = "N", requires = "split")]
     split_runs: Option<usize>,
+    /// Run and build every benchmark in the release profile: `--release`
+    /// on each `cheby run` and `cheby build`, of the `--against` binary
+    /// too; `--env CHEBY_RELEASE_OFF=…` turns levers off
+    #[arg(long)]
+    release: bool,
+}
+
+/// Whether every `cheby run` and `cheby build` gets `--release`
+/// (`Args::release`), set once when the command starts.
+static RELEASE: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+
+/// `args`, a `cheby` command line that starts with `--color=never` and the
+/// command, with `--release` after the command when `Args::release` asks
+/// for it and the command is `run` or `build`.
+fn with_profile<'a>(args: &[&'a OsStr]) -> Vec<&'a OsStr> {
+    let mut out = args.to_vec();
+    let release = RELEASE.get().copied().unwrap_or(false);
+    // Only `cheby`'s command lines start with `--color=never`: an
+    // executable or a Rust baseline is run as it is.
+    let builds = args.first() == Some(&OsStr::new("--color=never"))
+        && args.get(1).is_some_and(|command| {
+            *command == OsStr::new("run") || *command == OsStr::new("build")
+        });
+    if release && builds {
+        out.insert(2, OsStr::new("--release"));
+    }
+    out
 }
 
 /// Parses `KEY=VALUE`.
@@ -212,6 +248,9 @@ fn nanos(d: Duration) -> u64 {
 }
 
 pub(crate) fn run(root: &Path, args: &Args) -> Result<(), String> {
+    if RELEASE.set(args.release).is_err() && RELEASE.get() != Some(&args.release) {
+        return Err("bench-run ran twice in one process with other profiles".to_owned());
+    }
     let runs = args.runs.unwrap_or(if args.quick { 1 } else { 5 });
     if runs == 0 {
         return Err("--runs must be at least 1".to_owned());
@@ -693,7 +732,11 @@ fn run_once(
     stats: bool,
 ) -> Result<(Duration, String, String), String> {
     let mut cmd = Command::new(cheby);
-    cmd.args(["--color=never", "run"]).current_dir(dir);
+    cmd.args(with_profile(&[
+        OsStr::new("--color=never"),
+        OsStr::new("run"),
+    ]))
+    .current_dir(dir);
     for (key, value) in env {
         cmd.env(key, value);
     }
@@ -892,7 +935,8 @@ fn run_timed<S: AsRef<OsStr>>(
     log: Option<&Path>,
 ) -> Result<Finished, String> {
     let mut cmd = Command::new(program);
-    cmd.args(args).current_dir(dir);
+    let args: Vec<&OsStr> = args.iter().map(AsRef::as_ref).collect();
+    cmd.args(with_profile(&args)).current_dir(dir);
     for (key, value) in env {
         cmd.env(key, value);
     }
@@ -1863,6 +1907,54 @@ mod tests {
         );
         assert_eq!(report.mismatches.len(), 1, "{:?}", report.mismatches);
         assert!(report.mismatches[0].contains("sorted_map@rust-btree"));
+    }
+
+    /// `--release` parses, and goes after the command of `cheby run` and
+    /// `cheby build` only; without it nothing changes.
+    #[test]
+    fn bench_release_flag_goes_after_run_and_build() {
+        #[derive(clap::Parser)]
+        struct Cli {
+            #[command(flatten)]
+            args: Args,
+        }
+        use clap::Parser as _;
+        assert!(
+            Cli::try_parse_from(["bench-run", "--release"])
+                .unwrap()
+                .args
+                .release
+        );
+        assert!(!Cli::try_parse_from(["bench-run"]).unwrap().args.release);
+        let line = |args: &[&str]| -> Vec<String> {
+            let args: Vec<&OsStr> = args.iter().map(OsStr::new).collect();
+            with_profile(&args)
+                .iter()
+                .map(|a| a.to_string_lossy().into_owned())
+                .collect()
+        };
+        // This process's flag is unset or false in every other test.
+        if RELEASE.get().copied().unwrap_or(false) {
+            return;
+        }
+        assert_eq!(line(&["--color=never", "run"]), ["--color=never", "run"]);
+        RELEASE.get_or_init(|| true);
+        if !RELEASE.get().copied().unwrap_or(false) {
+            return;
+        }
+        assert_eq!(
+            line(&["--color=never", "run"]),
+            ["--color=never", "run", "--release"]
+        );
+        assert_eq!(
+            line(&["--color=never", "build", "-o", "out"]),
+            ["--color=never", "build", "--release", "-o", "out"]
+        );
+        assert_eq!(
+            line(&["--color=never", "check"]),
+            ["--color=never", "check"]
+        );
+        assert_eq!(line(&["run"]), ["run"]);
     }
 
     #[test]

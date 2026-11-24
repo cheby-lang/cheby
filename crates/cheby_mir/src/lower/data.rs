@@ -839,7 +839,11 @@ fn main() {
     /// List literals: `[]` is the static empty list; elements are pushed
     /// onto one accumulator; a leading spread is the accumulator itself,
     /// moved when it is the operand's last use (so `[..found, item]`
-    /// pushes in place), and later spreads are appended (D-157, F3).
+    /// pushes in place), and later spreads are appended (D-157, F3). A few
+    /// elements before the first spread are evaluated first and then
+    /// prepended onto it, the last first (`cons`, `last`), so a spread
+    /// used again (`shared`) is dup'd; more than `PREPEND_MAX` are pushed
+    /// as before (`many`).
     #[test]
     fn data_list_literals() {
         let lowered = lower(
@@ -877,6 +881,26 @@ fn twice(xs: List<Int>) -> List<Int> {
   [..xs, ..xs]
 }
 
+fn cons(a: String, b: String, xs: List<String>) -> List<String> {
+  [a, b, ..xs]
+}
+
+fn around(xs: List<Int>, n: Int) -> List<Int> {
+  [n, ..xs, n]
+}
+
+fn spreads(xs: List<Int>, ys: List<Int>) -> List<Int> {
+  [7, ..xs, ..ys]
+}
+
+fn shared(xs: List<Int>) -> (List<Int>, List<Int>) {
+  ([0, ..xs], xs)
+}
+
+fn many(xs: List<Int>) -> List<Int> {
+  [1, 2, 3, 4, 5, 6, 7, 8, 9, ..xs]
+}
+
 fn main() {
   let _ = empty()
   let _ = elements(2)
@@ -886,6 +910,11 @@ fn main() {
   let _ = middle([1], [2])
   let _ = last([1])
   let _ = twice([1])
+  let _ = cons("a", "b", ["c"])
+  let _ = around([1], 2)
+  let _ = spreads([1], [2])
+  let _ = shared([1])
+  let _ = many([10])
 }
 "#,
         );

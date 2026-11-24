@@ -1,0 +1,17 @@
+fn app::pick(_0: int, _1: int) -> value check str#0 {
+  str#0 = "src/main.cheby:14:4"
+bb0:
+  _2: value = box int _0
+  _3: value = box int _1
+  _11: bool = compare lt int _0, _1
+  branch _11, bb2, bb4
+bb1:
+  goto bb3(_3)
+bb2:
+  goto bb3(_2)
+bb3(_8: value):
+  return _8
+bb4:
+  _13: bool = compare gt int _0, _1
+  branch _13, bb1, bb2
+}

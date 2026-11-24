@@ -1,0 +1,8 @@
+fn app::twice(_0: int) -> value check str#0 {
+  str#0 = "src/main.cheby:26:4"
+  str#1 = "src/main.cheby:23:3"
+bb0:
+  _4: int = checked mul int _0, const int 2 at str#1
+  _5: value = box int _4
+  return _5
+}

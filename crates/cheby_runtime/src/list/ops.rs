@@ -5,7 +5,8 @@
 //! root is updated in place and returned; so is the tree under it, node
 //! by node, where it is unique (D-274, §9.3).
 
-use super::node::{M, MAX_NODE_SIZE, Node, ROOT_SIZE, Root, View, drop_word, dup_word, empty};
+use super::buffers;
+use super::node::{BIG_ROOT_SIZE, M, MAX_NODE_SIZE, Node, Root, View, drop_word, dup_word, empty};
 use super::tree;
 use crate::abi::{self, Word};
 use crate::stats::{self, Event};
@@ -16,66 +17,154 @@ pub(crate) fn len(list: Root) -> usize {
 }
 
 /// Element `index` of a borrowed list, borrowed, or `None` outside it.
+/// A big root's head and tail leaves are read where they are, so a lookup
+/// between two pushes leaves the tail leaf alone.
 pub(crate) fn get(list: Root, index: usize) -> Option<Word> {
-    let view = list.view();
-    if index >= view.len {
+    if index >= list.len() {
         return None;
     }
-    view.tree
-        .map(|tree| tree::get(tree, view.offset.saturating_add(index)))
+    let Some(big) = list.big() else {
+        let view = list.raw();
+        return view
+            .tree
+            .map(|tree| tree::get(tree, view.offset.saturating_add(index)));
+    };
+    let pieces = big.pieces();
+    let head_left = pieces.head_left();
+    if index < head_left {
+        return pieces
+            .head
+            .map(|head| head.elem(pieces.pos.saturating_add(index)));
+    }
+    let index = index.saturating_sub(head_left);
+    let tree_len = pieces.tree_len();
+    if index < tree_len {
+        return pieces
+            .tree
+            .map(|tree| tree::get(tree, pieces.offset.saturating_add(index)));
+    }
+    pieces
+        .tail
+        .map(|tail| tail.elem(index.saturating_sub(tree_len)))
 }
 
-/// The bytes of `nodes` nodes of the largest size and a root.
+/// The bytes of `nodes` nodes of the largest size and a big root.
 fn nodes_and_root(nodes: usize) -> u64 {
     let bytes = nodes
         .saturating_mul(MAX_NODE_SIZE)
-        .saturating_add(ROOT_SIZE);
+        .saturating_add(BIG_ROOT_SIZE);
     u64::try_from(bytes).unwrap_or(u64::MAX)
 }
 
-/// The height of the tallest tree of `lists`, 0 for none.
-fn tallest(lists: &[Root]) -> usize {
-    lists
-        .iter()
-        .filter_map(|list| list.view().tree)
-        .map(Node::height)
-        .max()
-        .unwrap_or(0)
+/// The height `h` of `list`'s tree once it holds the whole list, and the
+/// most nodes that folding a big root's head and tail leaves into the
+/// tree allocates ([`buffers::settle`]), 0 for a list that has neither.
+/// A head leaf goes in like an [`append`]: its copy (1), the tree trimmed
+/// at both ends (`2(h + 1)`), the leaf wrapped up to `h` (`h`), the seam
+/// repacked at each level (`2M + 3`) and a new top (1). A tail leaf goes
+/// in like a [`push`]: the cut of a part that ends early (`h + 1`), a copy
+/// and a new sibling per level and a new top (`2h + 1`).
+fn height_and_fold(list: Root) -> (usize, usize) {
+    let h = list.raw().tree.map_or(0, Node::height);
+    let Some(big) = list.big().filter(|big| big.has_buffers()) else {
+        return (h, 0);
+    };
+    let h = h.saturating_add(1);
+    let head = if big.head().is_some() {
+        let per_level = M.saturating_mul(2).saturating_add(3);
+        h.saturating_mul(per_level)
+            .saturating_add(h.saturating_mul(3))
+            .saturating_add(4)
+    } else {
+        0
+    };
+    let tail = if big.tail().is_some() {
+        h.saturating_mul(3).saturating_add(2)
+    } else {
+        0
+    };
+    (h, head.saturating_add(tail))
+}
+
+/// The most bytes that folding `list`'s head and tail leaves into its
+/// tree allocates, for the memory-budget check before the fold.
+pub(super) fn fold_bound(list: Root) -> u64 {
+    let (_, fold) = height_and_fold(list);
+    u64::try_from(fold.saturating_mul(MAX_NODE_SIZE)).unwrap_or(u64::MAX)
 }
 
 // Upper bounds of what an update allocates, for the memory-budget check
 // a runtime helper makes before it takes its owned arguments over (D-698,
-// D-738). A request a bound missed would only leak
+// D-738, D-1760). A request a bound missed would only leak
 // what the update held, if the budget then ran out halfway.
 
 /// [`push`] onto `list` of height `h`: the cut of a view that ends early
-/// (one node per level), a copy and a new sibling per level, a new top,
-/// and a root: at most `3h + 4` nodes.
+/// (one node per level), a copy and a new sibling per level, a new top, a
+/// new tail leaf and a root, after the fold of a big root that is not
+/// unique: at most `3h + 5` nodes and the fold's. For a unique big root,
+/// `h` counts the level its tail leaf may add.
 pub(crate) fn push_bound(list: Root) -> u64 {
-    let h = tallest(&[list]);
-    nodes_and_root(h.saturating_mul(3).saturating_add(4))
+    let (h, fold) = height_and_fold(list);
+    // A unique big root takes the element without the fold.
+    let fold = if list.is_unique() { 0 } else { fold };
+    nodes_and_root(h.saturating_mul(3).saturating_add(5).saturating_add(fold))
+}
+
+/// [`set`] of an element of `list` of height `h`: a copy of each node
+/// on its path (`h + 1`) and a root, after the fold of a big root's head
+/// and tail leaves.
+pub(crate) fn set_bound(list: Root) -> u64 {
+    let (h, fold) = height_and_fold(list);
+    nodes_and_root(h.saturating_add(1).saturating_add(fold))
 }
 
 /// [`append`] of `a` and `b`, the taller of height `h`: both trimmed at
 /// both ends (`4(h + 1)` nodes), the shorter wrapped up to `h` (`h`), the
 /// merged leaves (1), at each branch level the seam's children repacked
-/// and their new parents (`2M + 3`), a new top (1), and a root.
+/// and their new parents (`2M + 3`), a new top (1), and a root, after the
+/// folds of big roots.
 pub(crate) fn append_bound(a: Root, b: Root) -> u64 {
-    let h = tallest(&[a, b]);
+    let ((ha, fold_a), (hb, fold_b)) = (height_and_fold(a), height_and_fold(b));
+    let h = ha.max(hb);
     let per_level = M.saturating_mul(2).saturating_add(3);
     let nodes = h
         .saturating_mul(per_level)
         .saturating_add(h.saturating_mul(5))
-        .saturating_add(6);
+        .saturating_add(6)
+        .saturating_add(fold_a)
+        .saturating_add(fold_b);
     nodes_and_root(nodes)
 }
 
-/// [`slice_owned`] of `list` of height `h`: a cut of a unique tree may
-/// copy the shared nodes along its two edges ([`trimmed`]), a path each,
-/// and a root: at most `2 (h + 1)` nodes.
+/// [`prepend`] onto `list` of height `h`: the tree trimmed at both ends
+/// (`2(h + 1)` nodes), then an element added in place or concatenated as
+/// a new leaf (as [`append`]: the leaf wrapped up to `h`, the seam
+/// repacked at each level, a new top), a new head leaf and a root, after
+/// the fold of a big root that is not unique or whose head leaf is full.
+pub(crate) fn prepend_bound(list: Root) -> u64 {
+    let (h, fold) = height_and_fold(list);
+    let per_level = M.saturating_mul(2).saturating_add(3);
+    let nodes = h
+        .saturating_mul(per_level)
+        .saturating_add(h.saturating_mul(3))
+        .saturating_add(5)
+        .saturating_add(fold);
+    nodes_and_root(nodes)
+}
+
+/// [`slice_owned`] and [`uncons_owned`] of `list` of height `h`: a cut
+/// of a unique tree may copy the shared nodes along its two edges
+/// ([`trimmed`]), a path each, a pattern step may copy one leaf that
+/// another list holds, and a root, after the fold of a big root: at most
+/// `2(h + 1) + 1` nodes and the fold's.
 pub(crate) fn slice_owned_bound(list: Root) -> u64 {
-    let h = tallest(&[list]);
-    nodes_and_root(h.saturating_add(1).saturating_mul(2))
+    let (h, fold) = height_and_fold(list);
+    nodes_and_root(
+        h.saturating_add(1)
+            .saturating_mul(2)
+            .saturating_add(1)
+            .saturating_add(fold),
+    )
 }
 
 /// The most slots [`narrow`] clears one by one; a larger cut restructures
@@ -85,7 +174,7 @@ const CLEAR_MAX: usize = 4;
 
 /// What a cleared slot holds: a tagged `Int`, which owns nothing (D-521).
 /// It sits outside the view, so nothing reads it.
-const CLEARED: Word = match abi::tag_int(0) {
+pub(super) const CLEARED: Word = match abi::tag_int(0) {
     Some(word) => word,
     None => panic!("0 is a tagged Int"),
 };
@@ -148,7 +237,7 @@ fn narrow(view: View, start: usize, end: usize) -> View {
 
 /// The tree holding exactly the view's elements, owned (the view's tree
 /// must be owned): cut at both ends where the view is narrower.
-fn trimmed(view: View) -> Option<Node> {
+pub(super) fn trimmed(view: View) -> Option<Node> {
     let tree = view.tree?;
     if view.len == 0 {
         tree.release();
@@ -201,11 +290,36 @@ fn update(list: Root, change: impl FnOnce(View) -> View) -> Root {
 }
 
 /// `list` (owned) with the owned `elem` added at the end. In place when the
-/// list is unique: amortized O(1) allocation per element, O(log n) time.
+/// list is unique: amortized O(1) allocation per element, and O(1) time
+/// but for one element in [`M`], which costs O(log n). A unique root whose
+/// list outgrows its last leaf is replaced by a big root.
 pub(crate) fn push(list: Root, elem: Word) -> Root {
     // A push onto an empty list builds a new root either way.
     if list.is_unique() {
         stats::record(Event::ListPushInPlace);
+        if list.big().is_some() {
+            return buffers::push(list, elem);
+        }
+        let view = list.raw();
+        if let Some(tree) = view.tree
+            && view.offset.saturating_add(view.len) == tree.len()
+            && tree::last_leaf_full(tree)
+        {
+            if tree.is_leaf() && tree.is_unique() && spare_is_worth_a_move(view.offset, view.len) {
+                // One full-size leaf whose free slots all lie before its
+                // elements: the elements move towards the front, once for
+                // several pushes.
+                let offset = view.offset / 2;
+                tree::slide(tree, view.offset, offset, CLEARED);
+                tree.put_elem(offset.saturating_add(view.len), elem);
+                tree.set_len(offset.saturating_add(view.len).saturating_add(1));
+                list.set_offset(offset);
+                list.set_len(view.len.saturating_add(1));
+                return list;
+            }
+            // The list outgrows its last leaf: a tail leaf takes over.
+            return buffers::push(list, elem);
+        }
     } else if list.len() > 0 {
         stats::record(Event::ListPushCopied);
     }
@@ -233,10 +347,65 @@ pub(crate) fn push(list: Root, elem: Word) -> Root {
     })
 }
 
-/// `list` (owned) with the owned `elem` added at the front. O(log n); in
-/// place along the left edge when it is unique, with amortized O(1)
-/// allocation per element.
+/// Whether moving the `len` elements of a full-size leaf is worth its
+/// `spare` free slots, which all lie at the end the list does not grow
+/// at: when they are at least a quarter of the elements, so a move of
+/// each element pays for a quarter of an addition or more. A list that
+/// stays closer to a full leaf, such as a queue of 30 elements, would
+/// move its elements at almost every step, and gets a big root instead
+/// (D-1757).
+fn spare_is_worth_a_move(spare: usize, len: usize) -> bool {
+    spare.saturating_mul(4) >= len
+}
+
+/// `list` (owned) with the owned `elem` added at the front. In place when
+/// the list is unique, as [`push`] is at the other end.
 pub(crate) fn prepend(list: Root, elem: Word) -> Root {
+    if list.is_unique() {
+        if list.big().is_some() {
+            stats::record(Event::ListUpdateInPlace);
+            return buffers::prepend(list, elem);
+        }
+        let view = list.raw();
+        if let Some(tree) = view.tree
+            && view.offset == 0
+        {
+            if tree::first_leaf_full(tree) {
+                // The list outgrows its first leaf: a head leaf takes
+                // over.
+                stats::record(Event::ListUpdateInPlace);
+                return buffers::prepend(list, elem);
+            }
+            if tree.is_leaf() && tree.is_unique() && tree.slots() == view.len {
+                // One unique leaf with no slot free before its first
+                // element: the elements move towards the end of a leaf of
+                // twice the capacity, or of this leaf once it has its
+                // full size, once for several prepends.
+                let free = M.saturating_sub(view.len);
+                let moved = if tree.cap() < M {
+                    list.take_tree();
+                    Some(tree::gap_front(tree, CLEARED))
+                } else if spare_is_worth_a_move(free, view.len) {
+                    let first = free.saturating_sub(free / 2);
+                    tree::slide(tree, 0, first, CLEARED);
+                    Some((tree, first))
+                } else {
+                    None
+                };
+                if let Some((leaf, first)) = moved {
+                    stats::record(Event::ListUpdateInPlace);
+                    let before = first.saturating_sub(1);
+                    leaf.put_elem(before, elem);
+                    list.store(View {
+                        tree: Some(leaf),
+                        offset: before,
+                        len: view.len.saturating_add(1),
+                    });
+                    return list;
+                }
+            }
+        }
+    }
     update(list, |view| {
         let len = view.len.saturating_add(1);
         let tree = match trimmed(view) {
@@ -275,7 +444,8 @@ pub(crate) fn append(a: Root, b: Root) -> Root {
     if bview.len == 0 {
         return a;
     }
-    if a.len() == 0 {
+    // Both lists' leaves are folded before anything is held.
+    if a.view().len == 0 {
         drop_word(a.word());
         dup_word(b.word());
         return b;
@@ -387,21 +557,18 @@ pub(crate) fn uncons_owned(list: Root, at: usize, start: usize, end: usize) -> (
     let front = at == 0 && start == 1 && end == len;
     let back = start == 0 && end == at && at.saturating_add(1) == len;
     if (front || back) && len > 1 && list.is_unique() {
-        let view = list.view();
-        if let Some(tree) = view.tree {
-            stats::record(Event::ListUpdateInPlace);
-            let head = tree::take_or_get(tree, view.offset.saturating_add(at), CLEARED);
-            list.store(View {
-                tree: Some(tree),
-                offset: if front {
-                    view.offset.saturating_add(1)
-                } else {
-                    view.offset
-                },
-                len: len.saturating_sub(1),
-            });
-            return (head, list);
-        }
+        // SAFETY: a live list (module invariant of `Root`).
+        let fast = unsafe {
+            if front {
+                buffers::uncons_front_fast(list.word())
+            } else {
+                buffers::uncons_back_fast(list.word())
+            }
+        };
+        return match fast {
+            Some(elem) => (elem, list),
+            None => buffers::uncons(list, front),
+        };
     }
     let head = get(list, at).unwrap_or_else(|| {
         crate::panic::fatal(format_args!(
@@ -439,8 +606,9 @@ pub(crate) struct Iter {
 impl Iter {
     /// Iterates over a borrowed list.
     pub(crate) fn new(list: Root) -> Self {
-        dup_word(list.word());
+        // The view first: folding a big root's leaves may raise.
         let view = list.view();
+        dup_word(list.word());
         let mut stack = Vec::new();
         let leaf = view.tree.filter(|_| view.len > 0).map(|tree| {
             let (mut node, mut i) = (tree, view.offset);
@@ -513,5 +681,12 @@ impl Drop for Iter {
 pub(crate) fn from_iter(items: impl IntoIterator<Item = Word>) -> Root {
     // SAFETY: the static empty list is a live list.
     let empty = unsafe { Root::from_word(empty()) };
-    items.into_iter().fold(empty, push)
+    let list = items.into_iter().fold(empty, push);
+    // A list the runtime builds may be made static or shared without the
+    // walk that folds a big root's leaves into its tree, so it leaves
+    // here with them folded.
+    if let Some(big) = list.big() {
+        buffers::settle(big);
+    }
+    list
 }

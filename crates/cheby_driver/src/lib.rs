@@ -87,11 +87,12 @@ mod test;
 mod warm_keys;
 
 pub use aot::{BuildOptions, BuildOutcome, build_cached, build_cached_with, build_target};
+pub use cheby_mir::Profile;
 pub use cheby_package::Target;
 pub use cheby_package::{EXTENSION, is_valid_name, module_file, suggest_name};
 pub use test::{
     ModuleTests, PreparedTests, TestCounts, TestOptions, TestOutcome, TestProgram, TestReport,
-    TestResult, prepare_test, prepare_test_cached, test_std,
+    TestResult, prepare_test, prepare_test_cached, test_std, test_std_in,
 };
 
 /// What a command reads and writes in the build cache (D-956 to D-965):
@@ -640,8 +641,9 @@ fn front_end_for(
 /// that must start again ([`frontend::Stop::Restart`]) is run once more
 /// from the start, every module parsed and every hit decoded at its lookup.
 /// `warm` is `Some` for `cheby run`, `cheby test` and `cheby build`
-/// (D-1250), with whether the command prints the reuse report and the
-/// `--module` path: their front end checks only what their build needs
+/// (D-1250), with whether the command prints the reuse report, the
+/// `--module` path and the profile: their front end checks only what their
+/// build needs, every package module in release
 /// ([`crate::warm_keys`]); `None` checks every module, as a command that
 /// starts again after its build wanted a hit's body does.
 fn front_end_family(
@@ -651,7 +653,7 @@ fn front_end_family(
     target: Option<Target>,
     out: &mut CheckOutput,
     cache: Option<&Cache>,
-    warm: Option<(bool, Option<&str>)>,
+    warm: Option<(bool, Option<&str>, Profile)>,
 ) -> Result<Option<(frontend::Frontend, String)>, Error> {
     let deny_warnings = out.deny_warnings;
     let index_key = cache.map(|cache| {
@@ -673,7 +675,7 @@ fn front_end_family(
     // its misses are decided as `cheby run`'s are, over its own package
     // index (D-962). D-1285.
     let build = match (mode, warm) {
-        (frontend::Mode::Build, Some((reuse, main)))
+        (frontend::Mode::Build, Some((reuse, main, profile)))
             if matches!(
                 family,
                 cache::index::CommandFamily::Run
@@ -681,7 +683,7 @@ fn front_end_family(
                     | cache::index::CommandFamily::Build
             ) =>
         {
-            backend::mir_options_from_env()
+            backend::mir_options_for(profile)
                 .ok()
                 .map(|mir| warm_keys::WarmBuild {
                     mir,
@@ -806,6 +808,9 @@ pub struct RunOptions {
     /// `--reuse-report`: the build also gives the reuse report
     /// ([`Program::reuse_report`], D-717).
     pub reuse_report: bool,
+    /// `--release`: the program is compiled in the release profile; debug
+    /// by default.
+    pub profile: Profile,
 }
 
 /// The outcome of [`prepare_run`].
@@ -995,7 +1000,7 @@ fn prepare_run_once(
         None,
         &mut out,
         cache,
-        warm.map(|reuse| (reuse, options.module_path.as_deref())),
+        warm.map(|reuse| (reuse, options.module_path.as_deref(), options.profile)),
     )?;
     out.sources.sort(&mut out.diagnostics);
     let Some((front, package)) = front.filter(|_| !out.has_errors()) else {
@@ -1021,6 +1026,7 @@ fn prepare_run_once(
         backend::Roots::Main(main),
         false,
         options.reuse_report,
+        options.profile,
     ) {
         Err(_) if warm.is_some() && front.wanted_body() => return Err(Restart::Again(mark)),
         built => built?,

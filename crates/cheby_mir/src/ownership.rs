@@ -434,6 +434,9 @@ impl<O: Observer> Sim<'_, O> {
                                 | Rvalue::FloatArith { .. }
                                 | Rvalue::Bitwise { .. }
                                 | Rvalue::FloatNeg { .. }
+                                | Rvalue::Convert { .. }
+                                | Rvalue::FloatSqrt { .. }
+                                | Rvalue::Wrapping { .. }
                                 | Rvalue::Not(_)
                                 | Rvalue::ReadTag { .. }
                                 | Rvalue::DropReuse { .. }
@@ -673,6 +676,9 @@ fn consumed_on_unwind(value: &Rvalue) -> Vec<(Local, UseKind)> {
         | Rvalue::FloatArith { .. }
         | Rvalue::Bitwise { .. }
         | Rvalue::FloatNeg { .. }
+        | Rvalue::Convert { .. }
+        | Rvalue::FloatSqrt { .. }
+        | Rvalue::Wrapping { .. }
         | Rvalue::Not(_)
         | Rvalue::ReadTag { .. }
         | Rvalue::DropReuse { .. }

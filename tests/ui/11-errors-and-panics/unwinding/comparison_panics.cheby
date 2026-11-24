@@ -1,0 +1,78 @@
+// @mode: run-pass
+// @milestone: M3
+// @decisions: D-698, D-697, D-1448, D-1613
+//! A panic in the comparison of a direct call of `list::sort_with`, or in
+//! the `compare` of a heap's element type, which the caller's code calls
+//! between the runtime's steps, unwinds through the steps: the state of a
+//! sort and the list a heap's update works on are each released once, so
+//! the scope that catches the panic leaves nothing leaked, and a list or a
+//! heap that another value holds is unchanged and usable afterwards.
+
+import std::fiber
+import std::heap
+import std::int
+import std::io
+import std::list
+import std::string
+
+type Job {
+  rank: Int,
+  name: String,
+}
+
+/// Jobs are ordered by rank, and two jobs whose ranks add up to 100
+/// cannot be compared.
+fn compare(a: Job, b: Job) -> Order {
+  case a.rank + b.rank == 100 {
+    True => panic as "cannot rank {a.name} against {b.name}"
+    False => int::compare(a.rank, b.rank)
+  }
+}
+
+/// Runs `body` in a scope and prints how it ended.
+fn caught(label: String, body: fn() -> Int) {
+  let outcome = {
+    use _ <- fiber::scope()
+    body()
+  }
+  case outcome {
+    Ok(n) => io::println("{label}: {n}")
+    Err(failure) => {
+      let text = fiber::message(failure)
+      io::println("{label}: {text}")
+    }
+  }
+}
+
+fn job(rank: Int) -> Job {
+  Job { rank: rank, name: string::add("job ", int::show(rank)) }
+}
+
+fn main() {
+  let words = list::map(list::range(0, 40), fn(i) { string::add("w", int::show(i * 7 % 40)) })
+  caught("sort", fn() {
+    let sorted = list::sort_with(words, fn(a, b) {
+      case a == "w13" {
+        True => panic as "cannot sort {a}"
+        False => string::compare(a, b)
+      }
+    })
+    list::length(sorted)
+  })
+  let again = list::take(list::sort(words), 3)
+  io::println("{again:?}")
+  let queue = heap::from_list(list::map([5, 8, 2, 9, 1, 7, 3], job))
+  let one = heap::from_list([job(1)])
+  caught("push", fn() { heap::size(heap::push(one, job(99))) })
+  caught("from_list", fn() { heap::size(heap::from_list([job(30), job(70)])) })
+  // Pushes that compare 60 and 40 with 1 only: a pop then compares them.
+  let pair = list::fold([1, 60, 40], heap::new_min(), fn(h, r) { heap::push(h, job(r)) })
+  caught("pop", fn() {
+    let assert Some((_, rest)) = heap::pop(pair)
+    heap::size(rest)
+  })
+  caught("to_list", fn() { list::length(heap::to_list(pair)) })
+  let names = list::map(heap::to_list(queue), fn(j) { j.name })
+  let size = heap::size(pair)
+  io::println("{names:?} {size}")
+}

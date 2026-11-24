@@ -1,0 +1,15 @@
+[("a", 2), ("b", 1)] [("a", 200), ("b", 1)]
+[(0.0, "first+")]
+[1, 2] Some([1, 2, 3])
+[("inner", 1), ("outer", 1)] [("outer", 0)]
+ints: 3 [Some(2), Some(2), None]
+strings: 3 [Some(2), Some(1), None]
+tuples: 2 [Some(2), None]
+records: 1 [Some(2)]
+variants: 2 [Some(3), Some(2), None]
+options: 2 [Some(2), Some(1)]
+lists: 2 [Some(2), Some(1), None]
+bools: 2 [Some(2)]
+floats: 2 [Some(2), None]
+many: 1000 [Some(3), Some(3), None]
+Some(2)

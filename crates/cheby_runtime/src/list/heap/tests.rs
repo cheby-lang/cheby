@@ -10,6 +10,10 @@
     clippy::cast_possible_wrap,
     reason = "test arithmetic on small, known values"
 )]
+#![expect(
+    clippy::cast_ptr_alignment,
+    reason = "the steps' pairs and slots are 8-aligned"
+)]
 
 use super::order::{Key, key_of, native_key};
 use super::*;
@@ -418,6 +422,243 @@ fn heaps_of_strings_release_what_they_pop() {
             let next = array.into_word();
             drop_word(list);
             list = next;
+        }
+    });
+}
+
+/// A `before` of a comparison of tagged `Int`s written in Rust, which
+/// gives the tag of an `Order`: it holds when that tag is `first`'s.
+struct Rust(fn(i64, i64) -> i64, i64);
+
+impl Before for Rust {
+    unsafe fn holds(&self, a: Word, b: Word) -> bool {
+        (self.0)(abi::untag_int(a), abi::untag_int(b)) == self.1
+    }
+}
+
+/// The comparisons the steps are driven with: in order, reversed, always
+/// `Equal`, and two that are no consistent order.
+const RUST_COMPARES: [fn(i64, i64) -> i64; 5] = [
+    |a, b| i64::from(a > b) - i64::from(a < b) + 1,
+    |a, b| i64::from(b > a) - i64::from(b < a) + 1,
+    |_, _| 1,
+    |a, b| (a * 7 + b * 3).rem_euclid(3),
+    |a, b| (a + 2 * b).rem_euclid(3),
+];
+
+/// [`model`] with the comparison `compare` in direction `max`, and the
+/// popped elements, which `to_list` gives too.
+fn rust_model(values: &[i64], pushed: &[i64], max: bool, compare: fn(i64, i64) -> i64) -> Vec<i64> {
+    let before = Rust(compare, if max { 2 } else { 0 });
+    let mut all: Vec<Word> = values.iter().map(|&v| abi::tag_int(v).unwrap()).collect();
+    let len = all.len();
+    // SAFETY: tagged `Int`s compared in Rust.
+    unsafe {
+        heapify(
+            &mut Scratch {
+                items: &mut all,
+                len,
+            },
+            &before,
+        );
+    }
+    for &v in pushed {
+        all.push(abi::tag_int(v).unwrap());
+        let len = all.len();
+        // SAFETY: as above.
+        unsafe {
+            sift_up(
+                &mut Scratch {
+                    items: &mut all,
+                    len,
+                },
+                len - 1,
+                &before,
+            );
+        }
+    }
+    let mut out = Vec::new();
+    let mut len = all.len();
+    while len > 0 {
+        out.push(abi::untag_int(all[0]));
+        all.swap(0, len - 1);
+        len -= 1;
+        // SAFETY: as above.
+        unsafe {
+            sift_down(
+                &mut Scratch {
+                    items: &mut all,
+                    len,
+                },
+                0,
+                &before,
+            );
+        }
+    }
+    out
+}
+
+/// A stack slot for the steps, as generated code makes one.
+#[repr(align(8))]
+struct Slot([u8; abi::heap::STEPS_SIZE]);
+
+/// Drives the steps in `slot` with `compare` until they are done.
+fn drive(slot: &mut Slot, compare: fn(i64, i64) -> i64) {
+    let address = ptr_to_word(slot.0.as_mut_ptr());
+    // SAFETY: a start wrote the slot; the first word is the first pair's
+    // address.
+    let mut at = unsafe { *slot.0.as_ptr().cast::<Word>() };
+    while at != 0 {
+        // SAFETY: a step's pair of live tagged `Int`s.
+        let [a, b] = unsafe { *crate::object::word_to_ptr(at).cast::<[Word; 2]>() };
+        let tag = compare(abi::untag_int(a), abi::untag_int(b));
+        // SAFETY: the slot of a start whose list is held.
+        at = unsafe { cheby_rt_heap_step(std::ptr::null_mut(), address, tag) };
+    }
+}
+
+/// What the steps of the direct updates give for [`rust_model`]'s, with a
+/// comparison that is not built in, and what the steps of `to_list` give
+/// for the heap before its pops.
+fn stepped(
+    values: &[i64],
+    pushed: &[i64],
+    max: bool,
+    compare: fn(i64, i64) -> i64,
+) -> (Vec<i64>, Vec<i64>) {
+    let by = closure(&[]);
+    let ctx = std::ptr::null_mut();
+    let mut slot = Slot([0; abi::heap::STEPS_SIZE]);
+    let address = ptr_to_word(slot.0.as_mut_ptr());
+    // SAFETY: a fresh list, a closure that is not built in and a slot.
+    let mut list = unsafe { cheby_rt_heap_heapify(ctx, int_list(values), max, by, address) };
+    drive(&mut slot, compare);
+    for &v in pushed {
+        let item = abi::tag_int(v).unwrap();
+        // SAFETY: as above.
+        list = unsafe { cheby_rt_heap_push(ctx, list, item, max, by, address) };
+        drive(&mut slot, compare);
+    }
+    // SAFETY: a live heap and the same closure.
+    let st = unsafe { cheby_rt_heap_list_start(ctx, list, max, by) };
+    // SAFETY: the state just made, held only here.
+    let mut at = unsafe { crate::list::cheby_rt_buffer_step(st, -1) };
+    while at != 0 {
+        // SAFETY: a step's pair of live tagged `Int`s.
+        let [a, b] = unsafe { *crate::object::word_to_ptr(at).cast::<[Word; 2]>() };
+        // SAFETY: as above.
+        at = unsafe {
+            crate::list::cheby_rt_buffer_step(st, compare(abi::untag_int(a), abi::untag_int(b)))
+        };
+    }
+    // SAFETY: the state is done, and `list` the list it was given.
+    let listed = unsafe { crate::list::cheby_rt_buffer_finish(ctx, st, list) };
+    let to_list = ints(listed);
+    drop_word(listed);
+    let mut popped = Vec::new();
+    loop {
+        // SAFETY: a live list.
+        let root = unsafe { Root::from_word(list) };
+        let Some(top) = ops::get(root, 0) else {
+            break;
+        };
+        popped.push(abi::untag_int(top));
+        // SAFETY: as above.
+        list = unsafe { cheby_rt_heap_pop(ctx, list, max, by, address) };
+        drive(&mut slot, compare);
+    }
+    drop_word(list);
+    drop_word(by);
+    (popped, to_list)
+}
+
+/// The steps of the direct updates ask for the comparisons of D-1613's
+/// sifts, so every comparison, consistent or not, gives the heap the
+/// algorithm on a slice gives; `to_list` lists the elements in the order
+/// the pops give them.
+#[test]
+fn the_steps_run_the_algorithm_of_a_slice() {
+    let sizes: &[usize] = if cfg!(miri) {
+        &[0, 1, 2, 3, 33]
+    } else {
+        &[0, 1, 2, 3, 31, 32, 33, 34, 100, 1_025]
+    };
+    balanced(|| {
+        for &n in sizes {
+            let values = scrambled(n);
+            let pushed: Vec<i64> = scrambled(n / 3 + 1).iter().map(|v| v * 3).collect();
+            for max in [false, true] {
+                for compare in RUST_COMPARES {
+                    let (popped, listed) = stepped(&values, &pushed, max, compare);
+                    let model = rust_model(&values, &pushed, max, compare);
+                    assert_eq!(popped, model, "n = {n}, max = {max}");
+                    let all = values.len() + pushed.len();
+                    assert_eq!(listed.len(), all, "n = {n}, max = {max}");
+                }
+                let (popped, listed) = stepped(&values, &pushed, max, RUST_COMPARES[0]);
+                assert_eq!(popped, listed, "n = {n}, max = {max}");
+            }
+        }
+    });
+}
+
+/// A built-in comparison sifts at the start: the first word of the slot is
+/// 0, and the first step has nothing to do.
+#[test]
+fn a_built_in_comparison_sifts_at_the_start() {
+    balanced(|| {
+        // A closure of `Int`'s `Compare` dictionary, as `std/heap.cheby`
+        // passes one.
+        let dict = object(layout::DICT, &[builtin("int"), closure(&[])]);
+        let by = closure(&[dict]);
+        let mut slot = Slot([0xFF; abi::heap::STEPS_SIZE]);
+        let address = ptr_to_word(slot.0.as_mut_ptr());
+        let values = scrambled(300);
+        // SAFETY: a fresh list, a closure of `Int`'s `compare` and a slot.
+        let list = unsafe {
+            cheby_rt_heap_heapify(std::ptr::null_mut(), int_list(&values), false, by, address)
+        };
+        // SAFETY: the start wrote the slot's first word.
+        assert_eq!(unsafe { *slot.0.as_ptr().cast::<Word>() }, 0);
+        // SAFETY: the slot of a start whose list is held.
+        let at = unsafe { cheby_rt_heap_step(std::ptr::null_mut(), address, -1) };
+        assert_eq!(at, 0);
+        assert_eq!(ints(list).first(), values.iter().min());
+        drop_word(list);
+        drop_word(by);
+    });
+}
+
+/// A sift stopped midway, as a panicking `compare` stops it, leaves a list
+/// that holds each element once, which its release frees whole.
+#[test]
+fn a_sift_stopped_midway_leaves_each_element_once() {
+    balanced(|| {
+        let values = scrambled(500);
+        let by = closure(&[]);
+        let mut slot = Slot([0; abi::heap::STEPS_SIZE]);
+        let address = ptr_to_word(slot.0.as_mut_ptr());
+        let shared = int_list(&values);
+        dup_word(shared);
+        // SAFETY: a list with two references, so the start copies paths.
+        let list =
+            unsafe { cheby_rt_heap_heapify(std::ptr::null_mut(), shared, false, by, address) };
+        assert_ne!(list, shared);
+        // SAFETY: the start wrote the slot's first word.
+        let mut at = unsafe { *slot.0.as_ptr().cast::<Word>() };
+        for _ in 0..50 {
+            assert_ne!(at, 0);
+            // SAFETY: the slot of a start whose list is held.
+            at = unsafe { cheby_rt_heap_step(std::ptr::null_mut(), address, 0) };
+        }
+        let mut kept = ints(list);
+        kept.sort_unstable();
+        let mut all = values.clone();
+        all.sort_unstable();
+        assert_eq!(kept, all);
+        assert_eq!(ints(shared), values);
+        for word in [list, shared, by] {
+            drop_word(word);
         }
     });
 }

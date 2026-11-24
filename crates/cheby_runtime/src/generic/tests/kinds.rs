@@ -9,7 +9,7 @@ use super::*;
 use crate::desc::{self, StaticNominal, StaticText};
 use crate::entry::Callbacks;
 use crate::list::{
-    cheby_list_append, cheby_list_prepend, cheby_list_slice, cheby_list_unique,
+    cheby_list_append, cheby_list_slice, cheby_list_unique, cheby_rt_list_prepend,
     cheby_rt_static_empty_list,
 };
 
@@ -30,10 +30,8 @@ fn empty_list() -> Word {
 fn prepended(items: Vec<Word>) -> Word {
     let mut xs = empty_list();
     for item in items.into_iter().rev() {
-        // SAFETY: the kernel borrows its arguments.
-        let next = unsafe { cheby_list_prepend(xs, item) };
-        release([xs, item]);
-        xs = next;
+        // SAFETY: the helper takes its arguments over.
+        xs = unsafe { cheby_rt_list_prepend(std::ptr::null_mut(), xs, item) };
     }
     xs
 }

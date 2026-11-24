@@ -54,6 +54,7 @@ mod scalar_tests;
 mod split;
 #[cfg(test)]
 mod split_tests;
+mod upsert;
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -61,6 +62,7 @@ use cheby_diag::{FileId, SourceMap, Span};
 use cheby_iface::{DefId, DisplayCx, Generics, Ice, ModuleId, PackageId, Ty, display};
 use cheby_types::thir;
 
+pub use consts::scalar_literal;
 pub use entry::{EntryRequest, lower_entries};
 pub use intrinsic::{Intrinsic, intrinsic_symbols};
 pub use split::{SPLIT_SIZE, STATEMENT_BUDGET, TUPLE_INIT_THRESHOLD};
@@ -159,6 +161,11 @@ pub(crate) struct Pending {
     /// [`Pending::for_module`]); only spans in it get one, since a line
     /// table names one file.
     positions: Option<FileId>,
+    /// The module's constants whose initializer is a scalar literal, each
+    /// with its value and type, which the module's code reads in place of
+    /// their slots (`consts.rs`); empty for a tests unit and in a REPL
+    /// session.
+    literal_consts: BTreeMap<DefId, (Const, Ty)>,
 }
 
 impl Pending {
@@ -202,6 +209,12 @@ impl Pending {
         // never lowers std's tests, so this costs nothing there.
         self.call_locs = self.outside_std || tests;
         Ok(self)
+    }
+
+    /// The value and type of `def` when it is a constant of the unit's
+    /// module whose initializer is a scalar literal.
+    pub(crate) fn literal_const(&self, def: DefId) -> Option<(Const, Ty)> {
+        self.literal_consts.get(&def).cloned()
     }
 
     /// Whether the unit's functions record positions (D-938).
@@ -350,7 +363,23 @@ pub fn lower_items(
     wanted: &dyn Fn(DefId) -> bool,
     cx: &LowerCx<'_>,
 ) -> Result<MirModule, Ice> {
-    lower_items_with(module, wanted, cx, Pending::default())
+    lower_items_with(module, wanted, cx, Pending::default(), true)
+}
+
+/// [`lower_items`] for a REPL session: every constant is read from its
+/// slot, a scalar literal of the same module too, since a later entry may
+/// redefine the constant in place and earlier code must see the new value
+/// (D-043, D-547).
+///
+/// # Errors
+///
+/// As [`lower_module`].
+pub fn lower_items_late_bound(
+    module: &thir::Module,
+    wanted: &dyn Fn(DefId) -> bool,
+    cx: &LowerCx<'_>,
+) -> Result<MirModule, Ice> {
+    lower_items_with(module, wanted, cx, Pending::default(), false)
 }
 
 /// [`lower_items`] that, with `record_sites`, records in each body the
@@ -373,7 +402,7 @@ pub fn lower_items_recording(
         record_sites,
         ..Pending::default()
     };
-    lower_items_with(module, wanted, cx, pending)
+    lower_items_with(module, wanted, cx, pending, true)
 }
 
 /// [`lower_items`] with large literals cut at `split` (D-780), or at
@@ -389,7 +418,7 @@ pub(crate) fn lower_items_split(
         split,
         ..Pending::default()
     };
-    lower_items_with(module, wanted, cx, pending)
+    lower_items_with(module, wanted, cx, pending, true)
 }
 
 /// [`lower_tests`] with large literals cut at `split`, as
@@ -407,13 +436,19 @@ pub(crate) fn lower_tests_split(
     lower_tests_with(module, cx, pending)
 }
 
+/// [`lower_items`] with `pending`; with `fold_consts`, the module's scalar
+/// literal constants are read as their literals (`consts.rs`).
 fn lower_items_with(
     module: &thir::Module,
     wanted: &dyn Fn(DefId) -> bool,
     cx: &LowerCx<'_>,
     pending: Pending,
+    fold_consts: bool,
 ) -> Result<MirModule, Ice> {
     let mut pending = pending.for_module(module.module, false, cx)?;
+    if fold_consts {
+        pending.literal_consts = consts::literal_consts(module, cx.defs.globals);
+    }
     let mut fns: Vec<&thir::FnDef> = module.fns.iter().filter(|f| wanted(f.def)).collect();
     fns.sort_by_key(|f| f.def);
     let mut consts: Vec<&thir::ConstDef> = module.consts.iter().filter(|c| wanted(c.def)).collect();
@@ -599,65 +634,15 @@ fn finish_unit(
     }
     functions.extend(closure::trampolines(pending.trampolines())?);
     let source = unit_positions(&mut functions, &pending, cx);
-    // Field reads move up to the consumption of a sibling projection, so
-    // every RC mode and borrowing inference see them there (D-911).
+    // A lookup taken apart at once needs no `Some`, and field reads move
+    // up to the consumption of a sibling projection, so every RC mode and
+    // borrowing inference see them there (D-911).
     for f in &mut functions {
+        crate::lookup::run(f)?;
         crate::hoist::run(f, &|ty| cx.defs.handle_free(ty))?;
     }
     let statics = pending.statics;
-    let mut m = Mentions::default();
-    for f in &functions {
-        collect_defs(f, &mut m);
-    }
-    for s in &statics {
-        if let LayoutRef::Ctor(d) = s.layout {
-            m.ctors.insert(d);
-        }
-        for c in &s.fields {
-            const_defs(c, &mut m);
-        }
-    }
-    let own: BTreeSet<LayoutRef> = layouts.iter().map(|l| l.layout).collect();
-    let mut foreign: Vec<LayoutDesc> = Vec::new();
-    for &ctor in &m.ctors {
-        if !own.contains(&LayoutRef::Ctor(ctor)) {
-            foreign.push(ctor_layout(ctor, &cx.defs)?);
-        }
-    }
-    for &ty in &m.tag_types {
-        foreign.extend(
-            type_layouts(ty, &cx.defs)?
-                .into_iter()
-                .filter(|d| !own.contains(&d.layout)),
-        );
-        m.defs.insert(ty);
-    }
-    foreign.sort_by_key(|d| d.layout);
-    foreign.dedup_by_key(|d| d.layout);
-    let mut mentioned = std::mem::take(&mut m.defs);
-    for l in layouts.iter().chain(&foreign) {
-        if let LayoutRef::Ctor(d) = l.layout {
-            mentioned.insert(d);
-        }
-        if let Some(hooks) = l.hooks {
-            mentioned.extend(hooks);
-        }
-    }
-    let direct = m.direct;
-    let callees = direct
-        .iter()
-        .map(|&def| {
-            Ok(CalleeDecl {
-                def,
-                sig: abi_sig(cx.defs.fn_sig(def)?, cx.defs.globals),
-            })
-        })
-        .collect::<Result<Vec<_>, Ice>>()?;
-    mentioned.extend(direct);
-    let names = mentioned
-        .into_iter()
-        .map(|d| cx.defs.name(d))
-        .collect::<Result<Vec<_>, Ice>>()?;
+    let tables = Tables::of(&functions, &statics, &layouts, &cx.defs)?;
     let path = match unit {
         UnitKind::Code(m) | UnitKind::Tests(m) => cx.defs.modules.try_get(m)?.path.to_string(),
         UnitKind::Entries => String::new(),
@@ -666,17 +651,134 @@ fn finish_unit(
         unit,
         path: path.into(),
         functions,
-        callees,
+        callees: tables.callees,
         layouts,
         externals: match unit {
             UnitKind::Code(module) => crate::layout::module_externals(module, &cx.defs)?,
             UnitKind::Tests(_) | UnitKind::Entries => Vec::new(),
         },
-        foreign_layouts: foreign,
+        foreign_layouts: tables.foreign,
         statics,
-        names,
+        names: tables.names,
         source,
     })
+}
+
+/// The tables of a unit that its functions, statics and own layouts
+/// determine: the declarations of its direct callees, the layouts of the
+/// other modules' constructors its code needs, and the name of every def
+/// it mentions ([`MirModule::callees`], [`MirModule::foreign_layouts`],
+/// [`MirModule::names`]).
+struct Tables {
+    callees: Vec<CalleeDecl>,
+    foreign: Vec<LayoutDesc>,
+    names: Vec<crate::ir::DefName>,
+}
+
+impl Tables {
+    /// The tables of a unit of `functions`, `statics` and `layouts`, read
+    /// through `defs`.
+    fn of(
+        functions: &[Function],
+        statics: &[StaticObject],
+        layouts: &[LayoutDesc],
+        defs: &Defs<'_>,
+    ) -> Result<Self, Ice> {
+        let mut m = Mentions::default();
+        for f in functions {
+            collect_defs(f, &mut m);
+        }
+        for s in statics {
+            if let LayoutRef::Ctor(d) = s.layout {
+                m.ctors.insert(d);
+            }
+            for c in &s.fields {
+                const_defs(c, &mut m);
+            }
+        }
+        let own: BTreeSet<LayoutRef> = layouts.iter().map(|l| l.layout).collect();
+        let mut foreign: Vec<LayoutDesc> = Vec::new();
+        for &ctor in &m.ctors {
+            if !own.contains(&LayoutRef::Ctor(ctor)) {
+                foreign.push(ctor_layout(ctor, defs)?);
+            }
+        }
+        for &ty in &m.tag_types {
+            foreign.extend(
+                type_layouts(ty, defs)?
+                    .into_iter()
+                    .filter(|d| !own.contains(&d.layout)),
+            );
+            m.defs.insert(ty);
+        }
+        foreign.sort_by_key(|d| d.layout);
+        foreign.dedup_by_key(|d| d.layout);
+        let mut mentioned = std::mem::take(&mut m.defs);
+        for l in layouts.iter().chain(&foreign) {
+            if let LayoutRef::Ctor(d) = l.layout {
+                mentioned.insert(d);
+            }
+            if let Some(hooks) = l.hooks {
+                mentioned.extend(hooks);
+            }
+        }
+        let direct = m.direct;
+        let callees = direct
+            .iter()
+            .map(|&def| {
+                Ok(CalleeDecl {
+                    def,
+                    sig: abi_sig(defs.fn_sig(def)?, defs.globals),
+                })
+            })
+            .collect::<Result<Vec<_>, Ice>>()?;
+        mentioned.extend(direct);
+        let names = mentioned
+            .into_iter()
+            .map(|d| defs.name(d))
+            .collect::<Result<Vec<_>, Ice>>()?;
+        Ok(Self {
+            callees,
+            foreign,
+            names,
+        })
+    }
+}
+
+/// The layouts of the constructors that `functions` and `statics` allocate,
+/// read, use as static objects or read the tags of, and the declarations of
+/// the direct callees of `functions`, all-owned as lowering writes them,
+/// read through `defs`: what a body from another unit brings into the one
+/// it is inlined in.
+///
+/// # Errors
+///
+/// An [`Ice`] if `defs` cannot see a def they mention.
+pub(crate) fn tables_of(
+    functions: &[Function],
+    statics: &[StaticObject],
+    defs: &Defs<'_>,
+) -> Result<(Vec<LayoutDesc>, Vec<CalleeDecl>), Ice> {
+    let tables = Tables::of(functions, statics, &[], defs)?;
+    Ok((tables.foreign, tables.callees))
+}
+
+/// Computes `unit`'s callee declarations, foreign layouts and names again
+/// from its functions, statics and own layouts, through `defs`, which must
+/// see every def the unit mentions (the whole build's interfaces do): what
+/// lowering computes at the end of a unit, after a pass added code to it,
+/// such as the release inliner's bodies from other units. The callees'
+/// signatures are the lowered ones, all-owned: borrowing is inferred after.
+///
+/// # Errors
+///
+/// An [`Ice`] if `defs` cannot see a def the unit mentions.
+pub fn refresh_tables(unit: &mut MirModule, defs: &Defs<'_>) -> Result<(), Ice> {
+    let tables = Tables::of(&unit.functions, &unit.statics, &unit.layouts, defs)?;
+    unit.callees = tables.callees;
+    unit.foreign_layouts = tables.foreign;
+    unit.names = tables.names;
+    Ok(())
 }
 
 /// The unit's source path when it records positions (D-938,
@@ -770,6 +872,9 @@ fn collect_defs(f: &Function, m: &mut Mentions) {
                 | Rvalue::FloatArith { .. }
                 | Rvalue::Bitwise { .. }
                 | Rvalue::FloatNeg { .. }
+                | Rvalue::Convert { .. }
+                | Rvalue::FloatSqrt { .. }
+                | Rvalue::Wrapping { .. }
                 | Rvalue::Not(_)
                 | Rvalue::ReadTag { .. }
                 | Rvalue::DropReuse { .. }
@@ -843,6 +948,10 @@ fn key_defs(key: FnKey, out: &mut BTreeSet<DefId>) {
         } => {
             out.insert(iface_fn);
             out.insert(dyn_iface);
+        }
+        FnKey::Specialized { owner, origin, .. } => {
+            out.insert(owner);
+            out.insert(origin);
         }
         FnKey::Entry(EntryKind::Repl(_)) | FnKey::Trampoline(_) => {}
     }

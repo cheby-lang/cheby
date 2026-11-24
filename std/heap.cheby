@@ -1,12 +1,12 @@
 //! The heap `Heap<T>`, a persistent priority queue that pops its smallest
 //! or its largest element first and keeps duplicates (D-1612).
 //!
-//! A heap is a binary heap in a `List<T>`, and each update is a runtime
-//! kernel that changes a unique heap in place (D-1613, D-525). The
-//! functions that compare elements carry `T: Compare` and give the kernels
-//! the element type's `compare`, which they call back, or compare natively
-//! when the element type's descriptor shows a built-in one. The hooks and
-//! the functions that do not compare carry no bound (D-482).
+//! A heap is a binary heap in a `List<T>`, and the runtime updates a
+//! unique heap in place (D-1613, D-525). The functions that compare
+//! elements carry `T: Compare` and give the updates the element type's
+//! `compare`, which they call between the runtime's steps, or which the
+//! runtime runs natively when the element type's descriptor shows a
+//! built-in one. The hooks and the functions that do not compare carry no bound (D-482).
 
 import std::int
 import std::list
@@ -107,35 +107,35 @@ test "debug text sorts the elements by their text" {
   assert "{empty:?}" == "heap::from_list([])"
 }
 
-/// `T`'s `compare` as a function value for the kernels. Its one capture is
-/// the dictionary of the bound, whose descriptor tells the kernels when the
+/// `T`'s `compare` as a function value for the updates. Its one capture is
+/// the dictionary of the bound, whose descriptor tells the runtime when the
 /// comparison is built in (D-1613).
 priv fn comparison<T: Compare>() -> fn(T, T) -> Order {
   fn(a, b) { Compare::compare(a, b) }
 }
 
-// Kernels
+// Updates, which the runtime runs in steps
 
 /// `items` with `item` added at the end and sifted up (D-1613).
-@external(native, "cheby_heap_sys_push")
+@external(native, "cheby_rt_std_heap_push")
 @external(js, "./heap.mjs", "sys_push")
 priv fn sys_push<T>(items: List<T>, item: T, max: Bool, by: fn(T, T) -> Order) -> List<T>
 
 /// `items` without its first element, the last moved there and sifted down
 /// (D-1613).
-@external(native, "cheby_heap_sys_pop")
+@external(native, "cheby_rt_std_heap_pop")
 @external(js, "./heap.mjs", "sys_pop")
 priv fn sys_pop<T>(items: List<T>, max: Bool, by: fn(T, T) -> Order) -> List<T>
 
 /// `items` made a heap: each position from `n / 2 - 1` to `0` sifted down
 /// (D-1613).
-@external(native, "cheby_heap_sys_from_list")
+@external(native, "cheby_rt_std_heap_from_list")
 @external(js, "./heap.mjs", "sys_from_list")
 priv fn sys_from_list<T>(items: List<T>, max: Bool, by: fn(T, T) -> Order) -> List<T>
 
 /// The elements of the heap `items` in the order repeated pops give them
 /// (D-1613).
-@external(native, "cheby_heap_sys_to_list")
+@external(native, "cheby_rt_std_heap_to_list")
 @external(js, "./heap.mjs", "sys_to_list")
 priv fn sys_to_list<T>(items: List<T>, max: Bool, by: fn(T, T) -> Order) -> List<T>
 
@@ -350,4 +350,80 @@ test "pushes and pops of many elements keep the heap order" {
   assert firsts == list::take(list::sort(numbers), 1500)
   assert to_list(left) == list::drop(list::sort(numbers), 1500)
   assert to_list(from_list(numbers)) == list::sort(numbers)
+}
+
+// The kernels of the updates, which call `compare` back from the runtime
+// (D-1613, D-526). A direct call of `sys_push` and the others runs the
+// same sifts in steps and calls `compare` itself, so the tests below
+// compare the two.
+
+@external(native, "cheby_heap_sys_push")
+@external(js, "./heap.mjs", "sys_push")
+priv fn kernel_push<T>(items: List<T>, item: T, max: Bool, by: fn(T, T) -> Order) -> List<T>
+
+@external(native, "cheby_heap_sys_pop")
+@external(js, "./heap.mjs", "sys_pop")
+priv fn kernel_pop<T>(items: List<T>, max: Bool, by: fn(T, T) -> Order) -> List<T>
+
+@external(native, "cheby_heap_sys_from_list")
+@external(js, "./heap.mjs", "sys_from_list")
+priv fn kernel_from_list<T>(items: List<T>, max: Bool, by: fn(T, T) -> Order) -> List<T>
+
+@external(native, "cheby_heap_sys_to_list")
+@external(js, "./heap.mjs", "sys_to_list")
+priv fn kernel_to_list<T>(items: List<T>, max: Bool, by: fn(T, T) -> Order) -> List<T>
+
+/// A comparison of `Int`s for the tests below, chosen by `kind`: in order,
+/// reversed, always `Equal`, and two that are not consistent orders. None
+/// is built in, so each is called between steps.
+priv fn test_order(kind: Int) -> fn(Int, Int) -> Order {
+  case kind {
+    0 => fn(a, b) { int::compare(a, b) }
+    1 => fn(a, b) { int::compare(b, a) }
+    2 => fn(_, _) { Equal }
+    3 => fn(a, b) {
+      case (a * 7 + b * 3) % 5 {
+        0 => Greater
+        1 => Equal
+        _ => Less
+      }
+    }
+    _ => fn(a, b) {
+      case (a + b) % 3 == 0 {
+        True => Greater
+        False => int::compare(a % 4, b % 4)
+      }
+    }
+  }
+}
+
+/// The heaps that popping `items` until it is empty leaves, in order.
+priv fn test_pops(items: List<Int>, take: fn(List<Int>) -> List<Int>) -> List<List<Int>> {
+  fn step(left: List<Int>, found: List<List<Int>>) -> List<List<Int>> {
+    case list::is_empty(left) {
+      True => found
+      False => {
+        let rest = take(left)
+        step(rest, list::push(found, rest))
+      }
+    }
+  }
+  step(items, [])
+}
+
+test "the updates sift as their kernels do for any comparison" {
+  list::each([0, 1, 2, 3, 5, 31, 32, 33, 34, 100, 1000], fn(n) {
+    let xs = list::map(list::range(0, n), fn(i) { i * 7919 % 211 - 100 })
+    list::each(list::range(0, 5), fn(kind) {
+      let by = test_order(kind)
+      list::each([False, True], fn(largest) {
+        assert sys_from_list(xs, largest, by) == kernel_from_list(xs, largest, by)
+        let pushed = list::fold(xs, [], fn(h, x) { sys_push(h, x, largest, by) })
+        assert pushed == list::fold(xs, [], fn(h, x) { kernel_push(h, x, largest, by) })
+        assert sys_to_list(pushed, largest, by) == kernel_to_list(pushed, largest, by)
+        let popped = test_pops(pushed, fn(h) { sys_pop(h, largest, by) })
+        assert popped == test_pops(pushed, fn(h) { kernel_pop(h, largest, by) })
+      })
+    })
+  })
 }

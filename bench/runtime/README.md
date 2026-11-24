@@ -153,6 +153,7 @@ noise, show in the group (release `cheby`, macOS arm64, quiet machine, checkpoin
 | `--accepted-new-since L` | Each `--accepted-by` decision must be absent from the decision log `L`, the base's          |
 | `--split`                | Also splits each benchmark's time outside `main` by subtraction (D-1254, D-1271)            |
 | `--split-runs N`         | Timed runs per command of `--split` (default 5)                                             |
+| `--release`              | Runs and builds in the release profile, the `--against` binary too                          |
 
 For each benchmark the command runs `cheby run` in its directory `--runs` times and times each run
 from spawn to exit, compilation included. It reports the median, the minimum and the maximum. Then it

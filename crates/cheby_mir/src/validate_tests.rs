@@ -300,6 +300,90 @@ fn float_arithmetic_is_for_floats_only() {
     );
 }
 
+/// The operations of the std kernels that are instructions
+/// (`crate::kernels_instr`): a conversion only where every value converts
+/// (`Repr::converts_exactly`), a square root only of a float, wrapping
+/// arithmetic only of integers, and only `+`, `-` and `*`.
+#[test]
+fn instruction_kernels_take_only_what_they_compute() {
+    for (from, to) in [
+        (Repr::Int, Repr::Float),
+        (Repr::U64, Repr::F32),
+        (Repr::I8, Repr::Int),
+        (Repr::U8, Repr::I16),
+        (Repr::U32, Repr::U64),
+        (Repr::Int, Repr::I64),
+        (Repr::F32, Repr::Float),
+        (Repr::Float, Repr::F32),
+    ] {
+        ok(assigning(&[from], to, |p| Rvalue::Convert {
+            value: local(p[0]),
+            from,
+            to,
+        }));
+    }
+    for (from, to) in [
+        (Repr::Int, Repr::I32),
+        (Repr::I8, Repr::U8),
+        (Repr::I16, Repr::U64),
+        (Repr::U32, Repr::I32),
+        (Repr::Float, Repr::Int),
+        (Repr::Int, Repr::Int),
+        (Repr::Bool, Repr::Int),
+        (Repr::U64, Repr::I64),
+    ] {
+        rejected(
+            assigning(&[from], to, |p| Rvalue::Convert {
+                value: local(p[0]),
+                from,
+                to,
+            }),
+            &format!("convert {from} {to}"),
+        );
+    }
+    ok(assigning(&[Repr::Float], Repr::Float, |p| {
+        Rvalue::FloatSqrt {
+            value: local(p[0]),
+            repr: Repr::Float,
+        }
+    }));
+    rejected(
+        assigning(&[Repr::Int], Repr::Int, |p| Rvalue::FloatSqrt {
+            value: local(p[0]),
+            repr: Repr::Int,
+        }),
+        "float_sqrt on int",
+    );
+    for repr in [Repr::Int, Repr::I8, Repr::U64] {
+        ok(assigning(&[repr, repr], repr, |p| Rvalue::Wrapping {
+            op: ArithOp::Mul,
+            lhs: local(p[0]),
+            rhs: local(p[1]),
+            repr,
+        }));
+    }
+    rejected(
+        assigning(&[Repr::Float, Repr::Float], Repr::Float, |p| {
+            Rvalue::Wrapping {
+                op: ArithOp::Add,
+                lhs: local(p[0]),
+                rhs: local(p[1]),
+                repr: Repr::Float,
+            }
+        }),
+        "wrapping add on float",
+    );
+    rejected(
+        assigning(&[Repr::Int, Repr::Int], Repr::Int, |p| Rvalue::Wrapping {
+            op: ArithOp::Div,
+            lhs: local(p[0]),
+            rhs: local(p[1]),
+            repr: Repr::Int,
+        }),
+        "wrapping div",
+    );
+}
+
 #[test]
 fn bitwise_is_for_integers_only() {
     for repr in [Repr::Int, Repr::I32, Repr::U16] {
@@ -685,7 +769,9 @@ fn runtime_call(func: RuntimeFn) -> Function {
     // A `list_uncons_head` takes the element of the `list_uncons` right
     // before it (D-909).
     let call = match func {
-        RuntimeFn::ListUnconsHead => RuntimeFn::ListUncons,
+        RuntimeFn::ListUnconsHead
+        | RuntimeFn::ListUnconsHeadFloat
+        | RuntimeFn::ListUnconsHeadF32 => RuntimeFn::ListUncons,
         other => other,
     };
     let mut args: Vec<Operand> = call
@@ -693,16 +779,29 @@ fn runtime_call(func: RuntimeFn) -> Function {
         .iter()
         .map(|&(r, _)| local(b.add_param(r, None, None).unwrap()))
         .collect();
+    if func == RuntimeFn::MapUpsertAddress {
+        // The address reads the word of the `map_upsert` that defined
+        // its map.
+        let key = local(b.add_param(Repr::Value, None, None).unwrap());
+        let opened = b
+            .call_runtime(RuntimeFn::MapUpsert, vec![args[0].clone(), key])
+            .unwrap()
+            .unwrap();
+        args[0] = local(opened);
+    }
     if func == RuntimeFn::Equal {
         // The location is a static string.
         args[2] = Operand::Const(Const::Str(b.string("src/main.cheby:1:1").unwrap()));
     }
     let mut result = b.call_runtime(call, args).unwrap();
     if matches!(call, RuntimeFn::ListUncons | RuntimeFn::ListUnconsOwned) {
-        let head = b
-            .call_runtime(RuntimeFn::ListUnconsHead, Vec::new())
-            .unwrap();
-        if func == RuntimeFn::ListUnconsHead {
+        let head_func = if func.is_uncons_head() {
+            func
+        } else {
+            RuntimeFn::ListUnconsHead
+        };
+        let head = b.call_runtime(head_func, Vec::new()).unwrap();
+        if func.is_uncons_head() {
             result = head;
         }
     }
@@ -730,8 +829,9 @@ fn runtime_call(func: RuntimeFn) -> Function {
 #[test]
 fn runtime_calls_check_arity_reprs_and_results() {
     for func in RuntimeFn::ALL {
-        // Only counting emits it (`list_uncons_pairs`).
-        if func != RuntimeFn::ListUnconsOwned {
+        // Only counting emits these (`list_uncons_pairs`,
+        // `list_elements_read_as_numbers`).
+        if func != RuntimeFn::ListUnconsOwned && func.scalar_read().is_none() {
             ok(runtime_call(func));
         }
     }
@@ -868,6 +968,139 @@ fn list_uncons_pairs() {
     );
 }
 
+/// `elem = list_uncons_head()` after a step (`head`) or `elem =
+/// list_get(list, 1)`, then `x = unbox elem` to `to` (after a length
+/// when `between`), then `x` boxed and returned, or the element itself
+/// when `word_too`.
+fn element_read(head: bool, to: Repr, between: bool, word_too: bool) -> Function {
+    let mut b = builder();
+    let list = b.add_param(Repr::Value, None, None).unwrap();
+    let elem = if head {
+        let _rest = b
+            .call_runtime(
+                RuntimeFn::ListUncons,
+                vec![local(list), int(0), int(1), int(2)],
+            )
+            .unwrap();
+        b.call_runtime(RuntimeFn::ListUnconsHead, Vec::new())
+            .unwrap()
+            .unwrap()
+    } else {
+        b.call_runtime(RuntimeFn::ListGet, vec![local(list), int(1)])
+            .unwrap()
+            .unwrap()
+    };
+    if between {
+        let _len = b
+            .call_runtime(RuntimeFn::ListLength, vec![local(list)])
+            .unwrap();
+    }
+    let x = b
+        .assign(
+            to,
+            Rvalue::Unbox {
+                value: local(elem),
+                to,
+            },
+        )
+        .unwrap();
+    let out = if word_too {
+        elem
+    } else {
+        b.assign(
+            Repr::Value,
+            Rvalue::Box {
+                value: local(x),
+                from: to,
+            },
+        )
+        .unwrap()
+    };
+    b.terminate(Terminator::Return(local(out))).unwrap();
+    b.finish().unwrap()
+}
+
+/// A head of a pattern step or a `list_get` whose only use is an
+/// `unbox` to `Float` or `F32` right after it becomes, at counting, one
+/// read of the element as a number, with no `unbox` and no `drop`
+/// (rc.rs). Only counting makes these reads.
+#[test]
+fn list_elements_read_as_numbers() {
+    assert_eq!(
+        counted(element_read(true, Repr::Float, false, false)),
+        [
+            "_1: value = call_runtime list_uncons_owned(_0, borrow const int 0, borrow const int 1, borrow const int 2)",
+            "_3: float = call_runtime list_uncons_head_float()",
+            "drop _1",
+            "_4: value = box float _3",
+            "return _4",
+        ]
+    );
+    assert_eq!(
+        counted(element_read(true, Repr::F32, false, false))[1],
+        "_3: f32 = call_runtime list_uncons_head_f32()"
+    );
+    assert_eq!(
+        counted(element_read(false, Repr::Float, false, false)),
+        [
+            "_2: float = call_runtime list_get_float(borrow _0, borrow const int 1)",
+            "drop _0",
+            "_3: value = box float _2",
+            "return _3",
+        ]
+    );
+    assert_eq!(
+        counted(element_read(false, Repr::F32, false, false))[0],
+        "_2: f32 = call_runtime list_get_f32(borrow _0, borrow const int 1)"
+    );
+    for func in [
+        RuntimeFn::ListUnconsHeadFloat,
+        RuntimeFn::ListUnconsHeadF32,
+        RuntimeFn::ListGetFloat,
+        RuntimeFn::ListGetF32,
+    ] {
+        rejected(
+            runtime_call(func),
+            &format!("{} before counting", func.name()),
+        );
+    }
+}
+
+/// An element that is used in another way besides its `unbox`, unboxed
+/// further on, or unboxed to a type whose word need not be a box, is read
+/// as a word, unboxed and dropped as before (rc.rs).
+#[test]
+fn list_elements_used_otherwise_stay_words() {
+    // Also returned as a word.
+    let kept = counted(element_read(true, Repr::Float, false, true));
+    assert_eq!(
+        kept[1], "_2: value = call_runtime list_uncons_head()",
+        "{kept:#?}"
+    );
+    assert!(
+        kept.contains(&"_3: float = unbox float _2".to_owned()),
+        "{kept:#?}"
+    );
+    let kept = counted(element_read(false, Repr::Float, false, true));
+    assert_eq!(
+        kept[0], "_1: value = call_runtime list_get(borrow _0, borrow const int 1)",
+        "{kept:#?}"
+    );
+    // A statement between the read and the `unbox`.
+    let apart = counted(element_read(false, Repr::Float, true, false));
+    assert!(
+        apart.contains(&"_3: float = unbox float _1".to_owned())
+            && apart.contains(&"drop _1".to_owned()),
+        "{apart:#?}"
+    );
+    // An `Int` may be tagged, so its `unbox` is not a load from a box.
+    let int = counted(element_read(false, Repr::Int, false, false));
+    assert!(
+        int.contains(&"_2: int = unbox int _1".to_owned()),
+        "{int:#?}"
+    );
+}
+
 /// Runs the RC pass on one function and returns its statements, without
 /// the string table, one line each; validates before and after.
 fn counted(f: Function) -> Vec<String> {
@@ -892,8 +1125,15 @@ fn counted(f: Function) -> Vec<String> {
 #[test]
 fn runtime_helpers_follow_their_ownership() {
     for func in RuntimeFn::ALL {
-        // Counting makes it of a `list_uncons`, below.
-        if func == RuntimeFn::ListUnconsOwned {
+        // Counting makes it of a `list_uncons`, below, and the reads of
+        // an element as a number of a head or a `list_get` and its
+        // `unbox` (`list_elements_read_as_numbers`).
+        // An upsert's address reads the map of the `map_upsert` before
+        // it, not a parameter.
+        if func == RuntimeFn::ListUnconsOwned
+            || func.scalar_read().is_some()
+            || func == RuntimeFn::MapUpsertAddress
+        {
             continue;
         }
         let lines = counted(runtime_call(func));

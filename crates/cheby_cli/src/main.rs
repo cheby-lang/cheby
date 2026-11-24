@@ -59,17 +59,22 @@ use clap::{CommandFactory as _, FromArgMatches as _, Parser, Subcommand, ValueEn
 
 use crate::color::ColorWhen;
 
+// The executables' allocator, the same code for `cheby` (D-890).
+#[cfg(not(any(cheby_sanitize = "address", cheby_sanitize = "thread")))]
+#[path = "../../cheby_rt_exe/src/global.rs"]
+mod global;
+
 /// The global allocator of the toolchain and of the programs it runs:
 /// runtime objects are allocated through it (`cheby_runtime::alloc`).
 /// Sanitizer builds keep the system allocator, which the sanitizers
 /// intercept (D-721).
 #[cfg(not(any(cheby_sanitize = "address", cheby_sanitize = "thread")))]
 #[global_allocator]
-static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
+static GLOBAL: global::Mimalloc = global::Mimalloc;
 // Sanitizer builds still depend on mimalloc; this keeps cargo's
 // `unused_dependencies` lint quiet in them.
 #[cfg(any(cheby_sanitize = "address", cheby_sanitize = "thread"))]
-use mimalloc as _;
+use libmimalloc_sys as _;
 
 #[derive(Debug, Parser)]
 #[command(name = "cheby", version, about = "The Cheby toolchain")]
@@ -119,6 +124,10 @@ enum Command {
         /// Treat every warning as an error and link nothing after one (D-549)
         #[arg(long)]
         deny_warnings: bool,
+        /// Build with the release profile, which optimizes the program as a whole; the output
+        /// path does not change
+        #[arg(long)]
+        release: bool,
     },
     /// Compile with the JIT and run a module's `main` (D-137)
     Run {
@@ -130,6 +139,9 @@ enum Command {
         /// Print to stderr, before the program runs, where reuse in place happens or not and why (D-717)
         #[arg(long)]
         reuse_report: bool,
+        /// Compile with the release profile, which optimizes the program as a whole
+        #[arg(long)]
+        release: bool,
         /// Arguments passed to the program, after `--`
         #[arg(last = true)]
         args: Vec<String>,
@@ -155,6 +167,9 @@ enum Command {
         /// differ (D-779, D-813)
         #[arg(long)]
         reuse_report: bool,
+        /// Compile the tests with the release profile, which optimizes the program as a whole
+        #[arg(long)]
+        release: bool,
     },
     /// Format source files (§13.7, D-1031)
     Fmt {
@@ -265,6 +280,10 @@ fn main() -> ExitCode {
     }
 }
 
+#[expect(
+    clippy::too_many_lines,
+    reason = "one arm per command, each moving its arguments into its options"
+)]
 fn run_command() -> ExitCode {
     let env = |name: &str| std::env::var_os(name);
     // clap prints help and usage errors while it parses, so its color is
@@ -312,6 +331,7 @@ fn run_command() -> ExitCode {
             target,
             output,
             deny_warnings,
+            release,
         } => build(
             out,
             BuildArgs {
@@ -319,12 +339,14 @@ fn run_command() -> ExitCode {
                 target,
                 output,
                 deny_warnings,
+                profile: profile(release),
             },
         ),
         Command::Run {
             module_path,
             deny_warnings,
             reuse_report,
+            release,
             args,
         } => run(
             out,
@@ -333,6 +355,7 @@ fn run_command() -> ExitCode {
                 args,
                 deny_warnings,
                 reuse_report,
+                profile: profile(release),
             },
         ),
         Command::Repl { deny_warnings } => cheby_repl::run_cached(
@@ -345,6 +368,7 @@ fn run_command() -> ExitCode {
             module,
             deny_warnings,
             reuse_report,
+            release,
         } => test(
             out,
             &cheby_driver::TestOptions {
@@ -352,6 +376,7 @@ fn run_command() -> ExitCode {
                 module,
                 deny_warnings,
                 reuse_report,
+                profile: profile(release),
             },
         ),
         Command::Fmt { check, paths } => fmt(out, check, &paths),
@@ -838,12 +863,22 @@ fn package_sources(src: &std::path::Path) -> std::io::Result<Vec<std::path::Path
     Ok(files)
 }
 
+/// The profile of `--release`: release with the flag, debug without.
+const fn profile(release: bool) -> cheby_driver::Profile {
+    if release {
+        cheby_driver::Profile::Release
+    } else {
+        cheby_driver::Profile::Debug
+    }
+}
+
 /// What `cheby build` was asked for.
 struct BuildArgs {
     module_path: Option<String>,
     target: Option<Target>,
     output: Option<std::path::PathBuf>,
     deny_warnings: bool,
+    profile: cheby_driver::Profile,
 }
 
 /// `cheby build [module_path] [--target native|js] [-o PATH]
@@ -902,6 +937,7 @@ fn build(out: Out, args: BuildArgs) -> ExitCode {
         module_path: args.module_path,
         output,
         deny_warnings: args.deny_warnings,
+        profile: args.profile,
     };
     // The warnings are printed once the build has passed every check, before
     // the link, which may still fail.
@@ -1112,12 +1148,13 @@ mod tests {
             target,
             output,
             deny_warnings,
+            release,
         } = cli.command
         else {
             panic!("not build");
         };
         assert_eq!(module_path, None);
-        assert!(target.is_none() && output.is_none() && !deny_warnings);
+        assert!(target.is_none() && output.is_none() && !deny_warnings && !release);
         let cli = Cli::try_parse_from([
             "cheby",
             "-j",
@@ -1137,6 +1174,7 @@ mod tests {
             target,
             output,
             deny_warnings,
+            ..
         } = cli.command
         else {
             panic!("not build");
@@ -1146,6 +1184,35 @@ mod tests {
         assert_eq!(output, Some(std::path::PathBuf::from("out/app")));
         assert!(deny_warnings);
         assert!(Cli::try_parse_from(["cheby", "build", "--target", "wasm"]).is_err());
+    }
+
+    /// `--release` on `build`, `run` and `test` only, before `--` only, and
+    /// the debug profile without it: `check`, the REPL, the language server
+    /// and `fmt` have no profile.
+    #[test]
+    fn parses_the_release_flag() {
+        let cli = Cli::try_parse_from(["cheby", "build", "--release"]).unwrap();
+        assert!(matches!(cli.command, Command::Build { release: true, .. }));
+        let cli = Cli::try_parse_from(["cheby", "run", "--release", "--", "--release"]).unwrap();
+        let Command::Run { release, args, .. } = cli.command else {
+            panic!("not run");
+        };
+        assert!(release);
+        assert_eq!(args, ["--release"]);
+        let cli = Cli::try_parse_from(["cheby", "run", "--", "--release"]).unwrap();
+        assert!(matches!(cli.command, Command::Run { release: false, .. }));
+        let cli = Cli::try_parse_from(["cheby", "test", "--release", "adds"]).unwrap();
+        assert!(matches!(cli.command, Command::Test { release: true, .. }));
+        let cli = Cli::try_parse_from(["cheby", "test"]).unwrap();
+        assert!(matches!(cli.command, Command::Test { release: false, .. }));
+        for command in ["check", "repl", "lsp", "fmt", "new"] {
+            assert!(
+                Cli::try_parse_from(["cheby", command, "--release"]).is_err(),
+                "{command} takes no --release"
+            );
+        }
+        assert_eq!(super::profile(true), cheby_driver::Profile::Release);
+        assert_eq!(super::profile(false), cheby_driver::Profile::Debug);
     }
 
     /// `cheby new <name>` takes exactly one name (D-1032).

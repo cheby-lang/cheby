@@ -82,6 +82,7 @@ fn record() -> CodeRecord {
         ],
         data: Vec::new(),
         source: Some("src/main.cheby".to_owned()),
+        profile: cheby_mir::Profile::Debug,
     }
 }
 

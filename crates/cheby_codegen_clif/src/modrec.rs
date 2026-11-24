@@ -384,6 +384,7 @@ pub struct DisplayName {
 /// - a closure: its owner's name and `::{fn#<n>}`, `n` from 0 as in D-456's
 ///   symbol (`demo::double_all::{fn#0}`, `demo "adds"::{fn#0}`);
 /// - a continuation (D-780): its owner's name;
+/// - a clone (design T12): the name of the function it was made from;
 /// - a built-in tuple function (D-560, D-583): `<builtin>`.
 ///
 /// Every module path is the one source code names ([`source_module`]), so
@@ -406,6 +407,8 @@ pub(crate) fn display_name(unit: &MirModule, key: FnKey) -> Result<Option<String
         FnKey::Test(def) => Some(test_name(unit.name(def)?)),
         FnKey::Closure { owner: def, index } => Some(format!("{}::{{fn#{index}}}", owner(def)?)),
         FnKey::Continuation { owner: def, .. } => Some(owner(def)?),
+        // A clone is named as the function it was made from (design T12).
+        FnKey::Specialized { origin, .. } => Some(source_path(unit.name(origin)?)),
         FnKey::TupleDictFn { .. } => Some(BUILTIN_NAME.to_owned()),
         FnKey::ValueShim(_) | FnKey::DynForward { .. } | FnKey::Entry(_) | FnKey::Trampoline(_) => {
             None

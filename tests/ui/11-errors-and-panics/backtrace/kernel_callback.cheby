@@ -1,0 +1,29 @@
+// @mode: run-fail
+// @milestone: M3
+// @decisions: D-1039, D-1040, D-1235, D-697, D-1765
+//! With `CHEBY_BACKTRACE=1`, a panic in the callback of a std kernel lists
+//! the callback's frame and ends where the kernel called it, outside Cheby
+//! code (§11.6). `map::upsert` called as a value is its kernel, which
+//! calls the callback; a direct call calls it from the caller's code
+//! (`direct_upsert_callback`).
+
+import std::io
+import std::map
+
+fn refuse(old: Option<Int>) -> Int {
+  case old {
+    Some(n) => panic as "cannot update {n}"
+    None => 0
+  }
+}
+
+fn update(counts: map::Map<String, Int>) -> Int {
+  let up = map::upsert
+  let next = up(counts, "a", refuse)
+  map::size(next)
+}
+
+fn main() {
+  let n = update(map::from_list([("a", 1)]))
+  io::println("{n}")
+}

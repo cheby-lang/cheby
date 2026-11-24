@@ -427,6 +427,104 @@ fn list_steps_read_their_element_and_spread_in_one_call() {
     );
 }
 
+/// Elements of type `Float` and `F32` that a pattern or a `list::get`
+/// taken apart binds are read as numbers (`rc.rs`): the step's head and
+/// the indexed read each become one read with no `unbox` and no `drop`
+/// of the element. A generic element is a word and is read as one.
+#[test]
+fn float_elements_are_read_as_numbers() {
+    let lowered = lower(
+        "
+import std::f32
+import std::list
+
+fn front(xs: List<Float>, acc: Float) -> Float {
+  case xs {
+    [] => acc
+    [x, ..rest] => front(rest, acc + x)
+  }
+}
+
+fn back(xs: List<F32>, acc: F32) -> F32 {
+  case xs {
+    [] => acc
+    [..rest, x] => back(rest, acc + x)
+  }
+}
+
+fn pair(xs: List<Float>) -> Float {
+  case xs {
+    [a, b] => a * b
+    _ => 0.0
+  }
+}
+
+fn get(xs: List<F32>, i: Int) -> F32 {
+  case list::get(xs, i) {
+    Some(x) => x
+    None => f32::from_int(0)
+  }
+}
+
+fn rotate<T>(xs: List<T>) -> List<T> {
+  case xs {
+    [x, ..rest] => [..rest, x]
+    [] => []
+  }
+}
+
+fn main() {
+  let _ = front([1.0, 2.0], 0.0)
+  let _ = back([f32::from_int(1)], f32::from_int(0))
+  let _ = pair([1.5, 2.5])
+  let _ = get([f32::from_int(3)], 0)
+  let _ = rotate([1.0])
+}
+",
+    );
+    let front = lowered.function("app", "app::front");
+    assert!(
+        front.contains("_6: float = call_runtime list_uncons_head_float()"),
+        "{front}"
+    );
+    let back = lowered.function("app", "app::back");
+    assert!(
+        back.contains(": f32 = call_runtime list_uncons_head_f32()"),
+        "{back}"
+    );
+    for f in [&front, &back] {
+        assert!(
+            !f.contains("unbox") && !f.contains("list_uncons_head()"),
+            "{f}"
+        );
+    }
+    let pair = lowered.function("app", "app::pair");
+    assert_eq!(
+        count(
+            &pair,
+            "call_runtime list_get_float(borrow _0, borrow const int "
+        ),
+        2,
+        "{pair}"
+    );
+    assert!(!pair.contains("unbox"), "{pair}");
+    let get = lowered.function("app", "app::get");
+    assert!(
+        get.contains("call_runtime list_get_f32(borrow _0, borrow _1)"),
+        "{get}"
+    );
+    assert!(!get.contains("unbox"), "{get}");
+    let rotate = lowered.function("app", "app::rotate");
+    assert!(
+        rotate.contains("call_runtime list_uncons_head()"),
+        "{rotate}"
+    );
+    assert!(
+        !rotate.contains("_float") && !rotate.contains("_f32"),
+        "{rotate}"
+    );
+}
+
 #[test]
 fn alternatives_join_through_block_parameters_and_as_binds_the_whole() {
     let lowered = lower(FORMS);

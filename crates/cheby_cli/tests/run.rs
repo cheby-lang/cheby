@@ -971,6 +971,180 @@ fn record_field_pushes_write_in_place() {
     }
 }
 
+/// Lists built by `push` and by `prepend` and walked from the front and
+/// from the back, each a list of more than one leaf that only the loop
+/// holds: every push, prepend and pattern step writes in place, and the
+/// whole run allocates a leaf per 32 elements and little else (D-1757,
+/// D-1758). Before lists kept a leaf at each end, every one of these
+/// 40,000 operations descended the tree. Run with poisoning off, so the inline pattern
+/// steps are compiled, and with the counters on, which sends each step
+/// to the helper that counts it.
+#[test]
+fn list_ends_write_in_place() {
+    let dir = package(
+        "list_ends",
+        &[
+            MANIFEST,
+            (
+                "src/main.cheby",
+                "//! Builds lists at both ends and walks them from both ends.\n\
+                 \n\
+                 import std::io\n\
+                 import std::list\n\
+                 \n\
+                 fn pushed(acc: List<Int>, n: Int) -> List<Int> {\n  \
+                   case n {\n    \
+                     0 => acc\n    \
+                     _ => pushed(list::push(acc, n), n - 1)\n  \
+                   }\n\
+                 }\n\
+                 \n\
+                 fn prepended(acc: List<Int>, n: Int) -> List<Int> {\n  \
+                   case n {\n    \
+                     0 => acc\n    \
+                     _ => prepended(list::prepend(acc, n), n - 1)\n  \
+                   }\n\
+                 }\n\
+                 \n\
+                 fn from_front(xs: List<Int>, sum: Int) -> Int {\n  \
+                   case xs {\n    \
+                     [] => sum\n    \
+                     [x, ..rest] => from_front(rest, sum * 3 % 1_000_003 + x)\n  \
+                   }\n\
+                 }\n\
+                 \n\
+                 fn from_back(xs: List<Int>, sum: Int) -> Int {\n  \
+                   case xs {\n    \
+                     [] => sum\n    \
+                     [..rest, x] => from_back(rest, sum * 3 % 1_000_003 + x)\n  \
+                   }\n\
+                 }\n\
+                 \n\
+                 fn main() {\n  \
+                   let a = from_front(pushed([], 5000), 0)\n  \
+                   let b = from_back(prepended([], 5000), 0)\n  \
+                   let c = from_back(pushed([], 5000), 0)\n  \
+                   let d = from_front(prepended([], 5000), 0)\n  \
+                   io::println(\"{a} {b} {c} {d}\")\n\
+                 }\n",
+            ),
+        ],
+    );
+    for stats in [true, false] {
+        let cache = fresh_cache();
+        let mut cmd = Command::new(CHEBY);
+        cmd.args(["--color=never", "run"])
+            .current_dir(&dir)
+            .env("NO_COLOR", "1")
+            .env("CHEBY_RT_POISON", "0")
+            .env_remove("CHEBY_RC")
+            .env_remove("CHEBY_DUMP_DIR");
+        if stats {
+            cmd.env("CHEBY_RT_STATS", "1");
+        } else {
+            cmd.env_remove("CHEBY_RT_STATS");
+        }
+        cache.apply(&mut cmd);
+        let out = process::run(cmd, None, TIMEOUT).unwrap_or_else(|e| panic!("{e:?}"));
+        assert_eq!(out.status, Some(0), "{stats}: {}", out.stderr);
+        // `pushed` is 5000 down to 1 and `prepended` 1 up to 5000, so
+        // the first and the last walk agree, and so do the two between.
+        assert_eq!(out.stdout, "990564 990564 440042 440042\n", "{stats}");
+        if !stats {
+            continue;
+        }
+        let count = |name: &str| {
+            stat(&out.stderr, name).unwrap_or_else(|| panic!("no `{name}` line:\n{}", out.stderr))
+        };
+        assert_eq!(count("list push copied"), 0, "{}", out.stderr);
+        assert_eq!(count("list update copied"), 0, "{}", out.stderr);
+        // Every push but the first of each list, which makes its root.
+        assert_eq!(count("list push in place"), 2 * 4999, "{}", out.stderr);
+        // Every prepend but the first of each list, and every step.
+        assert!(
+            count("list update in place") >= 2 * 4999 + 4 * 4999,
+            "{}",
+            out.stderr
+        );
+        // About 157 leaves and 6 branches for each of four lists, with
+        // the leaves a list grows through at first.
+        let allocations = count("allocations");
+        assert!(
+            allocations < 1_500,
+            "{allocations} allocations:\n{}",
+            out.stderr
+        );
+    }
+}
+
+/// Values appended to the keys of an ordered multimap that only the loop
+/// holds: `ordered_map::upsert` moves each key's list into its callback,
+/// so every push but each key's first writes in place. Before, the index
+/// still held the list during the callback and every push copied it.
+/// Both RC modes are run, with poisoning off, so the inline paths run.
+#[test]
+fn ordered_multimap_inserts_write_in_place() {
+    let dir = package(
+        "ordered_multimap_inserts",
+        &[
+            MANIFEST,
+            (
+                "src/main.cheby",
+                "//! Appends values to three keys of an ordered multimap.\n\
+                 \n\
+                 import std::io\n\
+                 import std::list\n\
+                 import std::ordered_multimap\n\
+                 import std::ordered_multimap::{OrderedMultimap}\n\
+                 \n\
+                 fn fill(m: OrderedMultimap<Int, Int>, n: Int) -> OrderedMultimap<Int, Int> {\n  \
+                   case n {\n    \
+                     0 => m\n    \
+                     _ => fill(ordered_multimap::insert(m, n % 3, n), n - 1)\n  \
+                   }\n\
+                 }\n\
+                 \n\
+                 fn main() {\n  \
+                   let m = fill(ordered_multimap::new(), 3000)\n  \
+                   let keys = ordered_multimap::keys(m)\n  \
+                   let lengths = list::map(keys, fn(key) { list::length(ordered_multimap::get(m, key)) })\n  \
+                   let total = ordered_multimap::count(m)\n  \
+                   io::println(\"{keys} {lengths} {total}\")\n\
+                 }\n",
+            ),
+        ],
+    );
+    for rc in [None, Some("naive")] {
+        let cache = fresh_cache();
+        let mut cmd = Command::new(CHEBY);
+        cmd.args(["--color=never", "run"])
+            .current_dir(&dir)
+            .env("NO_COLOR", "1")
+            .env("CHEBY_RT_STATS", "1")
+            .env("CHEBY_RT_POISON", "0")
+            .env_remove("CHEBY_DUMP_DIR");
+        cache.apply(&mut cmd);
+        match rc {
+            Some(mode) => cmd.env("CHEBY_RC", mode),
+            None => cmd.env_remove("CHEBY_RC"),
+        };
+        let out = process::run(cmd, None, TIMEOUT).unwrap_or_else(|e| panic!("{e:?}"));
+        assert_eq!(out.status, Some(0), "{rc:?}: {}", out.stderr);
+        assert_eq!(out.stdout, "[0, 2, 1] [1000, 1000, 1000] 3000\n");
+        let count = |name: &str| {
+            stat(&out.stderr, name).unwrap_or_else(|| panic!("no `{name}` line:\n{}", out.stderr))
+        };
+        assert_eq!(count("list push copied"), 0, "{rc:?}: {}", out.stderr);
+        // Every insert but the first of each key pushes, and so do `keys`
+        // and `list::map`.
+        assert!(
+            count("list push in place") >= 2997,
+            "{rc:?}: {}",
+            out.stderr
+        );
+    }
+}
+
 /// A field every variant holds at the same place (D-071) is read without a
 /// test of the variant, so the read proves no layout to reuse (the fix
 /// review's TOK-1): a `Circle` rebuilt as a larger `Rect` in later arms,
@@ -1617,4 +1791,1329 @@ fn const_verdict_near_the_memory_limit_is_one_across_commands() {
             );
         }
     }
+}
+
+/// Std kernels called at the call site, without their wrappers (D-525):
+/// a list, a map and a text updated at their last use are updated in
+/// place, and the same updates of a value used again after the call copy
+/// it, once each. Both RC modes count the same, since the kernel sees the
+/// counts the wrapper gave it: an argument moved into an owned temporary
+/// at its last use, and `dup`ed into it otherwise. Run with poisoning
+/// off, so the inline paths run.
+#[test]
+fn direct_kernel_calls_update_in_place_only_at_a_last_use() {
+    let dir = package(
+        "direct_kernel_updates",
+        &[MANIFEST, ("src/main.cheby", DIRECT_KERNEL_UPDATES)],
+    );
+    for rc in [None, Some("naive")] {
+        let cache = fresh_cache();
+        let mut cmd = Command::new(CHEBY);
+        cmd.args(["--color=never", "run"])
+            .current_dir(&dir)
+            .env("NO_COLOR", "1")
+            .env("CHEBY_RT_STATS", "1")
+            .env("CHEBY_RT_POISON", "0")
+            .env_remove("CHEBY_DUMP_DIR");
+        cache.apply(&mut cmd);
+        match rc {
+            Some(mode) => cmd.env("CHEBY_RC", mode),
+            None => cmd.env_remove("CHEBY_RC"),
+        };
+        let out = process::run(cmd, None, TIMEOUT).unwrap_or_else(|e| panic!("{e:?}"));
+        assert_eq!(out.status, Some(0), "{rc:?}: {}", out.stderr);
+        assert_eq!(out.stdout, "3 3003 7 1859 1002\n", "{rc:?}");
+        let count = |name: &str| {
+            stat(&out.stderr, name).unwrap_or_else(|| panic!("no `{name}` line:\n{}", out.stderr))
+        };
+        // `grown`'s 1000 updates in place, `kept`'s 1000 copies.
+        assert!(
+            count("list update in place") >= 1000,
+            "{rc:?}: {}",
+            out.stderr
+        );
+        assert_eq!(count("list update copied"), 1000, "{rc:?}: {}", out.stderr);
+        // `filled`'s inserts but the first, into the empty static map,
+        // in place; `shared`'s 1000 copies.
+        assert!(
+            count("map/set update in place") >= 999,
+            "{rc:?}: {}",
+            out.stderr
+        );
+        assert_eq!(
+            count("map/set update copied"),
+            1000,
+            "{rc:?}: {}",
+            out.stderr
+        );
+        // `appended` grows one text: no copy after the first append.
+        assert!(
+            count("string/bytes kernel copied") <= 1,
+            "{rc:?}: {}",
+            out.stderr
+        );
+    }
+}
+
+/// A loop of reads and writes at an index of a list of ten numbers, as in
+/// the comparison's `fannkuch_redux`, allocates nothing per step: a
+/// `list::get` matched at once builds no `Some`, and a `list::set` of
+/// the unique list writes it in place. Ten times the steps make the same
+/// number of allocations, under both RC modes. Run with poisoning off, so
+/// the inline reads run; the writes call the helper while events are
+/// counted.
+#[test]
+fn indexed_list_steps_allocate_nothing() {
+    let dir = package(
+        "indexed_list_steps",
+        &[MANIFEST, ("src/main.cheby", INDEXED_LIST_STEPS)],
+    );
+    for rc in [None, Some("naive")] {
+        let mut counts = Vec::new();
+        for (steps, total) in [("1000", "4500"), ("10000", "45000")] {
+            let cache = fresh_cache();
+            let mut cmd = Command::new(CHEBY);
+            cmd.args(["--color=never", "run", "--", steps])
+                .current_dir(&dir)
+                .env("NO_COLOR", "1")
+                .env("CHEBY_RT_STATS", "1")
+                .env("CHEBY_RT_POISON", "0")
+                .env_remove("CHEBY_DUMP_DIR");
+            cache.apply(&mut cmd);
+            match rc {
+                Some(mode) => cmd.env("CHEBY_RC", mode),
+                None => cmd.env_remove("CHEBY_RC"),
+            };
+            let out = process::run(cmd, None, TIMEOUT).unwrap_or_else(|e| panic!("{e:?}"));
+            assert_eq!(out.status, Some(0), "{rc:?}: {}", out.stderr);
+            assert_eq!(out.stdout, format!("{total}\n"), "{rc:?}");
+            let allocations = stat(&out.stderr, "allocations")
+                .unwrap_or_else(|| panic!("no `allocations` line:\n{}", out.stderr));
+            counts.push(allocations);
+        }
+        assert_eq!(
+            counts[0], counts[1],
+            "{rc:?}: allocations grow with the steps"
+        );
+    }
+}
+
+/// Every std kernel that is an instruction (`cheby_mir::kernels_instr`),
+/// called directly, gives what its kernel gives through a function value,
+/// which calls the wrapper: on the edges of each type and on 500
+/// pseudo-random inputs from a fixed seed, in both profiles. Constants
+/// evaluated with the instruction agree too (D-537). Results are compared
+/// by their text, which tells `-0.0` from `0.0` and NaN from any number;
+/// `cheby_codegen_clif`'s `instr_kernels_tests` compares the bits.
+#[test]
+fn instruction_kernels_compute_what_their_kernels_compute() {
+    let dir = package(
+        "instruction_kernels",
+        &[
+            (
+                "cheby.toml",
+                "name = \"app\"\nversion = \"0.1.0\"\ntargets = [\"native\"]\n",
+            ),
+            ("src/main.cheby", INSTRUCTION_KERNELS),
+        ],
+    );
+    for args in [&["run"][..], &["run", "--release"][..]] {
+        let out = cheby(&dir, args);
+        assert_eq!(out.stderr, "", "{args:?}");
+        assert_eq!(
+            out.stdout, "82 kernels, 51929 inputs, 0 missed, constants True\n",
+            "{args:?}"
+        );
+        assert_eq!(out.status, Some(0), "{args:?}");
+    }
+}
+
+/// The program of [`instruction_kernels_compute_what_their_kernels_compute`].
+const INSTRUCTION_KERNELS: &str = r#"//! Every std kernel that is an instruction, called directly, against its kernel through
+//! a function value, which calls the wrapper.
+
+import std::f32
+import std::float
+import std::i16
+import std::i32
+import std::i64
+import std::i8
+import std::int
+import std::io
+import std::list
+import std::u16
+import std::u32
+import std::u64
+import std::u8
+
+/// A constant evaluated with the instruction (D-537).
+const root_two: Float = float::sqrt(2.0)
+
+/// A conversion that rounds, as a constant.
+const rounded: Float = float::from_int(9_007_199_254_740_993)
+
+/// The number of inputs and how many of them `direct` and `kernel` show
+/// differently.
+fn misses<A, B>(
+  xs: List<A>,
+  direct: fn(A) -> B,
+  kernel: fn(A) -> B,
+  show: fn(B) -> String,
+) -> (Int, Int) {
+  list::fold(xs, (0, 0), fn((n, missed), x) {
+    case show(direct(x)) == show(kernel(x)) {
+      True => (n + 1, missed)
+      False => (n + 1, missed + 1)
+    }
+  })
+}
+
+/// [`misses`] of a function of two arguments, over every pair of `xs` and
+/// its reverse.
+fn misses2<A>(
+  xs: List<A>,
+  direct: fn(A, A) -> A,
+  kernel: fn(A, A) -> A,
+  show: fn(A) -> String,
+) -> (Int, Int) {
+  let pairs = list::zip(xs, list::reverse(xs))
+  misses(pairs, fn((a, b)) { direct(a, b) }, fn((a, b)) { kernel(a, b) }, show)
+}
+
+/// `n` pseudo-random words after `state`, from a 64-bit LCG.
+fn words(state: U64, n: Int, out: List<U64>) -> List<U64> {
+  case n {
+    0 => out
+    _ => {
+      let product = u64::wrapping_mul(state, 6_364_136_223_846_793_005)
+      let next = u64::wrapping_add(product, 1_442_695_040_888_963_407)
+      words(next, n - 1, list::push(out, next ^ (next >> 29)))
+    }
+  }
+}
+
+/// Pseudo-random floats of every magnitude, with the edges of `Float` and
+/// of `F32`'s range.
+fn floats(ws: List<U64>) -> List<Float> {
+  let scales = [1.0e-320, 1.0e-300, 1.0e-40, 1.0e-19, 1.0, 1.0e19, 1.0e38, 1.0e300]
+  let random = list::flat_map(scales, fn(s) {
+    list::map(ws, fn(w) { float::from_i64(i64::wrapping_from_u64(w)) * s })
+  })
+  let edges = [
+    0.0,
+    -0.0,
+    1.0,
+    -1.0,
+    0.5,
+    1.0 / 0.0,
+    -1.0 / 0.0,
+    0.0 / 0.0,
+    float::max_value,
+    float::min_value,
+    5.0e-324,
+    2.2250738585072014e-308,
+    3.4028234663852886e38,
+    3.4028235677973366e38,
+    3.4028235677973367e38,
+    1.401298464324817e-45,
+    7.006492321624085e-46,
+    16_777_217.0,
+    0.1,
+  ]
+  list::append(edges, random)
+}
+
+fn main() {
+  let ws = words(42, 500, [])
+  let ints = list::append(
+    [0, 1, -1, int::min_value, int::max_value, 9_007_199_254_740_993, 16_777_217],
+    list::map(ws, int::wrapping_from_u64),
+  )
+  let i8s =
+    list::append([0, 1, -1, i8::min_value, i8::max_value], list::map(ws, i8::wrapping_from_u64))
+  let i16s =
+    list::append([0, 1, -1, i16::min_value, i16::max_value], list::map(ws, i16::wrapping_from_u64))
+  let i32s = list::append(
+    [0, 1, -1, i32::min_value, i32::max_value, 16_777_217],
+    list::map(ws, i32::wrapping_from_u64),
+  )
+  let i64s = list::append(
+    [0, 1, -1, i64::min_value, i64::max_value, 9_007_199_254_740_993],
+    list::map(ws, i64::wrapping_from_u64),
+  )
+  let u8s = list::append([0, 1, u8::max_value], list::map(ws, u8::wrapping_from_u64))
+  let u16s = list::append([0, 1, u16::max_value], list::map(ws, u16::wrapping_from_u64))
+  let u32s = list::append([0, 1, u32::max_value, 16_777_217], list::map(ws, u32::wrapping_from_u64))
+  let u64s = list::append(
+    [
+      0,
+      1,
+      u64::max_value,
+      9_223_372_036_854_775_808,
+      9_223_372_036_854_775_809,
+      18_446_744_073_709_550_593,
+    ],
+    ws,
+  )
+  let fs = floats(ws)
+  let f32s = list::map(fs, f32::from_float)
+  let results = [
+    misses(fs, fn(x) { f32::from_float(x) }, f32::from_float, f32::show),
+    misses(ints, fn(x) { f32::from_int(x) }, f32::from_int, f32::show),
+    misses(i8s, fn(x) { f32::from_i8(x) }, f32::from_i8, f32::show),
+    misses(i16s, fn(x) { f32::from_i16(x) }, f32::from_i16, f32::show),
+    misses(i32s, fn(x) { f32::from_i32(x) }, f32::from_i32, f32::show),
+    misses(i64s, fn(x) { f32::from_i64(x) }, f32::from_i64, f32::show),
+    misses(u8s, fn(x) { f32::from_u8(x) }, f32::from_u8, f32::show),
+    misses(u16s, fn(x) { f32::from_u16(x) }, f32::from_u16, f32::show),
+    misses(u32s, fn(x) { f32::from_u32(x) }, f32::from_u32, f32::show),
+    misses(u64s, fn(x) { f32::from_u64(x) }, f32::from_u64, f32::show),
+    misses(f32s, fn(x) { float::from_f32(x) }, float::from_f32, float::show),
+    misses(ints, fn(x) { float::from_int(x) }, float::from_int, float::show),
+    misses(i8s, fn(x) { float::from_i8(x) }, float::from_i8, float::show),
+    misses(i16s, fn(x) { float::from_i16(x) }, float::from_i16, float::show),
+    misses(i32s, fn(x) { float::from_i32(x) }, float::from_i32, float::show),
+    misses(i64s, fn(x) { float::from_i64(x) }, float::from_i64, float::show),
+    misses(u8s, fn(x) { float::from_u8(x) }, float::from_u8, float::show),
+    misses(u16s, fn(x) { float::from_u16(x) }, float::from_u16, float::show),
+    misses(u32s, fn(x) { float::from_u32(x) }, float::from_u32, float::show),
+    misses(u64s, fn(x) { float::from_u64(x) }, float::from_u64, float::show),
+    misses(fs, fn(x) { float::sqrt(x) }, float::sqrt, float::show),
+    misses(i8s, fn(x) { i16::from_i8(x) }, i16::from_i8, i16::show),
+    misses(u8s, fn(x) { i16::from_u8(x) }, i16::from_u8, i16::show),
+    misses(i8s, fn(x) { i32::from_i8(x) }, i32::from_i8, i32::show),
+    misses(i16s, fn(x) { i32::from_i16(x) }, i32::from_i16, i32::show),
+    misses(u8s, fn(x) { i32::from_u8(x) }, i32::from_u8, i32::show),
+    misses(u16s, fn(x) { i32::from_u16(x) }, i32::from_u16, i32::show),
+    misses(ints, fn(x) { i64::from_int(x) }, i64::from_int, i64::show),
+    misses(i8s, fn(x) { i64::from_i8(x) }, i64::from_i8, i64::show),
+    misses(i16s, fn(x) { i64::from_i16(x) }, i64::from_i16, i64::show),
+    misses(i32s, fn(x) { i64::from_i32(x) }, i64::from_i32, i64::show),
+    misses(u8s, fn(x) { i64::from_u8(x) }, i64::from_u8, i64::show),
+    misses(u16s, fn(x) { i64::from_u16(x) }, i64::from_u16, i64::show),
+    misses(u32s, fn(x) { i64::from_u32(x) }, i64::from_u32, i64::show),
+    misses(i8s, fn(x) { int::from_i8(x) }, int::from_i8, int::show),
+    misses(i16s, fn(x) { int::from_i16(x) }, int::from_i16, int::show),
+    misses(i32s, fn(x) { int::from_i32(x) }, int::from_i32, int::show),
+    misses(u8s, fn(x) { int::from_u8(x) }, int::from_u8, int::show),
+    misses(u16s, fn(x) { int::from_u16(x) }, int::from_u16, int::show),
+    misses(u32s, fn(x) { int::from_u32(x) }, int::from_u32, int::show),
+    misses(u8s, fn(x) { u16::from_u8(x) }, u16::from_u8, u16::show),
+    misses(u8s, fn(x) { u32::from_u8(x) }, u32::from_u8, u32::show),
+    misses(u16s, fn(x) { u32::from_u16(x) }, u32::from_u16, u32::show),
+    misses(u8s, fn(x) { u64::from_u8(x) }, u64::from_u8, u64::show),
+    misses(u16s, fn(x) { u64::from_u16(x) }, u64::from_u16, u64::show),
+    misses(u32s, fn(x) { u64::from_u32(x) }, u64::from_u32, u64::show),
+    misses2(ints, fn(a, b) { int::wrapping_add(a, b) }, int::wrapping_add, int::show),
+    misses2(ints, fn(a, b) { int::wrapping_sub(a, b) }, int::wrapping_sub, int::show),
+    misses2(ints, fn(a, b) { int::wrapping_mul(a, b) }, int::wrapping_mul, int::show),
+    misses(ints, fn(x) { int::wrapping_neg(x) }, int::wrapping_neg, int::show),
+    misses2(i8s, fn(a, b) { i8::wrapping_add(a, b) }, i8::wrapping_add, i8::show),
+    misses2(i8s, fn(a, b) { i8::wrapping_sub(a, b) }, i8::wrapping_sub, i8::show),
+    misses2(i8s, fn(a, b) { i8::wrapping_mul(a, b) }, i8::wrapping_mul, i8::show),
+    misses(i8s, fn(x) { i8::wrapping_neg(x) }, i8::wrapping_neg, i8::show),
+    misses2(i16s, fn(a, b) { i16::wrapping_add(a, b) }, i16::wrapping_add, i16::show),
+    misses2(i16s, fn(a, b) { i16::wrapping_sub(a, b) }, i16::wrapping_sub, i16::show),
+    misses2(i16s, fn(a, b) { i16::wrapping_mul(a, b) }, i16::wrapping_mul, i16::show),
+    misses(i16s, fn(x) { i16::wrapping_neg(x) }, i16::wrapping_neg, i16::show),
+    misses2(i32s, fn(a, b) { i32::wrapping_add(a, b) }, i32::wrapping_add, i32::show),
+    misses2(i32s, fn(a, b) { i32::wrapping_sub(a, b) }, i32::wrapping_sub, i32::show),
+    misses2(i32s, fn(a, b) { i32::wrapping_mul(a, b) }, i32::wrapping_mul, i32::show),
+    misses(i32s, fn(x) { i32::wrapping_neg(x) }, i32::wrapping_neg, i32::show),
+    misses2(i64s, fn(a, b) { i64::wrapping_add(a, b) }, i64::wrapping_add, i64::show),
+    misses2(i64s, fn(a, b) { i64::wrapping_sub(a, b) }, i64::wrapping_sub, i64::show),
+    misses2(i64s, fn(a, b) { i64::wrapping_mul(a, b) }, i64::wrapping_mul, i64::show),
+    misses(i64s, fn(x) { i64::wrapping_neg(x) }, i64::wrapping_neg, i64::show),
+    misses2(u8s, fn(a, b) { u8::wrapping_add(a, b) }, u8::wrapping_add, u8::show),
+    misses2(u8s, fn(a, b) { u8::wrapping_sub(a, b) }, u8::wrapping_sub, u8::show),
+    misses2(u8s, fn(a, b) { u8::wrapping_mul(a, b) }, u8::wrapping_mul, u8::show),
+    misses(u8s, fn(x) { u8::wrapping_neg(x) }, u8::wrapping_neg, u8::show),
+    misses2(u16s, fn(a, b) { u16::wrapping_add(a, b) }, u16::wrapping_add, u16::show),
+    misses2(u16s, fn(a, b) { u16::wrapping_sub(a, b) }, u16::wrapping_sub, u16::show),
+    misses2(u16s, fn(a, b) { u16::wrapping_mul(a, b) }, u16::wrapping_mul, u16::show),
+    misses(u16s, fn(x) { u16::wrapping_neg(x) }, u16::wrapping_neg, u16::show),
+    misses2(u32s, fn(a, b) { u32::wrapping_add(a, b) }, u32::wrapping_add, u32::show),
+    misses2(u32s, fn(a, b) { u32::wrapping_sub(a, b) }, u32::wrapping_sub, u32::show),
+    misses2(u32s, fn(a, b) { u32::wrapping_mul(a, b) }, u32::wrapping_mul, u32::show),
+    misses(u32s, fn(x) { u32::wrapping_neg(x) }, u32::wrapping_neg, u32::show),
+    misses2(u64s, fn(a, b) { u64::wrapping_add(a, b) }, u64::wrapping_add, u64::show),
+    misses2(u64s, fn(a, b) { u64::wrapping_sub(a, b) }, u64::wrapping_sub, u64::show),
+    misses2(u64s, fn(a, b) { u64::wrapping_mul(a, b) }, u64::wrapping_mul, u64::show),
+    misses(u64s, fn(x) { u64::wrapping_neg(x) }, u64::wrapping_neg, u64::show),
+  ]
+  let (checked, missed) = list::fold(results, (0, 0), fn((n, m), (a, b)) { (n + a, m + b) })
+  let sqrt = float::sqrt
+  let from_int = float::from_int
+  let constants = case float::show(root_two) == float::show(sqrt(2.0)) {
+    True => float::show(rounded) == float::show(from_int(9_007_199_254_740_993))
+    False => False
+  }
+  list::each(list::enumerate(results), fn((i, (n, m))) {
+    case m {
+      0 => Nil
+      _ => io::println("{i}: {m} of {n}")
+    }
+  })
+  let kernels = list::length(results)
+  io::println("{kernels} kernels, {checked} inputs, {missed} missed, constants {constants}")
+}
+"#;
+
+/// The program of [`indexed_list_steps_allocate_nothing`].
+const INDEXED_LIST_STEPS: &str = r#"//! Reversals of a prefix of a list of ten numbers with `list::get` and `list::set`.
+
+import std::env
+import std::int
+import std::io
+import std::list
+
+fn at(xs: List<Int>, i: Int) -> Int {
+  let assert Some(x) = list::get(xs, i)
+  x
+}
+
+fn reverse(xs: List<Int>, low: Int, high: Int) -> List<Int> {
+  case low < high {
+    True => {
+      let a = at(xs, low)
+      let b = at(xs, high)
+      reverse(list::set(list::set(xs, low, b), high, a), low + 1, high - 1)
+    }
+    False => xs
+  }
+}
+
+fn steps(xs: List<Int>, n: Int, total: Int) -> Int {
+  case n {
+    0 => total
+    _ => {
+      let flipped = reverse(xs, 0, n % 10)
+      let first = at(flipped, 0)
+      steps(flipped, n - 1, total + first)
+    }
+  }
+}
+
+fn main() {
+  let assert [arg] = env::args()
+  let assert Ok(n) = int::parse(arg)
+  let total = steps(list::range(0, 10), n, 0)
+  io::println("{total}")
+}
+"#;
+
+/// The program of [`direct_kernel_calls_update_in_place_only_at_a_last_use`].
+const DIRECT_KERNEL_UPDATES: &str = r#"//! Updates with std kernels, at their last use and with the old value used afterwards.
+
+import std::io
+import std::list
+import std::map
+import std::string
+
+fn grown(xs: List<Int>, n: Int) -> List<Int> {
+  case n {
+    0 => xs
+    _ => grown(list::set(xs, 0, n), n - 1)
+  }
+}
+
+fn kept(xs: List<Int>, n: Int, total: Int) -> Int {
+  case n {
+    0 => total + list::length(xs)
+    _ => {
+      let changed = list::set(xs, 0, n)
+      kept(xs, n - 1, total + list::length(changed))
+    }
+  }
+}
+
+fn filled(m: map::Map<Int, Int>, n: Int) -> map::Map<Int, Int> {
+  case n {
+    0 => m
+    _ => filled(map::insert(m, n % 7, n), n - 1)
+  }
+}
+
+fn shared(m: map::Map<Int, Int>, n: Int, total: Int) -> Int {
+  case n {
+    0 => total + map::size(m)
+    _ => {
+      let more = map::insert(m, n % 7, n)
+      shared(m, n - 1, total + map::size(more))
+    }
+  }
+}
+
+fn appended(text: String, n: Int) -> String {
+  case n {
+    0 => text
+    _ => appended(string::add(text, "x"), n - 1)
+  }
+}
+
+fn main() {
+  let a = list::length(grown([0, 1, 2], 1000))
+  let b = kept([0, 1, 2], 1000, 0)
+  let c = map::size(filled(map::new(), 1000))
+  let d = shared(map::from_list([(0, 0)]), 1000, 0)
+  let e = string::length(appended(string::add("a", "b"), 1000))
+  io::println("{a} {b} {c} {d} {e}")
+}
+"#;
+
+/// A `Float` helper of the shape of cheby-compare's `spectral_norm`: a
+/// function that returns a boxed `Float` (D-453) and a loop that calls it.
+/// The source says the helper cost about 1.65x; that program writes it
+/// out by hand in the loop instead.
+const FLOAT_HELPER: &str =
+    "//! Sums A(i, j) = 1 / ((i + j)(i + j + 1) / 2 + i + 1) through a helper.
+
+import std::float
+import std::int
+import std::io
+
+fn a_of(i: Int, j: Int) -> Float {
+  let ij = i + j
+  1.0 / float::from_int(ij * (ij + 1) / 2 + i + 1)
+}
+
+fn row_sum(i: Int, j: Int, n: Int, sum: Float) -> Float {
+  case j == n {
+    True => sum
+    False => row_sum(i, j + 1, n, sum + a_of(i, j))
+  }
+}
+
+fn main() {
+  let total = row_sum(3, 0, 20000, 0.0)
+  let assert Ok(scaled) = float::round(total * 1000000.0)
+  io::println(int::show(scaled))
+}
+";
+
+/// [`FLOAT_HELPER`] with the helper written out in the loop by hand.
+const FLOAT_BY_HAND: &str = "//! Sums A(i, j) = 1 / ((i + j)(i + j + 1) / 2 + i + 1) in the loop.
+
+import std::float
+import std::int
+import std::io
+
+fn row_sum(i: Int, j: Int, n: Int, sum: Float) -> Float {
+  case j == n {
+    True => sum
+    False => {
+      let ij = i + j
+      let a = 1.0 / float::from_int(ij * (ij + 1) / 2 + i + 1)
+      row_sum(i, j + 1, n, sum + a)
+    }
+  }
+}
+
+fn main() {
+  let total = row_sum(3, 0, 20000, 0.0)
+  let assert Ok(scaled) = float::round(total * 1000000.0)
+  io::println(int::show(scaled))
+}
+";
+
+/// The allocations of `cheby run` (with `--release` when `release`) of
+/// package `name` holding `source`, and its standard output.
+#[expect(
+    clippy::panic,
+    reason = "a test helper: a failed run or a missing stats line fails the test"
+)]
+fn allocations(name: &str, source: &str, release: bool) -> (u64, String) {
+    let dir = package(name, &[MANIFEST, ("src/main.cheby", source)]);
+    let cache = fresh_cache();
+    let mut cmd = Command::new(CHEBY);
+    cmd.args(["--color=never", "run"]);
+    if release {
+        cmd.arg("--release");
+    }
+    cmd.current_dir(&dir)
+        .env("NO_COLOR", "1")
+        .env("CHEBY_RT_STATS", "1")
+        .env_remove("CHEBY_RELEASE_OFF")
+        .env_remove("CHEBY_RC")
+        .env_remove("CHEBY_DUMP_DIR");
+    cache.apply(&mut cmd);
+    let out = process::run(cmd, None, TIMEOUT).unwrap_or_else(|e| panic!("{e:?}"));
+    assert_eq!(out.status, Some(0), "{}", out.stderr);
+    let Some(n) = stat(&out.stderr, "allocations") else {
+        panic!("no allocations line:\n{}", out.stderr)
+    };
+    (n, out.stdout)
+}
+
+/// The release profile inlines a `Float` helper into its loop and its
+/// result's box cancels with the loop's unbox (design T7): the release
+/// build allocates as little as the loop with the helper written out by
+/// hand, where the debug build boxes once per iteration.
+#[test]
+fn a_float_helper_inlines_to_no_box_in_release() {
+    let (debug, debug_out) = allocations("float_helper_debug", FLOAT_HELPER, false);
+    let (release, release_out) = allocations("float_helper_release", FLOAT_HELPER, true);
+    let (by_hand, by_hand_out) = allocations("float_by_hand", FLOAT_BY_HAND, true);
+    assert_eq!(debug_out, release_out);
+    assert_eq!(debug_out, by_hand_out);
+    assert_eq!(
+        release, by_hand,
+        "the release helper allocates more than the loop by hand"
+    );
+    assert!(
+        debug >= release.saturating_add(20_000),
+        "{debug} allocations in debug against {release} in release"
+    );
+}
+
+/// [`LOG_THROUGH_INLINED_BODIES`]'s padding: a function large enough
+/// that the inliner's growth budget, half the unit, fits the bodies of
+/// `log`'s calls.
+const LOG_PADDING: &str = "
+fn describe(n: Int) -> String {
+  case n {
+    0 => \"zero\"
+    1 => \"one\"
+    2 => \"two\"
+    3 => \"three\"
+    4 => \"four\"
+    5 => \"five\"
+    6 => \"six\"
+    7 => \"seven\"
+    8 => \"eight\"
+    9 => \"nine\"
+    10 => \"ten\"
+    11 => \"eleven\"
+    12 => \"twelve\"
+    13 => \"thirteen\"
+    14 => \"fourteen\"
+    15 => \"fifteen\"
+    16 => \"sixteen\"
+    17 => \"seventeen\"
+    18 => \"eighteen\"
+    19 => \"nineteen\"
+    _ => {
+      let a = n + 1
+      let b = n * 2
+      let c = n * n
+      \"many: {n}, {a}, {b}, {c}\"
+    }
+  }
+}
+";
+
+/// Logs under a fixed clock: `log::info`'s call site is a call of the
+/// package-visible `log::write_at` (D-1630), whose body calls
+/// `log::takes`, which borrows its logger.
+const LOG_THROUGH_INLINED_BODIES: &str = "//! Logs at three levels under a fixed clock.
+
+import std::context
+import std::duration
+import std::io
+import std::log
+import std::time
+
+/// 2026-11-17T10:00:00Z.
+const opening: time::Timestamp = time::from_unix(duration::seconds(1_794_909_600))
+
+fn main() {
+  use <- context::provide(time::clock, time::fixed_clock(opening))
+  log::info(\"one\")
+  log::warn(\"two\")
+  log::debug(\"dropped\")
+  io::println(describe(3))
+  io::println(describe(42))
+}
+";
+
+/// `cheby run` of package `name` holding `source`, with `--release`
+/// when `release`, the runtime's statistics on, and the MIR dumped into
+/// `dump` when given.
+#[expect(
+    clippy::panic,
+    reason = "a test helper: a run that cannot start fails the test"
+)]
+fn run_with_stats(name: &str, source: &str, release: bool, dump: Option<&Path>) -> RunOutput {
+    let dir = package(name, &[MANIFEST, ("src/main.cheby", source)]);
+    let cache = fresh_cache();
+    let mut cmd = Command::new(CHEBY);
+    cmd.args(["--color=never", "run"]);
+    if release {
+        cmd.arg("--release");
+    }
+    cmd.current_dir(&dir)
+        .env("NO_COLOR", "1")
+        .env("CHEBY_RT_STATS", "1")
+        .env_remove("CHEBY_RELEASE_OFF")
+        .env_remove("CHEBY_RC")
+        .env_remove("CHEBY_DUMP_DIR");
+    if let Some(dump) = dump {
+        cmd.env("CHEBY_DUMP_DIR", dump);
+    }
+    cache.apply(&mut cmd);
+    process::run(cmd, None, TIMEOUT).unwrap_or_else(|e| panic!("{e:?}"))
+}
+
+/// Design T9: a std body inlined into user code calls a std function that
+/// borrows. A release build inlines `log::info_at`, the call site of
+/// `log::info`, into `main`'s closure and then the `log::write_at` it
+/// calls, so the package's unit calls `log::takes` with std's release mask,
+/// which the build writes into package units by name (refining D-787 and
+/// D-968). The release run prints what the debug run prints, with no leak
+/// (D-458) and as many objects allocated, and the executable links: a
+/// mask that disagreed with std's code would fail to resolve (D-917,
+/// D-1109).
+#[test]
+fn an_inlined_std_body_calls_a_borrowing_std_function() {
+    let source = format!("{LOG_THROUGH_INLINED_BODIES}{LOG_PADDING}");
+    let dump = package("log_inlined_dump", &[]).join("dump");
+    let release = run_with_stats("log_inlined_release", &source, true, Some(&dump));
+    let debug = run_with_stats("log_inlined_debug", &source, false, None);
+    assert_eq!(debug.status, Some(0), "{}", debug.stderr);
+    assert_eq!(release.status, Some(0), "{}", release.stderr);
+    assert_eq!(release.stdout, debug.stdout);
+    let lines = |stderr: &str| -> Vec<String> {
+        stderr
+            .lines()
+            .take_while(|l| !l.starts_with("runtime stats"))
+            .map(str::to_owned)
+            .collect()
+    };
+    assert_eq!(lines(&release.stderr), lines(&debug.stderr));
+    assert_eq!(
+        stat(&release.stderr, "allocations"),
+        stat(&debug.stderr, "allocations")
+    );
+    let mir = std::fs::read_to_string(dump.join("mir/app.mir")).unwrap_or_default();
+    assert!(
+        mir.contains("call std::log::takes(") && mir.contains("borrow const ctor std::log::Info"),
+        "{mir}"
+    );
+    // The executable links against std's release records and prints the
+    // same.
+    let dir = package(
+        "log_inlined_build",
+        &[MANIFEST, ("src/main.cheby", &source)],
+    );
+    let exe = dir.join("log_inlined");
+    let cache = fresh_cache();
+    let mut build = Command::new(CHEBY);
+    build
+        .args(["--color=never", "build", "--release", "-o"])
+        .arg(&exe)
+        .current_dir(&dir)
+        .env_remove("CHEBY_RELEASE_OFF")
+        .env_remove("CHEBY_RC")
+        .env_remove("CHEBY_DUMP_DIR");
+    cache.apply(&mut build);
+    let linked = process::run(build, None, TIMEOUT).unwrap();
+    assert_eq!(linked.status, Some(0), "{}", linked.stderr);
+    let mut exec = Command::new(&exe);
+    exec.current_dir(&dir).env("CHEBY_RT_STATS", "1");
+    let ran = process::run(exec, None, TIMEOUT).unwrap();
+    assert_eq!(ran.status, Some(0), "{}", ran.stderr);
+    assert_eq!(ran.stdout, debug.stdout);
+    assert_eq!(lines(&ran.stderr), lines(&debug.stderr));
+}
+
+/// Looks keys up in std's maps: `ordered_map::get` reads a field of
+/// `ordered_map`'s package-visible `Entry`, and `sorted_map::is_empty`
+/// reads the tag of `SortedMap`, whose type has `@std_hooks`.
+const MAP_ACCESSORS: &str = "//! Looks keys up in std's maps.
+
+import std::io
+import std::ordered_map
+import std::sorted_map
+
+fn main() {
+  let o = ordered_map::from_list([(\"a\", 1), (\"b\", 2)])
+  let s = sorted_map::from_list([(1, \"x\")])
+  let found = case ordered_map::get(o, \"b\") {
+    Some(v) => v
+    None => 0
+  }
+  let empty = sorted_map::is_empty(s)
+  io::println(\"{found} {empty}\")
+  io::println(describe(found))
+}
+";
+
+/// Design T9's flagged risk: a release build inlines std's accessors into
+/// user code over std's decoded interfaces (D-953), so the layouts of the
+/// constructors they read come from those interfaces alone (D-246),
+/// `ordered_map`'s package-visible `Entry` and `sorted_map`'s `Bin`
+/// included. The build runs with an empty cache, where std's first use
+/// writes std's release records, and again with that cache warm, and both
+/// print what the debug build prints.
+#[test]
+fn std_accessors_inline_over_decoded_interfaces_cold_and_warm() {
+    let source = format!("{MAP_ACCESSORS}{LOG_PADDING}");
+    let dir = package(
+        "std_accessors_release",
+        &[MANIFEST, ("src/main.cheby", &source)],
+    );
+    let cache = fresh_cache();
+    let run = |release: bool, dump: Option<&Path>| {
+        let mut cmd = Command::new(CHEBY);
+        cmd.args(["--color=never", "run"]);
+        if release {
+            cmd.arg("--release");
+        }
+        cmd.current_dir(&dir)
+            .env("NO_COLOR", "1")
+            .env_remove("CHEBY_RELEASE_OFF")
+            .env_remove("CHEBY_RC")
+            .env_remove("CHEBY_DUMP_DIR");
+        if let Some(dump) = dump {
+            cmd.env("CHEBY_DUMP_DIR", dump);
+        }
+        cache.apply(&mut cmd);
+        process::run(cmd, None, TIMEOUT).unwrap()
+    };
+    let cold = run(true, None);
+    let warm = run(true, None);
+    let debug = run(false, None);
+    assert_eq!(debug.status, Some(0), "{}", debug.stderr);
+    assert_eq!(debug.stdout, "2 False\ntwo\n");
+    for out in [&cold, &warm] {
+        assert_eq!(out.status, Some(0), "{}", out.stderr);
+        assert_eq!(out.stdout, debug.stdout);
+    }
+    let dump = dir.join("dump");
+    let dumped = run(true, Some(&dump));
+    assert_eq!(dumped.status, Some(0), "{}", dumped.stderr);
+    let mir = std::fs::read_to_string(dump.join("mir/app.mir")).unwrap_or_default();
+    assert!(mir.contains("fn app::main("), "{mir}");
+    for inlined in ["std::ordered_map::get(", "std::sorted_map::is_empty("] {
+        assert!(!mir.contains(inlined), "{inlined} was not inlined:\n{mir}");
+    }
+}
+
+/// `app::util` of [`TWO_MODULES`]: a closure that captures, a static
+/// dictionary and a function value, each in a body another module inlines.
+const TWO_MODULES_UTIL: &str = "//! Helpers that `app` inlines in a release build.
+
+import std::int
+import std::list
+
+/// Each element times `k`, through a closure that captures `k`.
+fn scale(xs: List<Int>, k: Int) -> List<Int> {
+  list::map(xs, fn(x) { x * k })
+}
+
+/// The list in order, through `Compare`'s static dictionary of `Int`.
+fn sorted(xs: List<Int>) -> List<Int> {
+  list::sort(xs)
+}
+
+/// Each element as text, through a function value.
+fn texts(xs: List<Int>) -> List<String> {
+  list::map(xs, int::show)
+}
+";
+
+/// `app`, which calls [`TWO_MODULES_UTIL`]'s helpers.
+const TWO_MODULES: &str = "//! Calls the helpers of `app::util`.
+
+import std::io
+import std::list
+import app::util
+
+fn main() {
+  let xs = util::scale([3, 1, 2], 10)
+  let ys = util::sorted(xs)
+  let zs = util::texts(ys)
+  let more = list::map(util::sorted([5, 4]), fn(x) { x + 1 })
+  io::println(\"{zs} {more}\")
+}
+";
+
+/// Design T8: a release executable of two modules whose bodies, closures,
+/// static dictionaries and value shims cross into the other module links
+/// (no duplicate symbol, and every local copy of a shared symbol the same,
+/// D-918) and prints what the debug run prints.
+#[test]
+fn a_release_executable_of_two_modules_inlined_across_links() {
+    let files = [
+        MANIFEST,
+        ("src/main.cheby", TWO_MODULES),
+        ("src/util.cheby", TWO_MODULES_UTIL),
+    ];
+    let dir = package("two_modules_release", &files);
+    let cache = fresh_cache();
+    let mut run = Command::new(CHEBY);
+    run.args(["--color=never", "run"])
+        .current_dir(&dir)
+        .env_remove("CHEBY_RELEASE_OFF")
+        .env_remove("CHEBY_RC")
+        .env_remove("CHEBY_DUMP_DIR");
+    cache.apply(&mut run);
+    let debug = process::run(run, None, TIMEOUT).unwrap();
+    assert_eq!(debug.status, Some(0), "{}", debug.stderr);
+    assert_eq!(debug.stdout, "[10, 20, 30] [5, 6]\n");
+    let exe = dir.join("two_modules");
+    let mut build = Command::new(CHEBY);
+    build
+        .args(["--color=never", "build", "--release", "-o"])
+        .arg(&exe)
+        .current_dir(&dir)
+        .env_remove("CHEBY_RELEASE_OFF")
+        .env_remove("CHEBY_RC")
+        .env_remove("CHEBY_DUMP_DIR");
+    cache.apply(&mut build);
+    let linked = process::run(build, None, TIMEOUT).unwrap();
+    assert_eq!(linked.status, Some(0), "{}", linked.stderr);
+    let ran = process::run(Command::new(&exe), None, TIMEOUT).unwrap();
+    assert_eq!(ran.status, Some(0), "{}", ran.stderr);
+    assert_eq!(ran.stdout, debug.stdout);
+}
+
+/// [`DEEP_FOLD`]'s manifest: the root fiber's stack is the smallest a
+/// manifest may give it (D-660).
+const SMALL_STACK_MANIFEST: (&str, &str) = (
+    "cheby.toml",
+    "name = \"app\"\nversion = \"0.1.0\"\n\n[runtime]\nmain-stack = \"1MiB\"\n",
+);
+
+/// A fold whose callback inserts into a sorted map: in release the fold and
+/// `sorted_map::insert` get clones (design T12, T13).
+const DEEP_FOLD: &str = "//! Inserts many keys through a fold.
+
+import std::int
+import std::io
+import std::list
+import std::sorted_map
+
+fn main() {
+  let n = 300_000
+  let m = list::fold(list::range(0, n), sorted_map::new(), fn(acc, i) {
+    sorted_map::insert(acc, i * 7 % n, i)
+  })
+  io::println(int::show(sorted_map::size(m)))
+}
+";
+
+/// D-015, D-1761: the clone of `list::fold` calls itself in tail position,
+/// so a fold over 300,000 elements runs in a stack of 1 MiB in release as
+/// in debug, and prints the same.
+#[test]
+fn a_clone_loop_does_not_grow_the_stack() {
+    let dir = package(
+        "deep_fold",
+        &[SMALL_STACK_MANIFEST, ("src/main.cheby", DEEP_FOLD)],
+    );
+    for release in [false, true] {
+        let cache = fresh_cache();
+        let mut cmd = Command::new(CHEBY);
+        cmd.args(["--color=never", "run"]);
+        if release {
+            cmd.arg("--release");
+        }
+        cmd.current_dir(&dir)
+            .env("NO_COLOR", "1")
+            .env_remove("CHEBY_RELEASE_OFF")
+            .env_remove("CHEBY_RC")
+            .env_remove("CHEBY_DUMP_DIR");
+        cache.apply(&mut cmd);
+        let out = process::run(cmd, None, TIMEOUT).unwrap();
+        assert_eq!(out.status, Some(0), "{}", out.stderr);
+        assert_eq!(out.stdout, "300000\n");
+    }
+}
+
+/// A panic inside a fold's callback.
+const PANIC_IN_FOLD: &str = "//! Panics inside a fold's callback.
+
+import std::int
+import std::io
+import std::list
+
+fn main() {
+  let total = list::fold(list::range(0, 10), 0, fn(acc, x) {
+    case x == 7 {
+      True => panic as \"seven\"
+      False => acc + x
+    }
+  })
+  io::println(int::show(total))
+}
+";
+
+/// D-1771: in release the callback is inlined into the clone of
+/// `list::fold`, and a backtrace names the clone as `std::list::fold`, at the
+/// panic's location, which the inlined callback keeps. The panic's message
+/// and location are the debug run's.
+#[test]
+fn a_backtrace_names_a_clone_as_its_function() {
+    let dir = package(
+        "panic_in_fold",
+        &[MANIFEST, ("src/main.cheby", PANIC_IN_FOLD)],
+    );
+    let run = |release: bool| {
+        let cache = fresh_cache();
+        let mut cmd = Command::new(CHEBY);
+        cmd.args(["--color=never", "run"]);
+        if release {
+            cmd.arg("--release");
+        }
+        cmd.current_dir(&dir)
+            .env("NO_COLOR", "1")
+            .env("CHEBY_BACKTRACE", "1")
+            .env_remove("CHEBY_RELEASE_OFF")
+            .env_remove("CHEBY_RC")
+            .env_remove("CHEBY_DUMP_DIR");
+        cache.apply(&mut cmd);
+        process::run(cmd, None, TIMEOUT).unwrap()
+    };
+    let debug = run(false);
+    let release = run(true);
+    assert_eq!(debug.status, Some(101), "{}", debug.stderr);
+    assert_eq!(release.status, Some(101), "{}", release.stderr);
+    let head = |stderr: &str| {
+        stderr
+            .lines()
+            .take(2)
+            .map(str::to_owned)
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(head(&release.stderr), head(&debug.stderr));
+    assert!(
+        release
+            .stderr
+            .contains("panicked at src/main.cheby:10:15:\nseven\n"),
+        "{}",
+        release.stderr
+    );
+    for frame in [
+        "  in std::list::fold at src/main.cheby:10:15\n",
+        "  in app::main at src/main.cheby:8:15\n",
+    ] {
+        assert!(
+            release.stderr.contains(frame),
+            "{frame}:\n{}",
+            release.stderr
+        );
+    }
+}
+
+/// A fold that carries a `Float`: in release its clone takes and returns
+/// the `Float` raw (design T14).
+const FLOAT_FOLD: &str = "//! Sums floats through a fold.
+
+import std::float
+import std::io
+import std::list
+
+fn main() {
+  let total = list::fold(list::range(0, 20000), 0.0, fn(acc, i) { acc + float::from_int(i) })
+  io::println(float::show(total))
+}
+";
+
+/// Design T14: the clone of `list::fold` for a callback that adds floats
+/// takes and returns its accumulator raw, so the release run boxes nothing
+/// per element, where the debug run boxes once per element; both print
+/// the same.
+#[test]
+fn a_float_fold_boxes_nothing_per_element_in_release() {
+    let (debug, debug_out) = allocations("float_fold_debug", FLOAT_FOLD, false);
+    let (release, release_out) = allocations("float_fold_release", FLOAT_FOLD, true);
+    assert_eq!(debug_out, release_out);
+    assert_eq!(release_out, "199990000.0\n");
+    assert!(
+        debug >= release.saturating_add(20_000),
+        "{debug} allocations in debug against {release} in release"
+    );
+}
+
+/// A panic inside the callback of a fold whose clone returns a raw
+/// `Float`.
+const PANIC_IN_FLOAT_FOLD: &str = "//! Panics inside a fold that carries a float.
+
+import std::float
+import std::io
+import std::list
+
+fn main() {
+  let total = list::fold(list::range(0, 10), 0.5, fn(acc, i) {
+    case i == 7 {
+      True => panic as \"seven\"
+      False => acc + float::from_int(i)
+    }
+  })
+  io::println(float::show(total))
+}
+";
+
+/// D-734: a panic in a clone with a raw result unwinds through the caller,
+/// which tests the unwind flag after the call, with the debug run's message
+/// and location and, in a toolchain with debug assertions, no leak (102
+/// would say one).
+#[test]
+fn a_panic_unwinds_through_a_raw_result_clone() {
+    let dir = package(
+        "panic_in_float_fold",
+        &[MANIFEST, ("src/main.cheby", PANIC_IN_FLOAT_FOLD)],
+    );
+    let run = |release: bool| {
+        let cache = fresh_cache();
+        let mut cmd = Command::new(CHEBY);
+        cmd.args(["--color=never", "run"]);
+        if release {
+            cmd.arg("--release");
+        }
+        cmd.current_dir(&dir)
+            .env("NO_COLOR", "1")
+            .env_remove("CHEBY_BACKTRACE")
+            .env_remove("CHEBY_RELEASE_OFF")
+            .env_remove("CHEBY_RC")
+            .env_remove("CHEBY_DUMP_DIR");
+        cache.apply(&mut cmd);
+        process::run(cmd, None, TIMEOUT).unwrap()
+    };
+    let debug = run(false);
+    let release = run(true);
+    assert_eq!(debug.status, Some(101), "{}", debug.stderr);
+    assert_eq!(release.status, Some(101), "{}", release.stderr);
+    assert_eq!(release.stderr, debug.stderr);
+    assert_eq!(release.stdout, debug.stdout);
+}
+
+/// `app::util` of [`FOLDED_CONSTANTS`]: computed scalar constants at the
+/// edges of their types, a literal one and a computed `Bool`.
+const FOLDED_CONSTANTS_UTIL: &str = "//! Constants that `app` reads.
+
+import std::float
+import std::f32
+import std::i8
+import std::int
+import std::u64
+
+pub const solar_mass: Float = 4.0 * float::pi * float::pi
+
+pub const scale: Float = 2.5
+
+pub const not_a_number: Float = 0.0 / 0.0
+
+pub const negative_zero: Float = -1.0 * 0.0
+
+pub const below: Float = float::neg_infinity * 2.0
+
+pub const highest: Int = int::max_value - 5 + 5
+
+pub const lowest: Int = int::min_value + 1 - 1
+
+pub const widest: U64 = u64::max_value - 0
+
+pub const least: I8 = i8::min_value + 0
+
+pub const third: F32 = f32::pi / 3.0
+
+pub const flag: Bool = 1 < 2
+";
+
+/// Reads [`FOLDED_CONSTANTS_UTIL`]'s constants, a computed one of its own,
+/// std's literal `float::pi`, a list constant, and `scale` as a list's
+/// element, where its slot's word is kept.
+const FOLDED_CONSTANTS: &str = "//! Prints constants of another module.
+
+import std::float
+import std::f32
+import std::i8
+import std::int
+import std::io
+import std::u64
+import app::util
+
+const own_mass: Float = util::solar_mass * 2.0
+
+const names: List<String> = [\"a\", \"b\"]
+
+fn step(i: Int, n: Int, acc: Float) -> Float {
+  case i == n {
+    True => acc
+    False => step(i + 1, n, acc + util::solar_mass * util::scale + own_mass)
+  }
+}
+
+fn main() {
+  io::println(float::show(step(0, 10, 0.0)))
+  io::println(float::show(float::pi))
+  io::println(float::show(util::not_a_number))
+  io::println(float::show(util::negative_zero))
+  io::println(float::show(util::below))
+  io::println(int::show(util::highest))
+  io::println(int::show(util::lowest))
+  io::println(u64::show(util::widest))
+  io::println(i8::show(util::least))
+  io::println(f32::show(util::third))
+  let xs = [util::scale]
+  io::println(\"{xs} {names}\")
+  case util::flag {
+    True => io::println(\"flag\")
+    False => io::println(\"no flag\")
+  }
+}
+";
+
+/// `cheby run` (with `--release` when `release`) of the package of
+/// [`FOLDED_CONSTANTS`] in `dir`, its MIR dumped into `dump` when given
+/// and the levers `off` turned off when given.
+#[expect(
+    clippy::panic,
+    reason = "a test helper: a run that cannot start fails the test"
+)]
+fn run_folded(
+    dir: &Path,
+    cache: &HarnessCache,
+    release: bool,
+    dump: Option<&Path>,
+    off: Option<&str>,
+) -> RunOutput {
+    let mut cmd = Command::new(CHEBY);
+    cmd.args(["--color=never", "run"]);
+    if release {
+        cmd.arg("--release");
+    }
+    cmd.current_dir(dir)
+        .env("NO_COLOR", "1")
+        .env_remove("CHEBY_RELEASE_OFF")
+        .env_remove("CHEBY_RC")
+        .env_remove("CHEBY_DUMP_DIR");
+    if let Some(dump) = dump {
+        cmd.env("CHEBY_DUMP_DIR", dump);
+    }
+    if let Some(off) = off {
+        cmd.env("CHEBY_RELEASE_OFF", off);
+    }
+    cache.apply(&mut cmd);
+    process::run(cmd, None, TIMEOUT).unwrap_or_else(|e| panic!("{e:?}"))
+}
+
+/// The package of [`FOLDED_CONSTANTS`], named `name`.
+fn folded_package(name: &str) -> PathBuf {
+    package(
+        name,
+        &[
+            NATIVE_MANIFEST,
+            ("src/main.cheby", FOLDED_CONSTANTS),
+            ("src/util.cheby", FOLDED_CONSTANTS_UTIL),
+        ],
+    )
+}
+
+/// What [`FOLDED_CONSTANTS`] prints.
+const FOLDED_CONSTANTS_OUT: &str = "1776.5287921960844\n3.141592653589793\nNaN\n-0.0\n-inf\n\
+    9223372036854775807\n-9223372036854775808\n18446744073709551615\n-128\n1.0471976\n\
+    [2.5] [a, b]\nflag\n";
+
+/// Design T10 (refining D-257 and D-977): a release build reads the
+/// scalar constants it knows as their values, a computed one from its
+/// evaluated image, in its own module and in another, and std's literal
+/// ones, and the clean-up folds the branch on a `Bool` constant. A list
+/// constant, and a scalar constant whose word becomes a list element,
+/// still read their slots, which are installed as before. The values are
+/// the bits the images hold at the edges of each type (NaN, -0.0, an
+/// infinity, the integer extremes), so the release run and the debug run
+/// print the same.
+#[test]
+#[cfg_attr(
+    windows,
+    ignore = "runs JIT-compiled code; Windows support is M6 (D-545)"
+)]
+fn release_reads_scalar_constants_as_their_values() {
+    let dir = folded_package("folded_constants");
+    let cache = fresh_cache();
+    let debug = run_folded(&dir, &cache, false, None, None);
+    assert_eq!(debug.status, Some(0), "{}", debug.stderr);
+    assert_eq!(debug.stdout, FOLDED_CONSTANTS_OUT);
+    let folded = dir.join("dump");
+    let release = run_folded(&dir, &cache, true, Some(&folded), None);
+    assert_eq!(release.status, Some(0), "{}", release.stderr);
+    assert_eq!(release.stdout, debug.stdout);
+    let mir = std::fs::read_to_string(folded.join("mir/app.mir")).unwrap_or_default();
+    let code: String = mir
+        .split("\n\n")
+        .filter(|f| f.starts_with("fn app::step(") || f.starts_with("fn app::main("))
+        .collect();
+    assert!(
+        code.contains("fn app::step(") && code.contains("fn app::main("),
+        "{mir}"
+    );
+    let scale = "load_const app::util::scale";
+    for read in [
+        "load_const app::util::",
+        "load_const app::own_mass",
+        "load_const std::",
+    ] {
+        let kept: Vec<&str> = code.lines().filter(|l| l.contains(read)).collect();
+        assert!(
+            kept.iter().all(|l| l.contains(scale)),
+            "{read} was not folded:\n{code}"
+        );
+    }
+    for value in [
+        "const float 39.47841760435743",
+        "const float 78.95683520871486",
+        "const float 3.141592653589793",
+        "const float NaN",
+        "const float -0.0",
+        "const float -inf",
+        "const int 9223372036854775807",
+        "const int -9223372036854775808",
+        "const u64 18446744073709551615",
+        "const i8 -128",
+    ] {
+        assert!(code.contains(value), "no `{value}`:\n{code}");
+    }
+    // The list and the list's element read their slots; the branch on
+    // `flag` is gone.
+    assert!(code.contains("load_const app::names"), "{code}");
+    assert!(code.contains(scale), "{code}");
+    let main = code.split("fn app::main(").nth(1).unwrap_or_default();
+    assert!(
+        !main.contains("load_const app::util::flag") && !main.contains("branch "),
+        "{main}"
+    );
+}
+
+/// Design T10: with the `consts` lever off, a release build reads the
+/// constants' slots as before, and the release executable, which folds
+/// them, prints what the debug run prints.
+#[test]
+#[cfg_attr(
+    windows,
+    ignore = "runs JIT-compiled code and builds executables; Windows support is M6 (D-545, D-935)"
+)]
+fn the_consts_lever_off_reads_slots_and_executables_fold() {
+    let dir = folded_package("folded_constants_off");
+    let cache = fresh_cache();
+    let off = dir.join("dump_off");
+    let unfolded = run_folded(&dir, &cache, true, Some(&off), Some("consts"));
+    assert_eq!(unfolded.status, Some(0), "{}", unfolded.stderr);
+    assert_eq!(unfolded.stdout, FOLDED_CONSTANTS_OUT);
+    let mir = std::fs::read_to_string(off.join("mir/app.mir")).unwrap_or_default();
+    for read in [
+        "load_const app::util::solar_mass",
+        "load_const app::own_mass",
+        "load_const app::util::not_a_number",
+        "load_const std::float::pi",
+    ] {
+        assert!(mir.contains(read), "no `{read}` with the lever off:\n{mir}");
+    }
+    let exe = dir.join("folded_constants");
+    let mut build = Command::new(CHEBY);
+    build
+        .args(["--color=never", "build", "--release", "-o"])
+        .arg(&exe)
+        .current_dir(&dir)
+        .env_remove("CHEBY_RELEASE_OFF")
+        .env_remove("CHEBY_RC")
+        .env_remove("CHEBY_DUMP_DIR");
+    cache.apply(&mut build);
+    let linked = process::run(build, None, TIMEOUT).unwrap();
+    assert_eq!(linked.status, Some(0), "{}", linked.stderr);
+    let ran = process::run(Command::new(&exe), None, TIMEOUT).unwrap();
+    assert_eq!(ran.status, Some(0), "{}", ran.stderr);
+    assert_eq!(ran.stdout, FOLDED_CONSTANTS_OUT);
 }

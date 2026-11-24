@@ -7,10 +7,14 @@
 //! one: the `@external` wrapper owns that reference and drops it after the
 //! call, so the kernel updates the root in place, dups it and returns it,
 //! and the wrapper's drop leaves it at count one (plan §6, D-522).
+//! `list::push` and `list::prepend` have no kernel: they are std
+//! intrinsics whose bodies call the helpers `cheby_rt_list_push` and
+//! `cheby_rt_list_prepend`, which own both arguments (D-1758).
 
 use std::cmp::Ordering;
 
-use super::node::{Root, dup_word, register};
+use super::buffers;
+use super::node::{Root, drop_word, dup_word, register};
 use super::ops;
 use crate::abi::{PanicKind, Word};
 use crate::alloc::{self, scratch::ScratchVec};
@@ -89,6 +93,12 @@ fn slice_kernel(xs: Root, start: usize, end: usize) -> Word {
 /// caller and given up.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn cheby_rt_list_push(ctx: *mut ExecCtx, list: u64, elem: u64) -> u64 {
+    // A unique list whose last leaf has room takes the element there, with
+    // no allocation and nothing that can raise.
+    // SAFETY: forwarded from the caller.
+    if unsafe { buffers::push_fast(list, elem) } {
+        return list;
+    }
     guarded(Some(ctx), || {
         let owned = DropOnUnwind::new([list, elem]);
         // SAFETY: forwarded from the caller.
@@ -97,6 +107,68 @@ pub unsafe extern "C" fn cheby_rt_list_push(ctx: *mut ExecCtx, list: u64, elem: 
         alloc::preflight(unsafe { ctx.as_ref() }, || ops::push_bound(list));
         owned.disarm();
         ops::push(list, elem).word()
+    })
+}
+
+/// `ListSet`: `list::set` at a direct call, `list` and `item` owned;
+/// result owned. Outside the list, negative indexes included, the list
+/// comes back unchanged and `item` is released (D-318); otherwise the
+/// element is replaced, in place along the path when the list is unique,
+/// as [`cheby_list_set`] does. Both are consumed even when it raises, as
+/// [`cheby_rt_list_push`] says.
+///
+/// # Safety
+///
+/// `list` is a live list and `item` a live uniform word, both owned by
+/// the caller and given up.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn cheby_rt_list_set(
+    ctx: *mut ExecCtx,
+    list: u64,
+    index: i64,
+    item: u64,
+) -> u64 {
+    guarded(Some(ctx), || {
+        let owned = DropOnUnwind::new([list, item]);
+        // SAFETY: forwarded from the caller.
+        let list = unsafe { root(list) };
+        let Some(index) = usize::try_from(index).ok().filter(|&i| i < ops::len(list)) else {
+            owned.disarm();
+            drop_word(item);
+            return list.word();
+        };
+        // SAFETY: `ctx` is null or the running fiber's control block.
+        alloc::preflight(unsafe { ctx.as_ref() }, || ops::set_bound(list));
+        owned.disarm();
+        ops::set(list, index, item).word()
+    })
+}
+
+/// `ListPrepend`: `list` and `elem` owned; result owned. In place when
+/// the list is unique, as [`cheby_rt_list_push`] is at the other end, and
+/// both are consumed even when it raises.
+///
+/// # Safety
+///
+/// `list` is a live list and `elem` a live uniform word, both owned by the
+/// caller and given up.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn cheby_rt_list_prepend(ctx: *mut ExecCtx, list: u64, elem: u64) -> u64 {
+    // A unique list whose first leaf has a free slot before its first
+    // element takes the element there, with no allocation and nothing
+    // that can raise.
+    // SAFETY: forwarded from the caller.
+    if unsafe { buffers::prepend_fast(list, elem) } {
+        return list;
+    }
+    guarded(Some(ctx), || {
+        let owned = DropOnUnwind::new([list, elem]);
+        // SAFETY: forwarded from the caller.
+        let list = unsafe { root(list) };
+        // SAFETY: `ctx` is null or the running fiber's control block.
+        alloc::preflight(unsafe { ctx.as_ref() }, || ops::prepend_bound(list));
+        owned.disarm();
+        ops::prepend(list, elem).word()
     })
 }
 
@@ -223,6 +295,15 @@ pub unsafe extern "C" fn cheby_rt_list_uncons_owned(
     end: i64,
     head: *mut u64,
 ) -> u64 {
+    // A `[x, ..rest]` or `[..rest, x]` step on a unique list whose first
+    // or last leaf is at hand moves the element out of it, with no
+    // descent, no allocation and nothing that can raise.
+    // SAFETY: forwarded from the caller.
+    if let Some(elem) = unsafe { buffers::uncons_fast(list, at, start, end) } {
+        // SAFETY: forwarded from the caller.
+        unsafe { head.write(elem) };
+        return list;
+    }
     guarded(Some(ctx), || {
         let owned = DropOnUnwind::new([list]);
         // SAFETY: forwarded from the caller.
@@ -305,40 +386,6 @@ pub unsafe extern "C" fn cheby_list_get(xs: u64, index: i64) -> u64 {
             }
             None => values::none(),
         }
-    })
-}
-
-/// `list::push`. O(log n); in place, amortized O(1), at count one.
-///
-/// # Safety
-///
-/// `xs` is a live list and `item` a live uniform word.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn cheby_list_push(xs: u64, item: u64) -> u64 {
-    guarded(None, || {
-        // SAFETY: forwarded from the caller.
-        let xs = unsafe { root(xs) };
-        in_place(xs, false, |xs| {
-            dup_word(item);
-            ops::push(xs, item)
-        })
-    })
-}
-
-/// `list::prepend`. O(log n).
-///
-/// # Safety
-///
-/// `xs` is a live list and `item` a live uniform word.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn cheby_list_prepend(xs: u64, item: u64) -> u64 {
-    guarded(None, || {
-        // SAFETY: forwarded from the caller.
-        let xs = unsafe { root(xs) };
-        in_place(xs, false, |xs| {
-            dup_word(item);
-            ops::prepend(xs, item)
-        })
     })
 }
 
@@ -503,8 +550,10 @@ pub unsafe extern "C" fn cheby_list_unique(xs: u64) -> u64 {
     })
 }
 
-/// `list::sort_with` (D-1448): a stable bottom-up merge sort that calls
-/// `by` through `callback::call` (D-484, D-526). Runs of one element are
+/// `list::sort_with`'s kernel (D-1448): a stable bottom-up merge sort that
+/// calls `by` through `callback::call` (D-484, D-526). A direct call of
+/// `list::sort_with` runs the same merges in steps instead (`steps.rs`);
+/// this kernel stays for std's tests, which compare the two. Runs of one element are
 /// merged in adjacent pairs, front to back, and a last run without a
 /// partner waits for the next round, until one run is left. A merge takes
 /// from the left run unless `by` of the two front elements returns
@@ -667,12 +716,10 @@ impl Table {
     clippy::as_conversions,
     reason = "taking the address of a function needs an `as` cast"
 )]
-pub(super) fn all() -> [(&'static str, *const u8); 12] {
+pub(super) fn all() -> [(&'static str, *const u8); 10] {
     [
         ("cheby_list_length", cheby_list_length as *const u8),
         ("cheby_list_get", cheby_list_get as *const u8),
-        ("cheby_list_push", cheby_list_push as *const u8),
-        ("cheby_list_prepend", cheby_list_prepend as *const u8),
         ("cheby_list_append", cheby_list_append as *const u8),
         ("cheby_list_set", cheby_list_set as *const u8),
         ("cheby_list_slice", cheby_list_slice as *const u8),

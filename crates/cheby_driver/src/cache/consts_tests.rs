@@ -3,6 +3,7 @@
 //! that read the lookups through `CHEBY_CACHE_LOG`'s file. Every test
 //! opens its own store in a fresh directory (D-1128).
 
+use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::time::Duration;
@@ -23,6 +24,7 @@ fn settings() -> Settings {
         checked_counts: false,
         stack_check: true,
         target: "aarch64-macos".to_owned(),
+        release: None,
     }
 }
 
@@ -31,6 +33,28 @@ const LIMITS: ConstLimits = ConstLimits {
     memory_limit: 1 << 30,
     targets: cheby_package::Targets::ALL,
 };
+
+/// The profile changes no constant key: a release command evaluates its
+/// constants on debug code and shares a debug command's entries (D-978).
+#[test]
+fn const_cache_key_is_the_same_in_both_profiles() {
+    let debug = cheby_mir::MirOptions::default();
+    let release = cheby_mir::MirOptions {
+        release: Some(cheby_mir::ReleaseOptions::ALL),
+        ..debug
+    };
+    let lever_off = cheby_mir::MirOptions {
+        release: Some(cheby_mir::ReleaseOptions::parse_off("direct,clif").unwrap()),
+        ..debug
+    };
+    let base = super::consts::settings(debug);
+    assert_eq!(base.release, None);
+    assert_eq!(super::consts::settings(release), base);
+    assert_eq!(super::consts::settings(lever_off), base);
+    let deps = [("app::a", Hash128([1; 16]))];
+    let key = |s: &Settings| const_key(BUILD, s, &LIMITS, "app", "app::a", "x", &deps);
+    assert_eq!(key(&super::consts::settings(release)), key(&base));
+}
 
 #[test]
 fn const_cache_key_holds_every_seed_input() {
@@ -961,4 +985,188 @@ test \"sample\" {
     let reached: Vec<&str> = reached.iter().map(String::as_str).collect();
     assert_eq!(reached, ["app::table::base", "app::table::twice"]);
     drop(cache);
+}
+
+/// The constants of [`const_cache_literals_need_no_evaluation_module`],
+/// each as `(name: type, value)`: a scalar literal of every kind.
+const LITERALS: [(&str, &str); 10] = [
+    ("count: Int", "1_000_003"),
+    ("huge: Int", "-9_223_372_036_854_775_808"),
+    ("wide: U64", "18_446_744_073_709_551_615"),
+    ("low: I8", "-128"),
+    ("ratio: Float", "-2.5"),
+    ("narrow: F32", "0.1"),
+    ("flag: Bool", "False"),
+    ("nothing: Option<Int>", "None"),
+    ("order: Order", "Greater"),
+    ("unit: Nil", "Nil"),
+];
+
+/// `files` as [`Fixture::new`] takes them.
+fn as_refs<'a>(files: &'a [(&'static str, String)]) -> Vec<(&'static str, &'a str)> {
+    files
+        .iter()
+        .map(|(path, text)| (*path, text.as_str()))
+        .collect()
+}
+
+/// The package of [`LITERALS`], each initializer `wrap`ped, and a `main`
+/// that checks every value, with a module whose literal `main` imports.
+fn literal_package(wrap: &dyn Fn(&str) -> String) -> [(&'static str, String); 2] {
+    let mut main = "//! Literal constants.\n\nimport app::util\n\n".to_owned();
+    for (decl, value) in LITERALS {
+        write!(main, "const {decl} = {}\n\n", wrap(value)).unwrap();
+    }
+    main.push_str("fn pick<T>(x: T) -> T {\n  x\n}\n\nfn main() {\n");
+    for (decl, value) in LITERALS {
+        let name = decl.split(':').next().unwrap();
+        writeln!(main, "  assert {name} == {value}").unwrap();
+    }
+    main.push_str("  assert util::shared == 7\n}\n");
+    let util = format!(
+        "//! A literal of another module.\n\n/// Seven.\npub const shared: Int = {}\n\nfn pick<T>(x: T) -> T {{\n  x\n}}\n",
+        wrap("7")
+    );
+    [("main.cheby", main), ("util.cheby", util)]
+}
+
+/// D-977, D-979: a package whose constants are all scalar literals
+/// evaluates nothing: no evaluation module is compiled (no `code.plain`
+/// lookup), under `cheby check` nothing is lowered either, and every
+/// constant's entry holds the image its evaluation writes, byte for byte:
+/// the one of the same package whose initializers are computed.
+#[test]
+#[cfg_attr(
+    windows,
+    ignore = "runs JIT-compiled code; Windows support is M6 (D-545)"
+)]
+fn const_cache_literals_need_no_evaluation_module() {
+    let literal = literal_package(&|value| value.to_owned());
+    let computed = literal_package(&|value| format!("pick({value})"));
+    // Native only: on `js`, `huge` is checked by E0078 on its evaluated
+    // value (D-540).
+    let native = "targets = [\"native\"]\n";
+    let mut lit = Fixture::new("literals", native, &as_refs(&literal));
+    let mut evaluated = Fixture::new("literals_computed", native, &as_refs(&computed));
+    let cold = lit.run("c");
+    assert_eq!(cold.status, Some(0), "{}", cold.rendered);
+    assert_eq!(
+        cold.lines("code.plain"),
+        Vec::<String>::new(),
+        "{:?}",
+        cold.log
+    );
+    let paths: Vec<String> = LITERALS
+        .iter()
+        .map(|(decl, _)| format!("app::{}", decl.split(':').next().unwrap()))
+        .chain(["app::util::shared".to_owned()])
+        .collect();
+    assert_eq!(cold.misses("const").len(), paths.len(), "{:?}", cold.log);
+    let reference = evaluated.run("c");
+    assert_eq!(reference.status, Some(0), "{}", reference.rendered);
+    assert!(
+        !reference.lines("code.plain").is_empty(),
+        "{:?}",
+        reference.log
+    );
+    for path in &paths {
+        let found = lit.entries("c", path);
+        let [(_, ConstEntry::Image(image, refs))] = found.as_slice() else {
+            panic!("no image of `{path}`");
+        };
+        let reference = evaluated.entries("c", path);
+        let [(_, ConstEntry::Image(expected, _))] = reference.as_slice() else {
+            panic!("no evaluated image of `{path}`");
+        };
+        assert_eq!(image, expected, "{path}");
+        assert!(refs.is_empty(), "{path}");
+    }
+    let warm = lit.run("c");
+    assert_eq!(warm.status, Some(0), "{}", warm.rendered);
+    assert_eq!(warm.misses("const"), Vec::<String>::new(), "{:?}", warm.log);
+    let checked = lit.check("k");
+    assert_eq!(checked.codes, Vec::<String>::new(), "{}", checked.rendered);
+    assert_eq!(
+        checked.lines("code.plain"),
+        Vec::<String>::new(),
+        "{:?}",
+        checked.log
+    );
+    for path in &paths {
+        assert_eq!(lit.entries("k", path).len(), 1, "{path}");
+    }
+}
+
+/// A literal that a computed constant reads is evaluated with it, so the
+/// computed one's image and the literal's come from one evaluation.
+#[test]
+#[cfg_attr(
+    windows,
+    ignore = "runs JIT-compiled code; Windows support is M6 (D-545)"
+)]
+fn const_cache_literal_read_by_a_constant_is_evaluated_with_it() {
+    const READ: &str = "//! A literal read by a computed constant.
+
+const base: Float = 1.5
+
+const pair: (Float, Float) = (base, base * 2.0)
+
+const alone: Int = 3
+
+fn main() {
+  let (a, b) = pair
+  assert a == base
+  assert b == 3.0
+  assert alone == 3
+}
+";
+    let mut f = Fixture::new("literal_read", "", &[("main.cheby", READ)]);
+    let cold = f.run("c");
+    assert_eq!(cold.status, Some(0), "{}", cold.rendered);
+    assert_eq!(
+        cold.lines("const"),
+        [
+            "const app::alone miss",
+            "const app::base miss",
+            "const app::pair miss"
+        ]
+    );
+    assert!(!cold.lines("code.plain").is_empty(), "{:?}", cold.log);
+    let warm = f.run("c");
+    assert_eq!(warm.status, Some(0), "{}", warm.rendered);
+    assert_eq!(warm.misses("const"), Vec::<String>::new(), "{:?}", warm.log);
+}
+
+/// D-540: an `Int` literal outside ±(2^53 - 1) of a constant on `js` is
+/// evaluated, so E0078 reports it as before; a literal inside the range is
+/// not evaluated.
+#[test]
+#[cfg_attr(
+    windows,
+    ignore = "runs JIT-compiled code; Windows support is M6 (D-545)"
+)]
+fn const_cache_literal_outside_the_js_range_is_e0078() {
+    const BIG: &str = "//! A literal past JavaScript's safe integers.
+
+import std::io
+
+const big: Int = 9_007_199_254_740_993
+
+const fine: Int = 9_007_199_254_740_991
+
+fn main() {
+  io::println(\"{big} {fine}\")
+}
+";
+    let mut f = Fixture::new("literal_js", "", &[("main.cheby", BIG)]);
+    let cold = f.check("c");
+    assert_eq!(cold.codes, ["E0078"], "{}", cold.rendered);
+    assert!(
+        cold.rendered.contains("the constant `big`"),
+        "{}",
+        cold.rendered
+    );
+    let warm = f.check("c");
+    assert_eq!(warm.codes, ["E0078"], "{}", warm.rendered);
+    assert_eq!(warm.rendered, cold.rendered);
 }

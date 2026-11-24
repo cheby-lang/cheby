@@ -13,7 +13,7 @@ pub type OrderedSet<T>
 - **Written in Cheby.** The module is written in Cheby, with no kernel of its own (D-336), using the same representation as `std::ordered_map`. Elements are hashed and compared by the runtime's built-in routines, and no `compare` of the element type is ever called.
 - **Equality, hashing and printing.** The module supplies its own `==`, hashing and debug printing through the standard-library-only attribute of D-342 (§3.13). Two ordered sets are `==` only when they hold the same elements in the same order, and their hash covers the order (D-343). Debug printing writes `ordered_set::from_list([…])` with the elements in order, each one debug-printed (D-344).
 - **Interfaces.** `OrderedSet<T>` satisfies `Show` when `T` does (D-344). It does not satisfy `Compare`.
-- **Costs.** For a set of n elements, a lookup takes O(log n), effectively constant as in `Set`, and an update, including `remove`, takes O(log n). Iterating takes O(n), and a walk that stops after k elements, such as `find`, takes O(log n + k) (D-1082).
+- **Costs.** For a set of n elements, a lookup takes O(log n), effectively constant as in `Set`, and an update, including `remove`, takes O(log n). Iterating takes O(n), and a walk that stops after k elements, such as `find`, takes O(k) (D-1082).
 
 ```cheby
 test "ordered sets compare, hash and print by contents and order" {
@@ -264,7 +264,7 @@ pub fn try_fold<T, A, E>(s: OrderedSet<T>, initial: A, f: fn(A, T) -> Result<A, 
 Combines the elements like `fold`, in the set's order, with a callback that can fail. It calls `f` once per element, stops calling it at the first `Err` and returns that `Err`, and otherwise returns `Ok` of the last result, which is `Ok(initial)` for an empty set (D-1080).
 
 - **Fails:** the first `Err` that `f` returns.
-- **Cost:** O(n), plus the calls to `f`, and O(log n + k) when it stops after k elements. Informative.
+- **Cost:** O(n), plus the calls to `f`, and O(k) when it stops after k elements. Informative.
 
 ```cheby
 test "try_fold stops at the first error" {
@@ -298,7 +298,7 @@ pub fn any<T>(s: OrderedSet<T>, predicate: fn(T) -> Bool) -> Bool
 
 Tells whether `predicate` returns `True` for some element. It calls `predicate` in the set's order, stops at the first such element, and is `False` for an empty set.
 
-- **Cost:** O(n), plus the calls to `predicate`, and O(log n + k) when it stops after k elements. Informative.
+- **Cost:** O(n), plus the calls to `predicate`, and O(k) when it stops after k elements. Informative.
 
 ```cheby
 test "any stops at the first match" {
@@ -322,7 +322,7 @@ pub fn all<T>(s: OrderedSet<T>, predicate: fn(T) -> Bool) -> Bool
 
 Tells whether `predicate` returns `True` for every element. It calls `predicate` in the set's order, stops at the first element for which it returns `False`, and is `True` for an empty set.
 
-- **Cost:** O(n), plus the calls to `predicate`, and O(log n + k) when it stops after k elements. Informative.
+- **Cost:** O(n), plus the calls to `predicate`, and O(k) when it stops after k elements. Informative.
 
 ```cheby
 test "all needs every element to match" {
@@ -342,7 +342,7 @@ pub fn find<T>(s: OrderedSet<T>, predicate: fn(T) -> Bool) -> Option<T>
 Returns the first element in the set's order for which `predicate` returns `True`. It stops calling `predicate` at that element.
 
 - **Fails:** `None` when no element matches.
-- **Cost:** O(n), plus the calls to `predicate`, and O(log n + k) when it stops after k elements. Informative.
+- **Cost:** O(n), plus the calls to `predicate`, and O(k) when it stops after k elements. Informative.
 
 ```cheby
 test "find returns the first match in insertion order" {

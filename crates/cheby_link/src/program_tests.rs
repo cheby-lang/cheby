@@ -111,6 +111,7 @@ fn entries(arities: &[u32]) -> CodeRecord {
         functions,
         data: Vec::new(),
         source: None,
+        profile: cheby_mir::Profile::Debug,
     }
 }
 
@@ -434,6 +435,28 @@ fn link_program_copies_are_checked() {
     assert!(
         err.to_string().contains("`cb$tramp$0` in `a` and `c`"),
         "{err}"
+    );
+}
+
+/// A link holds the code of one profile: records of one profile pass, and
+/// a release record among debug ones is an internal error that names it.
+#[test]
+fn link_program_profiles_are_checked() {
+    let a = entries(&[0]);
+    let b = entries(&[0]);
+    crate::link::check_profiles(&[("a", &a), ("b", &b)]).unwrap();
+    crate::link::check_profiles(&[]).unwrap();
+    let mut c = entries(&[0]);
+    c.profile = cheby_mir::Profile::Release;
+    let mut d = entries(&[0]);
+    d.profile = cheby_mir::Profile::Release;
+    crate::link::check_profiles(&[("c", &c), ("d", &d)]).unwrap();
+    let err = crate::link::check_profiles(&[("a", &a), ("c", &c)]).unwrap_err();
+    assert!(matches!(err, LinkError::Profiles(_)), "{err:?}");
+    assert!(!err.is_tool_error());
+    assert_eq!(
+        err.to_string(),
+        "a link of debug code holds a release record of `c`"
     );
 }
 

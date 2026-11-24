@@ -505,6 +505,19 @@ impl Owned {
         std::mem::forget(self);
         word
     }
+
+    /// Releases the reference as dropping the guard does, through `ctx`,
+    /// the running fiber's control block, so that a free finds the block
+    /// cache and the domain with no lookup of the running fiber.
+    ///
+    /// # Safety
+    ///
+    /// `ctx` is the control block of the fiber running on this thread.
+    pub(crate) unsafe fn release_in(self, ctx: *mut ExecCtx) {
+        // SAFETY: the guard's one reference, given up here; `ctx` is
+        // forwarded from the caller.
+        unsafe { rc::cheby_rt_drop(ctx, self.into_word()) };
+    }
 }
 
 impl Drop for Owned {

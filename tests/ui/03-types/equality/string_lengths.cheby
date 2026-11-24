@@ -1,0 +1,48 @@
+// @mode: run-pass
+// @decisions: D-252, D-1789
+//! `==` and `!=` on strings, and string literal patterns, compare by
+//! bytes: strings of different lengths differ, strings of one length are
+//! compared byte by byte, and the empty string equals only itself. Two
+//! strings of the same byte length but different code points differ, and
+//! a string built at run time equals a literal with the same text.
+
+import std::io
+import std::list
+import std::string
+
+/// A name for `word`, matched against literals of several lengths.
+fn name(word: String) -> String {
+  case word {
+    "" => "empty"
+    "id" => "short"
+    "name" => "four"
+    "tags" => "other four"
+    "é" => "accent"
+    _ => "unknown"
+  }
+}
+
+/// `==` and `!=` of the two strings of `pair`.
+fn compared(pair: (String, String)) -> (Bool, Bool) {
+  let (a, b) = pair
+  (a == b, a != b)
+}
+
+fn main() {
+  let built = string::add("na", "me")
+  let pairs = [
+    ("name", built),
+    ("name", "names"),
+    ("name", "nap"),
+    ("name", "tags"),
+    ("", ""),
+    ("", "a"),
+    ("é", "ab"),
+    ("é", string::add("", "é")),
+  ]
+  let results = list::map(pairs, compared)
+  io::println("{results}")
+  let words = ["", "id", built, "tags", "taps", "é", "ab"]
+  let names = list::map(words, name)
+  io::println("{names}")
+}

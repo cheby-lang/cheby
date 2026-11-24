@@ -20,6 +20,8 @@ use std::cmp::Ordering;
 
 use crate::abi::{self, LayoutId, Word, layout};
 use crate::alloc;
+use crate::ctx::ExecCtx;
+use crate::num::text::{DECIMAL_ROOM, SignMagnitude, write_decimal};
 use crate::object::{self, read_field, scan_and_layout, to_u64, word_to_ptr, write_field};
 use crate::panic::fatal;
 use crate::string;
@@ -62,11 +64,38 @@ fn boxed(layout: LayoutId, bits: u64) -> Word {
     object::ptr_to_word(obj)
 }
 
+/// [`boxed`] by the fiber `ctx`, which a boxing helper of generated code
+/// is given: the allocation reads the block cache through its control
+/// block, with no `tls.rs` accessor call (D-739).
+///
+/// # Safety
+///
+/// As for [`alloc::alloc_for`].
+unsafe fn boxed_for(ctx: *mut ExecCtx, layout: LayoutId, bits: u64) -> Word {
+    // SAFETY: forwarded from the caller.
+    let obj = unsafe { alloc::alloc_for(ctx, 16, abi::header(abi::RC_UNIQUE, 0, layout)) };
+    // SAFETY: a fresh 16-byte object: the payload is its only field.
+    unsafe { write_field(obj, FIELD0, bits) };
+    object::ptr_to_word(obj)
+}
+
 /// The uniform word of an `Int` or `I64`: tagged, or a `BoxedInt` outside
 /// 63 bits.
 #[must_use]
 pub fn int_word(value: i64) -> Word {
     abi::tag_int(value).unwrap_or_else(|| boxed(layout::BOXED_INT, value.cast_unsigned()))
+}
+
+/// [`int_word`] by the fiber `ctx`, as [`boxed_for`] allocates.
+///
+/// # Safety
+///
+/// As for [`alloc::alloc_for`].
+pub(crate) unsafe fn int_word_for(ctx: *mut ExecCtx, value: i64) -> Word {
+    abi::tag_int(value).unwrap_or_else(|| {
+        // SAFETY: forwarded from the caller.
+        unsafe { boxed_for(ctx, layout::BOXED_INT, value.cast_unsigned()) }
+    })
 }
 
 /// The uniform word of a `U64`: tagged up to 2^62 - 1, else a `BoxedU64`.
@@ -75,6 +104,19 @@ pub fn u64_word(value: u64) -> Word {
     match i64::try_from(value).ok().and_then(abi::tag_int) {
         Some(word) => word,
         None => boxed(layout::BOXED_U64, value),
+    }
+}
+
+/// [`u64_word`] by the fiber `ctx`, as [`boxed_for`] allocates.
+///
+/// # Safety
+///
+/// As for [`alloc::alloc_for`].
+pub(crate) unsafe fn u64_word_for(ctx: *mut ExecCtx, value: u64) -> Word {
+    match i64::try_from(value).ok().and_then(abi::tag_int) {
+        Some(word) => word,
+        // SAFETY: forwarded from the caller.
+        None => unsafe { boxed_for(ctx, layout::BOXED_U64, value) },
     }
 }
 
@@ -132,6 +174,26 @@ pub fn f32_word(value: f32) -> Word {
     boxed(layout::BOXED_F32, u64::from(value.to_bits()))
 }
 
+/// [`f64_word`] by the fiber `ctx`, as [`boxed_for`] allocates.
+///
+/// # Safety
+///
+/// As for [`alloc::alloc_for`].
+pub(crate) unsafe fn f64_word_for(ctx: *mut ExecCtx, value: f64) -> Word {
+    // SAFETY: forwarded from the caller.
+    unsafe { boxed_for(ctx, layout::BOXED_FLOAT, value.to_bits()) }
+}
+
+/// [`f32_word`] by the fiber `ctx`, as [`boxed_for`] allocates.
+///
+/// # Safety
+///
+/// As for [`alloc::alloc_for`].
+pub(crate) unsafe fn f32_word_for(ctx: *mut ExecCtx, value: f32) -> Word {
+    // SAFETY: forwarded from the caller.
+    unsafe { boxed_for(ctx, layout::BOXED_F32, u64::from(value.to_bits())) }
+}
+
 /// A one-field builtin constructor owning `value`.
 fn one_field(layout: LayoutId, value: Word) -> Word {
     let obj = alloc::alloc_object(16, abi::header(abi::RC_UNIQUE, 1, layout));
@@ -144,6 +206,22 @@ fn one_field(layout: LayoutId, value: Word) -> Word {
 #[must_use]
 pub fn some(value: Word) -> Word {
     one_field(layout::SOME, value)
+}
+
+/// [`some`] allocated for `ctx`, the fiber running on this thread (or
+/// null for whatever runs here), so a kernel that has looked its fiber up
+/// already allocates without a lookup of its own.
+///
+/// # Safety
+///
+/// As for [`alloc::alloc_for`].
+#[must_use]
+pub(crate) unsafe fn some_for(ctx: *mut ExecCtx, value: Word) -> Word {
+    // SAFETY: forwarded from the caller.
+    let obj = unsafe { alloc::alloc_for(ctx, 16, abi::header(abi::RC_UNIQUE, 1, layout::SOME)) };
+    // SAFETY: a fresh 16-byte object with one value field.
+    unsafe { write_field(obj, FIELD0, value) };
+    object::ptr_to_word(obj)
 }
 
 /// `Some(byte)` of a `U8`: a static object, so nothing is allocated
@@ -245,6 +323,18 @@ pub fn tuple(elements: &[Word]) -> Word {
 #[must_use]
 pub fn string(text: &str) -> Word {
     string::new_string(text)
+}
+
+/// A new `String` holding the decimal text of `n`, its `show` (D-312),
+/// written on the stack and copied once into the new object.
+#[must_use]
+pub(crate) fn decimal_string(n: impl SignMagnitude) -> Word {
+    let mut buffer = [0; DECIMAL_ROOM];
+    let (negative, magnitude) = n.sign_magnitude();
+    string::new_text(
+        write_decimal(negative, magnitude, &mut buffer),
+        layout::STRING,
+    )
 }
 
 /// A new `Bytes` holding `data`.
@@ -500,8 +590,10 @@ pub unsafe fn read_tuple(word: Word) -> Vec<Word> {
 #[must_use]
 pub unsafe fn str_of<'a>(word: Word) -> &'a str {
     // SAFETY: forwarded from the caller.
-    unsafe { string::as_str(word) }
-        .unwrap_or_else(|| fatal(format_args!("{word:#x} is not a String")))
+    match unsafe { string::as_str(word) } {
+        Some(text) => text,
+        None => not_a(word, "a String"),
+    }
 }
 
 /// The bytes of a `Bytes` (or the UTF-8 bytes of a `String`), borrowed.
@@ -512,8 +604,19 @@ pub unsafe fn str_of<'a>(word: Word) -> &'a str {
 #[must_use]
 pub unsafe fn bytes_of<'a>(word: Word) -> &'a [u8] {
     // SAFETY: forwarded from the caller.
-    unsafe { string::text_bytes(word) }
-        .unwrap_or_else(|| fatal(format_args!("{word:#x} is not a Bytes or a String")))
+    match unsafe { string::text_bytes(word) } {
+        Some(data) => data,
+        None => not_a(word, "a Bytes or a String"),
+    }
+}
+
+/// Ends the process for a word that is not `what`. Out of line and given
+/// the word by value, so the readers above spill nothing to the stack on
+/// their common path.
+#[cold]
+#[inline(never)]
+fn not_a(word: Word, what: &str) -> ! {
+    fatal(format_args!("{word:#x} is not {what}"))
 }
 
 #[cfg(test)]

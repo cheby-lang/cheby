@@ -351,6 +351,11 @@ fn key_text(m: &MirModule, key: FnKey) -> Result<String, Ice> {
         FnKey::Continuation { owner, index } => {
             format!("continuation {}#{index}", def(m, owner)?)
         }
+        FnKey::Specialized {
+            owner,
+            index,
+            origin,
+        } => format!("spec {}#{index} of {}", def(m, owner)?, def(m, origin)?),
     })
 }
 
@@ -562,6 +567,16 @@ fn rvalue(m: &MirModule, value: &Rvalue) -> Result<String, Ice> {
             operand(m, rhs)?
         ),
         Rvalue::FloatNeg { value, repr } => format!("float_neg {repr} {}", operand(m, value)?),
+        Rvalue::Convert { value, from, to } => {
+            format!("convert {from} {to} {}", operand(m, value)?)
+        }
+        Rvalue::FloatSqrt { value, repr } => format!("float_sqrt {repr} {}", operand(m, value)?),
+        Rvalue::Wrapping { op, lhs, rhs, repr } => format!(
+            "wrapping {} {repr} {}, {}",
+            op.name(),
+            operand(m, lhs)?,
+            operand(m, rhs)?
+        ),
         Rvalue::Not(value) => format!("not {}", operand(m, value)?),
         Rvalue::ReadTag { base, ty } => {
             let ty = match ty {

@@ -10,7 +10,7 @@ use rustc_hash::{FxHashMap, FxHashSet};
 use cheby_iface::{DefId, ModuleId};
 use cheby_mir::{
     AbiSig, BuiltinDesc, Const, DefName, EntryKind, FnKey, ForeignSig, Function, LayoutDesc,
-    LayoutRef, MirModule, Operand, Rvalue, StaticKind, StaticObject, Stmt, StrId, Terminator,
+    LayoutRef, MirModule, Operand, Repr, Rvalue, StaticKind, StaticObject, Stmt, StrId, Terminator,
     UnitKind,
 };
 use cheby_runtime::abi;
@@ -21,7 +21,7 @@ use crate::mangle::{self, Kind};
 use crate::runtime::{RuntimeFunc, STATIC_DATA};
 use crate::session::{SessionName, SessionNames, is_entry_module};
 use crate::sig;
-use crate::{CodegenError, ForeignImport};
+use crate::{CallMode, CodegenError, ForeignImport};
 
 /// A declared function of generated code.
 #[derive(Clone, Debug)]
@@ -147,6 +147,8 @@ pub(crate) struct PendingStatic {
 #[derive(Clone)]
 pub struct Decls {
     call_conv: CallConv,
+    /// [`Self::saving_slow_paths`].
+    saving_slow_paths: bool,
     frontend: TargetFrontendConfig,
     funcs: FxHashMap<FnKey, FuncDecl>,
     slots: FxHashMap<SlotKey, SlotDecl>,
@@ -236,6 +238,12 @@ pub struct Decls {
     /// batch of its JIT declared them ([`Seed::layouts`]): its module
     /// record does not list their types again.
     pub(crate) seeded_layouts: FxHashSet<LayoutRef>,
+    /// Whether calls between Cheby functions go to the callee's symbol
+    /// ([`CallMode::Direct`], release builds), set by each
+    /// [`Decls::declare_units`]: a top-level function's symbol then carries
+    /// its borrow mask ([`mangle::function`]), and a unit alone imports its
+    /// callees' symbols instead of their slots.
+    direct: bool,
 }
 
 impl std::fmt::Debug for Decls {
@@ -319,6 +327,7 @@ const fn owner_of(key: FnKey) -> Option<DefId> {
         | FnKey::ConstInit(def)
         | FnKey::Closure { owner: def, .. }
         | FnKey::Continuation { owner: def, .. }
+        | FnKey::Specialized { owner: def, .. }
         | FnKey::Entry(EntryKind::Const(def)) => Some(def),
         FnKey::Test(_)
         | FnKey::Entry(_)
@@ -412,6 +421,13 @@ impl Decls {
         }
         Ok(Self {
             call_conv: isa.default_call_conv(),
+            // The runtime's naked stubs exist on these targets only; the
+            // plain functions of Miri and Windows clobber what C allows.
+            saving_slow_paths: matches!(isa.name(), "aarch64" | "x64")
+                && matches!(
+                    isa.default_call_conv(),
+                    CallConv::SystemV | CallConv::AppleAarch64
+                ),
             frontend: isa.frontend_config(),
             funcs: FxHashMap::default(),
             slots: FxHashMap::default(),
@@ -447,6 +463,7 @@ impl Decls {
             alone: None,
             seed: None,
             seeded_layouts: FxHashSet::default(),
+            direct: false,
         })
     }
 
@@ -553,6 +570,26 @@ impl Decls {
     #[must_use]
     pub const fn c_call_conv(&self) -> CallConv {
         self.call_conv
+    }
+
+    /// Whether the entry check's slow paths
+    /// ([`RuntimeFunc::preserves_all`]) are called with Cranelift's
+    /// `preserve_all` convention: on aarch64 and x86-64 outside Windows,
+    /// where the runtime's slow paths are naked stubs that save every
+    /// register generated code may use. Elsewhere they are plain C
+    /// functions, called with the C convention.
+    #[must_use]
+    pub const fn saving_slow_paths(&self) -> bool {
+        self.saving_slow_paths
+    }
+
+    /// These declarations with the slow paths called with the C
+    /// convention, as on a target without the saving stubs: for tests that
+    /// compare the two.
+    #[cfg(test)]
+    pub(crate) fn without_saving_slow_paths(mut self) -> Self {
+        self.saving_slow_paths = false;
+        self
     }
 
     pub(crate) const fn frontend_config(&self) -> TargetFrontendConfig {
@@ -995,7 +1032,12 @@ impl Decls {
         module: &mut M,
         mirs: &[MirModule],
         import: ForeignImport,
+        call_mode: CallMode,
     ) -> Result<(), CodegenError> {
+        self.direct = match call_mode {
+            CallMode::Indirect => false,
+            CallMode::Direct => true,
+        };
         self.declare_runtime(module)?;
         if self.is_alone() {
             for unit in mirs {
@@ -1100,7 +1142,12 @@ impl Decls {
             return Ok(());
         }
         let (params, ret) = f.ctypes();
-        let signature = sig::c_signature(params, ret, self.call_conv);
+        let call_conv = if f.preserves_all() && self.saving_slow_paths {
+            CallConv::PreserveAll
+        } else {
+            self.call_conv
+        };
+        let signature = sig::c_signature(params, ret, call_conv);
         // The function is declared first, in the order it always was, so
         // the ids of generated functions do not move (D-264).
         let id = self.import_word(module, f.symbol(), ImportTarget::Function(&signature))?;
@@ -1160,6 +1207,56 @@ impl Decls {
         ] {
             self.declare_runtime_func(module, f)?;
         }
+        self.declare_on_demand_data(module)
+    }
+
+    /// Declares the saving stubs the inline allocations and sized frees of
+    /// `stmt` call on their slow paths (`crate::alloc_inline`), where the
+    /// runtime has such stubs.
+    fn declare_saving_stubs<M: Module>(
+        &mut self,
+        module: &mut M,
+        stmt: &Stmt,
+    ) -> Result<(), CodegenError> {
+        if !self.saving_slow_paths {
+            return Ok(());
+        }
+        let stubs: &[RuntimeFunc] = match stmt {
+            Stmt::Assign {
+                value:
+                    Rvalue::Alloc { .. }
+                    | Rvalue::AllocPlaceholder { .. }
+                    | Rvalue::Box {
+                        from: Repr::Float | Repr::F32,
+                        ..
+                    },
+                ..
+            } => &[RuntimeFunc::AllocSlow],
+            Stmt::Assign {
+                value: Rvalue::AllocReuse { .. },
+                ..
+            } => &[RuntimeFunc::AllocMissSlow],
+            Stmt::Assign {
+                value: Rvalue::DropReuse { .. },
+                ..
+            } => &[RuntimeFunc::DropSaving],
+            Stmt::DropKeep { .. } => &[RuntimeFunc::FreeUniqueSlow, RuntimeFunc::DropSaving],
+            Stmt::Assign { .. }
+            | Stmt::Eval(_)
+            | Stmt::Dup(_)
+            | Stmt::Drop(_)
+            | Stmt::ClearUnwind => &[],
+        };
+        for &f in stubs {
+            self.declare_runtime_func(module, f)?;
+        }
+        Ok(())
+    }
+
+    /// Declares the counting flag ([`crate::runtime::ON_DEMAND_DATA`]),
+    /// once: reuse's code, the inline pattern steps and the inline writes
+    /// at an index test it (D-768).
+    fn declare_on_demand_data<M: Module>(&mut self, module: &mut M) -> Result<(), CodegenError> {
         for symbol in crate::runtime::ON_DEMAND_DATA {
             if !self.static_data.contains_key(symbol) {
                 self.declare_runtime_static(module, symbol)?;
@@ -1194,6 +1291,14 @@ impl Decls {
                         if f.on_demand() {
                             self.declare_runtime_func(module, f)?;
                         }
+                        // The pattern steps and the writes at an index
+                        // written inline (`list_ends`, `list_index`).
+                        if matches!(
+                            func,
+                            cheby_mir::RuntimeFn::ListUnconsOwned | cheby_mir::RuntimeFn::ListSet
+                        ) {
+                            self.declare_on_demand_data(module)?;
+                        }
                     }
                     if let Stmt::Assign {
                         value: Rvalue::DropReuse { .. } | Rvalue::AllocReuse { .. },
@@ -1207,6 +1312,7 @@ impl Decls {
                         self.declare_runtime_func(module, RuntimeFunc::ReleaseFields)?;
                         self.declare_runtime_func(module, RuntimeFunc::FreeUnique)?;
                     }
+                    self.declare_saving_stubs(module, stmt)?;
                 }
             }
         }
@@ -1232,6 +1338,14 @@ impl Decls {
                 match self.test_ordinals.get(&owner) {
                     Some(&ordinal) => mangle::test_continuation(&name.module, ordinal, index),
                     None => mangle::continuation(&name, index),
+                }
+            }
+            // Named as the owner's closures are (design T12).
+            FnKey::Specialized { owner, index, .. } => {
+                let name = self.def_name(unit, owner)?;
+                match self.test_ordinals.get(&owner) {
+                    Some(&ordinal) => mangle::test_specialized(&name.module, ordinal, index),
+                    None => mangle::specialized(&name, index),
                 }
             }
             FnKey::ConstInit(def) => mangle::item(Kind::Cinit, &self.def_name(unit, def)?),
@@ -1314,7 +1428,15 @@ impl Decls {
                 "the body of {def:?} does not have its declared signature"
             )));
         }
-        let symbol = self.symbol(unit, key)?;
+        // A release build's calls go to the symbol, which carries the mask
+        // its slot would (D-917, D-1109).
+        let symbol = if let FnKey::Item(def) = key
+            && self.direct
+        {
+            mangle::function(&self.def_name(unit, def)?, abi_sig.borrow)
+        } else {
+            self.symbol(unit, key)?
+        };
         let signature = sig::signature(&abi_sig, self.call_conv);
         // D-917: in a unit alone, an item, test body or constant initializer
         // that another unit may name is global hidden (the entries unit
@@ -1328,7 +1450,8 @@ impl Decls {
             | FnKey::Trampoline(_)
             | FnKey::TupleDictFn { .. }
             | FnKey::DynForward { .. }
-            | FnKey::Continuation { .. } => Linkage::Local,
+            | FnKey::Continuation { .. }
+            | FnKey::Specialized { .. } => Linkage::Local,
         };
         let id = module
             .declare_function(&symbol, linkage, &signature)
@@ -1510,11 +1633,13 @@ impl Decls {
 
     /// In a unit alone (D-917), declares with `Linkage::Import` what
     /// another unit defines and `unit`'s code reaches: the slot of every
-    /// direct callee whose function is not the unit's own, and the code of
-    /// every function the unit calls or names directly without defining it
-    /// (the entries unit's test bodies and constant initializers, the only
-    /// direct calls across units, D-916). Text reaches both PC-relative,
-    /// since every generated symbol is colocated (D-913).
+    /// direct callee whose function is not the unit's own, or in a release
+    /// build ([`CallMode::Direct`]) that callee's function, by its masked
+    /// symbol ([`mangle::function`]); and the code of every function the
+    /// unit calls or names directly without defining it (the entries
+    /// unit's test bodies and constant initializers, the only direct calls
+    /// across units of a debug build, D-916). Text reaches all of them
+    /// PC-relative, since every generated symbol is colocated (D-913).
     ///
     /// # Errors
     ///
@@ -1526,6 +1651,10 @@ impl Decls {
         unit: &MirModule,
     ) -> Result<(), CodegenError> {
         for callee in &unit.callees {
+            if self.direct {
+                self.declare_callee_import(module, unit, callee)?;
+                continue;
+            }
             let key = SlotKey {
                 path: self.slot_path(unit, callee.def)?.into(),
                 sig: callee.sig.clone(),
@@ -1596,6 +1725,47 @@ impl Decls {
                 },
             );
         }
+        Ok(())
+    }
+
+    /// In a release build's unit alone, declares the function of `callee`
+    /// with `Linkage::Import` under its masked symbol, unless the unit
+    /// defines it: a direct call reaches it PC-relative (D-913), and a
+    /// symbol whose mask differs from the definer's does not resolve
+    /// (D-917, D-1109). The slot is not imported, since no call loads it.
+    fn declare_callee_import<M: Module>(
+        &mut self,
+        module: &mut M,
+        unit: &MirModule,
+        callee: &cheby_mir::CalleeDecl,
+    ) -> Result<(), CodegenError> {
+        let key = FnKey::Item(callee.def);
+        if let Some(existing) = self.funcs.get(&key) {
+            if existing.abi != callee.sig {
+                return Err(CodegenError::ice(format!(
+                    "{:?} is called with another signature than its declaration",
+                    callee.def
+                )));
+            }
+            return Ok(());
+        }
+        let symbol = mangle::function(&self.def_name(unit, callee.def)?, callee.sig.borrow);
+        let signature = sig::signature(&callee.sig, self.call_conv);
+        let id = module
+            .declare_function(&symbol, Linkage::Import, &signature)
+            .map_err(|e| CodegenError::module(&e))?;
+        self.names.insert((0, id.as_u32()), symbol.clone());
+        self.funcs.insert(
+            key,
+            FuncDecl {
+                id,
+                symbol,
+                sig: signature,
+                abi: callee.sig.clone(),
+                // Another unit defines it: never defined here.
+                defined: true,
+            },
+        );
         Ok(())
     }
 

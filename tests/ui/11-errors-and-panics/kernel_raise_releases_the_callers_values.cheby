@@ -1,0 +1,42 @@
+// @mode: run-pass
+// @milestone: M3
+// @decisions: D-698, D-697, D-525, D-1765
+//! A panic that passes through a std kernel called at the call site, here
+//! `map::upsert`'s callback, unwinds the calling function like a panic in
+//! a call of Cheby code: the values the function holds at the call, a
+//! list, a string and the map in the kernel's temporary, are released on
+//! the way out (D-698), so the scope that catches the panic leaves
+//! nothing leaked, and its message is the panic's.
+
+import std::fiber
+import std::io
+import std::list
+import std::map
+import std::string
+
+fn refuse(old: Option<Int>) -> Int {
+  case old {
+    Some(n) => panic as "cannot update {n}"
+    None => 0
+  }
+}
+
+fn update(held: List<Int>, label: String) -> Int {
+  let counts = map::from_list([(label, list::length(held))])
+  let next = map::upsert(counts, label, refuse)
+  list::length(held) + map::size(next) + string::length(label)
+}
+
+fn main() {
+  let outcome = {
+    use _ <- fiber::scope()
+    update([1, 2, 3], string::add("la", "bel"))
+  }
+  case outcome {
+    Ok(n) => io::println("updated: {n}")
+    Err(failure) => {
+      let text = fiber::message(failure)
+      io::println("the scope failed: {text}")
+    }
+  }
+}

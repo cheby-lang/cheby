@@ -17,9 +17,9 @@ use cranelift_module::{
 use cheby_diag::{FileId, Span, TextRange};
 use cheby_iface::{DefId, DefIndex, Ice, IndexVec, ModuleId};
 use cheby_mir::{
-    Abi, AbiSig, Block, CType, Callee, CalleeDecl, Const, DefName, FieldDesc, FnKey, ForeignSig,
-    Function, LayoutDesc, LayoutRef, Local, LocalDecl, Operand, Repr, Rvalue, Stmt, Terminator,
-    UnitKind,
+    Abi, AbiSig, ArithOp, Block, BlockId, CType, Callee, CalleeDecl, CmpOp, Const, DefName,
+    FieldDesc, FnKey, ForeignSig, Function, LayoutDesc, LayoutRef, Local, LocalDecl, Operand, Repr,
+    Rvalue, Stmt, Terminator, UnitKind,
 };
 
 use crate::*;
@@ -35,8 +35,12 @@ struct Recording {
 
 impl Recording {
     fn new() -> Self {
+        Self::with_isa(isa::host_isa().unwrap())
+    }
+
+    fn with_isa(isa: OwnedTargetIsa) -> Self {
         Self {
-            isa: isa::host_isa().unwrap(),
+            isa,
             declarations: ModuleDeclarations::default(),
             text: Vec::new(),
             data: Vec::new(),
@@ -390,9 +394,9 @@ fn code_model_text_is_pc_relative_to_generated_symbols() {
     }
     for symbol in [
         // A runtime function, twice: the entry check's slow path and the
-        // allocation.
+        // allocation's.
         "cb$imp$cheby_rt_stack_slow",
-        "cb$imp$cheby_rt_alloc",
+        "cb$imp$cheby_rt_alloc_slow",
         // `@blocking`'s runtime function and the shim's address.
         "cb$imp$cheby_rt_blocking_call",
         "cb$blk$cheby_test_blocking",
@@ -670,5 +674,455 @@ fn isa_x86_64_apple_darwin_is_unsupported() {
         }
         Err(other) => panic!("not the unsupported-host error: {other}"),
         Ok(_) => panic!("x86_64-apple-darwin has an ISA"),
+    }
+}
+
+/// `app::spin(k: Int, cr, ci, zr, zi: Float)`, the shape of the
+/// comparison's `escape_time`: while `k != 0`, tail-calls itself as
+/// `spin(k - 1, cr, ci, zr * zr - zi * zi + cr, 2.0 * zr * zi + ci)`; at
+/// 0 returns `Nil`. The self tail call is a jump to the loop header,
+/// whose entry check's slow path is the loop's only call.
+///
+/// With `allocates`, `spin` also carries a uniform word `acc` and each
+/// step makes `acc` the pair of the old `acc` and the new `zr` boxed, so
+/// the loop allocates twice per step, a box and a tuple.
+#[expect(clippy::too_many_lines, reason = "one hand-built MIR unit")]
+fn float_loop_unit(allocates: bool) -> MirModule {
+    let spin = def(0);
+    let local = Local::from_u32;
+    let float = |n: f64| Operand::Const(Const::Float(n.to_bits()));
+    let arith = |dst: u32, op: ArithOp, lhs: Operand, rhs: Operand| Stmt::Assign {
+        dst: local(dst),
+        value: Rvalue::FloatArith {
+            op,
+            lhs,
+            rhs,
+            repr: Repr::Float,
+        },
+    };
+    let l = |n: u32| Operand::Local(local(n));
+    let mut params: Vec<Local> = (0..5).map(local).collect();
+    if allocates {
+        params.push(local(14));
+    }
+    let mut body = function(
+        FnKey::Item(spin),
+        params,
+        &[
+            // The parameters, then the test of `k`, the steps and `k - 1`.
+            Repr::Int,
+            Repr::Float,
+            Repr::Float,
+            Repr::Float,
+            Repr::Float,
+            Repr::Bool,
+            Repr::Float,
+            Repr::Float,
+            Repr::Float,
+            Repr::Float,
+            Repr::Float,
+            Repr::Float,
+            Repr::Float,
+            Repr::Int,
+            // `acc`, the box and the pair.
+            Repr::Value,
+            Repr::Value,
+            Repr::Value,
+        ],
+        Vec::new(),
+        Terminator::Return(Operand::Const(Const::Nil)),
+        &["a.cheby:1:4", "a.cheby:2:8"],
+    );
+    let mut step = vec![l(13), l(1), l(2), l(9), l(12)];
+    let mut allocations = Vec::new();
+    if allocates {
+        allocations = vec![
+            Stmt::Assign {
+                dst: local(15),
+                value: Rvalue::Box {
+                    value: l(9),
+                    from: Repr::Float,
+                },
+            },
+            Stmt::Assign {
+                dst: local(16),
+                value: Rvalue::Alloc {
+                    layout: LayoutRef::Tuple(2),
+                    fields: vec![l(14), l(15)],
+                },
+            },
+        ];
+        step.push(l(16));
+    }
+    let blocks = vec![
+        Block {
+            pos: Vec::new(),
+            params: Vec::new(),
+            stmts: vec![Stmt::Assign {
+                dst: local(5),
+                value: Rvalue::Compare {
+                    op: CmpOp::Eq,
+                    lhs: l(0),
+                    rhs: Operand::Const(Const::Int(0)),
+                    repr: Repr::Int,
+                },
+            }],
+            term: Terminator::Branch {
+                cond: l(5),
+                then_: BlockId::from_u32(1),
+                else_: BlockId::from_u32(2),
+            },
+            unwind: Vec::new(),
+        },
+        Block {
+            pos: Vec::new(),
+            params: Vec::new(),
+            stmts: Vec::new(),
+            term: Terminator::Return(Operand::Const(Const::Nil)),
+            unwind: Vec::new(),
+        },
+        Block {
+            pos: Vec::new(),
+            params: Vec::new(),
+            stmts: vec![
+                arith(6, ArithOp::Mul, l(3), l(3)),
+                arith(7, ArithOp::Mul, l(4), l(4)),
+                arith(8, ArithOp::Sub, l(6), l(7)),
+                arith(9, ArithOp::Add, l(8), l(1)),
+                arith(10, ArithOp::Mul, float(2.0), l(3)),
+                arith(11, ArithOp::Mul, l(10), l(4)),
+                arith(12, ArithOp::Add, l(11), l(2)),
+                Stmt::Assign {
+                    dst: local(13),
+                    value: Rvalue::Checked {
+                        op: ArithOp::Sub,
+                        lhs: l(0),
+                        rhs: Operand::Const(Const::Int(1)),
+                        repr: Repr::Int,
+                        loc: StrId::from_u32(1),
+                    },
+                },
+            ]
+            .into_iter()
+            .chain(allocations)
+            .collect(),
+            term: Terminator::TailCall {
+                callee: Callee::Direct(spin),
+                args: step,
+            },
+            unwind: Vec::new(),
+        },
+    ];
+    body.blocks = IndexVec::from_raw(blocks).unwrap();
+    let float = Repr::Float;
+    let mut sig = vec![Repr::Int, float, float, float, float];
+    if allocates {
+        sig.push(Repr::Value);
+    }
+    MirModule {
+        externals: Vec::new(),
+        source: None,
+        unit: UnitKind::Code(ModuleId::from_u32(1)),
+        path: "app".into(),
+        functions: vec![body],
+        callees: vec![CalleeDecl {
+            def: spin,
+            sig: AbiSig::owned(Abi::Cheby, sig, Repr::Value),
+        }],
+        layouts: Vec::new(),
+        foreign_layouts: Vec::new(),
+        statics: Vec::new(),
+        names: vec![DefName {
+            def: spin,
+            module: "app".into(),
+            item: "spin".into(),
+        }],
+    }
+}
+
+/// `float_loop_unit`'s `spin` compiled for `isa` at `opt`, with the slow
+/// paths called with `preserve_all` when `saving` (and the target has
+/// the stubs): its CLIF text and the size of its frame below the frame
+/// record, its spill slots and saved callee-saved registers.
+fn float_loop(
+    isa: OwnedTargetIsa,
+    opt: OptLevel,
+    saving: bool,
+    allocates: bool,
+) -> (String, u32, String) {
+    let mut m = Recording::with_isa(isa);
+    let decls = Decls::new(m.isa()).unwrap();
+    let mut decls = if saving {
+        decls
+    } else {
+        decls.without_saving_slow_paths()
+    };
+    let cx = CodegenCx {
+        layouts: &PairLayout,
+    };
+    let opts = CodegenOptions {
+        opt_level: opt,
+        ..CodegenOptions::default()
+    };
+    let units = [float_loop_unit(allocates)];
+    declare(&mut m, &mut decls, &units, &cx, &opts).unwrap();
+    let func = translate(&units[0], &units[0].functions[0], &decls, &cx, &opts).unwrap();
+    let text = func.display().to_string();
+    let mut ctx = cranelift_codegen::Context::for_function(func);
+    ctx.set_disasm(true);
+    ctx.compile(m.isa(), &mut ControlPlane::default()).unwrap();
+    let code = ctx.compiled_code().unwrap();
+    let frame = code.buffer.frame_layout().unwrap().frame_to_fp_offset;
+    (text, frame, code.vcode.clone().unwrap_or_default())
+}
+
+/// The targets whose Cranelift backend this build has (D-936): the
+/// host's architecture.
+fn built_targets() -> Vec<&'static str> {
+    [
+        "aarch64-apple-darwin",
+        "aarch64-unknown-linux-gnu",
+        "aarch64-pc-windows-msvc",
+        "x86_64-unknown-linux-gnu",
+        "x86_64-pc-windows-msvc",
+    ]
+    .into_iter()
+    .filter(|triple| isa::isa_for(triple).is_ok())
+    .collect()
+}
+
+/// The entry check's slow paths save every register (`cheby_runtime::panic`)
+/// and are called with `preserve_all` on aarch64 and x86-64 outside
+/// Windows, so the Floats a self tail call's loop carries stay in
+/// registers: the loop's function has no frame below its frame record,
+/// no spill slot and no saved register, in both profiles. Called with the
+/// C convention, as on Windows, the same loop keeps them in spill slots,
+/// since the call clobbers every vector register.
+#[test]
+fn a_float_loop_keeps_its_floats_in_registers() {
+    let targets = built_targets();
+    assert_ne!(targets.len(), 0, "no backend built");
+    for triple in targets {
+        let windows = triple.contains("windows");
+        for opt in [OptLevel::None, OptLevel::Speed] {
+            let isa = || isa::isa_with(triple, opt).unwrap();
+            let (text, frame, _) = float_loop(isa(), opt, true, false);
+            let context = format!("{triple} at {opt:?}");
+            assert_eq!(
+                text.contains("preserve_all"),
+                !windows,
+                "{context}:\n{text}"
+            );
+            if !windows {
+                assert_eq!(frame, 0, "{context}: a frame of {frame} bytes\n{text}");
+            }
+            let (text, frame, _) = float_loop(isa(), opt, false, false);
+            assert!(!text.contains("preserve_all"), "{context}:\n{text}");
+            assert!(frame > 0, "{context}: with the C convention, no frame");
+        }
+    }
+}
+
+/// Whether a line of disassembly stores a vector register to the stack or
+/// loads one from it: a spill or a reload.
+fn float_spill(line: &str) -> bool {
+    let line = line.trim();
+    let vector = |word: &str| {
+        let word = word.trim_start_matches('%').trim_end_matches(',');
+        ["d", "q", "v", "s", "xmm"].iter().any(|prefix| {
+            word.strip_prefix(prefix)
+                .is_some_and(|rest| rest.starts_with(|c: char| c.is_ascii_digit()))
+        })
+    };
+    let stack = line.contains("[sp") || line.contains("(%rsp)") || line.contains("(%rbp)");
+    stack && line.split_whitespace().skip(1).any(vector)
+}
+
+/// An allocation of a cached size is inline (`crate::alloc_inline`), and
+/// its slow path is a stub called with `preserve_all` on aarch64 and
+/// x86-64 outside Windows, so a loop that boxes a `Float` and allocates a
+/// tuple at every step makes no call on the hit path and keeps its Floats
+/// in registers: no frame below its frame record, in both profiles. Every
+/// call it has is to a stub. Where the stubs are called with the C
+/// convention, as on Windows, the loop calls the allocation helpers and
+/// keeps its Floats in spill slots.
+#[test]
+fn an_allocating_float_loop_keeps_its_floats_in_registers() {
+    let targets = built_targets();
+    assert_ne!(targets.len(), 0, "no backend built");
+    for triple in targets {
+        let windows = triple.contains("windows");
+        for opt in [OptLevel::None, OptLevel::Speed] {
+            let isa = || isa::isa_with(triple, opt).unwrap();
+            let (text, frame, code) = float_loop(isa(), opt, true, true);
+            let context = format!("{triple} at {opt:?}");
+            // The allocation helpers return the object; the stubs, and
+            // the overflow's panic, after which nothing is live, return
+            // nothing.
+            let helpers: Vec<&str> = text
+                .lines()
+                .filter(|line| line.trim_start().starts_with("sig") && line.contains("->"))
+                .collect();
+            if windows {
+                assert!(!text.contains("preserve_all"), "{context}:\n{text}");
+                assert!(!helpers.is_empty(), "{context}:\n{text}");
+                continue;
+            }
+            assert!(
+                helpers.is_empty() && text.contains("preserve_all"),
+                "{context}: an allocation helper's call\n{text}"
+            );
+            // A callee-saved integer register may be saved once at the
+            // entry; no vector register goes to or comes from the stack.
+            let spills: Vec<&str> = code.lines().filter(|line| float_spill(line)).collect();
+            assert!(
+                spills.is_empty(),
+                "{context}: {spills:?} in a frame of {frame} bytes\n{code}"
+            );
+            let (text, frame, code) = float_loop(isa(), opt, false, true);
+            assert!(!text.contains("preserve_all"), "{context}:\n{text}");
+            assert!(frame > 0, "{context}: with the C convention, no frame");
+            assert!(
+                code.lines().any(float_spill),
+                "{context}: with the C convention, no spill\n{code}"
+            );
+        }
+    }
+}
+
+/// `rec(x_0 … x_(k-1))`, which holds its `k` counted parameters across a
+/// call of itself and returns the call's result, as `cheby_jit`'s
+/// entry-unwind tests build it, after the unwind pass (D-698): its entry
+/// pad drops the parameters, so with at most four its entry check calls
+/// the releasing slow path (D-775).
+fn recursion_unit(k: u32) -> MirModule {
+    let rec = def(0);
+    let local = Local::from_u32;
+    let params: Vec<Local> = (0..k).map(local).collect();
+    let args: Vec<Operand> = params.iter().copied().map(Operand::Local).collect();
+    let mut stmts: Vec<Stmt> = params.iter().copied().map(Stmt::Dup).collect();
+    stmts.push(Stmt::Assign {
+        dst: local(k),
+        value: Rvalue::Call {
+            callee: Callee::Direct(rec),
+            args,
+        },
+    });
+    stmts.extend(params.iter().copied().map(Stmt::Drop));
+    let reprs: Vec<Repr> = (0..=k).map(|_| Repr::Value).collect();
+    let body = function(
+        FnKey::Item(rec),
+        params,
+        &reprs,
+        stmts,
+        Terminator::Return(Operand::Local(local(k))),
+        &["a.cheby:1:4"],
+    );
+    let mut unit = MirModule {
+        externals: Vec::new(),
+        source: None,
+        unit: UnitKind::Code(ModuleId::from_u32(1)),
+        path: "app".into(),
+        functions: vec![body],
+        callees: vec![CalleeDecl {
+            def: rec,
+            sig: AbiSig::owned(
+                Abi::Cheby,
+                vec![Repr::Value; usize::try_from(k).unwrap()],
+                Repr::Value,
+            ),
+        }],
+        layouts: Vec::new(),
+        foreign_layouts: Vec::new(),
+        statics: Vec::new(),
+        names: vec![DefName {
+            def: rec,
+            module: "app".into(),
+            item: "rec".into(),
+        }],
+    };
+    unwound(&mut unit);
+    unit
+}
+
+/// Runs the unwind pass over `unit` (D-698), as the driver's pipeline does.
+fn unwound(unit: &mut MirModule) {
+    cheby_mir::unwind::insert_module(unit).unwrap();
+    cheby_mir::validate(unit, cheby_mir::Stage::Unwound).unwrap();
+}
+
+/// `unit`'s first function compiled for `isa` with the default options:
+/// its CLIF text and its frame size below the frame record; with `split`,
+/// those of its large frame's outer function (D-679).
+fn entry_frame(isa: OwnedTargetIsa, unit: &MirModule, split: bool) -> (String, u32) {
+    let mut m = Recording::with_isa(isa);
+    let mut decls = Decls::new(m.isa()).unwrap();
+    let cx = CodegenCx {
+        layouts: &PairLayout,
+    };
+    let opts = CodegenOptions {
+        capture_clif: true,
+        ..CodegenOptions::default()
+    };
+    let units = [unit.clone()];
+    declare(&mut m, &mut decls, &units, &cx, &opts).unwrap();
+    let function = &units[0].functions[0];
+    if split {
+        let inner = decls.declare_large_frame_body(&mut m, function).unwrap();
+        let large =
+            compile_large_frame(m.isa(), &units[0], function, &decls, &opts, inner).unwrap();
+        return (large.outer_text.unwrap(), large.outer.frame_size);
+    }
+    let func = translate(&units[0], function, &decls, &cx, &opts).unwrap();
+    let text = decls.describe(&func);
+    let code = compile_function(m.isa(), func).unwrap();
+    (text, code.frame_size)
+}
+
+/// The entry check's releasing slow paths take six arguments, `ctx`, the
+/// location and four words (D-775), and a large frame's outer function
+/// leaves its frame size in the control block, so on every target with the
+/// saving stubs the call passes nothing on the stack and adds nothing to
+/// the frame: `rec` without parameters, a self tail call's loop and the
+/// outer function of every `rec` up to four counted parameters have no
+/// frame below their frame record. On System V x86-64 the seventh argument
+/// of the old helpers kept a 16-byte outgoing argument area in each.
+#[test]
+fn the_releasing_slow_paths_leave_an_empty_frame_empty() {
+    let targets = built_targets();
+    assert_ne!(targets.len(), 0, "no backend built");
+    let store = format!("v0+{}", cheby_runtime::abi::CTX_FRAME_SIZE);
+    for triple in targets.into_iter().filter(|t| !t.contains("windows")) {
+        let isa = || isa::isa_for(triple).unwrap();
+        for k in 0..=4 {
+            let unit = recursion_unit(k);
+            let (text, frame) = entry_frame(isa(), &unit, false);
+            let context = format!("{triple}, rec with {k}");
+            assert!(
+                text.contains("= cb$imp$cheby_rt_stack_slow_unwind")
+                    && text.contains("preserve_all"),
+                "{context}:\n{text}"
+            );
+            if k == 0 {
+                assert_eq!(frame, 0, "{context}: a frame of {frame} bytes\n{text}");
+            }
+            let (text, frame) = entry_frame(isa(), &unit, true);
+            assert!(
+                text.contains("= cb$imp$cheby_rt_stack_slow_frame_unwind") && text.contains(&store),
+                "{context}, outer:\n{text}"
+            );
+            assert_eq!(
+                frame, 0,
+                "{context}, outer: a frame of {frame} bytes\n{text}"
+            );
+        }
+        let mut unit = float_loop_unit(false);
+        unwound(&mut unit);
+        let (text, frame) = entry_frame(isa(), &unit, false);
+        assert!(
+            text.contains("= cb$imp$cheby_rt_stack_slow_unwind"),
+            "{triple}, loop:\n{text}"
+        );
+        assert_eq!(frame, 0, "{triple}, loop: a frame of {frame} bytes\n{text}");
     }
 }

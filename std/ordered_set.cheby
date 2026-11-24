@@ -208,9 +208,9 @@ test "each calls the function once per element" {
 }
 
 /// Combines the elements in the set's order like `fold`, and stops at the
-/// first `Err` that `f` returns (D-1080, D-1082). It walks the order tree
+/// first `Err` that `f` returns (D-1080, D-1082). It follows the order
 /// through `ordered_map::try_fold`, so a walk that stops after k elements
-/// takes O(log n + k).
+/// takes O(k).
 pub fn try_fold<T, A, E>(
   s: OrderedSet<T>,
   initial: A,

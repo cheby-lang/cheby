@@ -105,6 +105,7 @@ fn fixture(package: PackageId, scope_run_params: Option<&[Ty]>) -> Fixture {
         clamped: Box::new([]),
         initializer: None,
         call_site: None,
+        kernel: None,
     };
     let kernel_sig = FnSig {
         generics: Generics::empty(),
@@ -113,6 +114,7 @@ fn fixture(package: PackageId, scope_run_params: Option<&[Ty]>) -> Fixture {
         clamped: Box::new([]),
         initializer: None,
         call_site: None,
+        kernel: None,
     };
     let nullary_sig = FnSig {
         generics: Generics::empty(),
@@ -121,6 +123,7 @@ fn fixture(package: PackageId, scope_run_params: Option<&[Ty]>) -> Fixture {
         clamped: Box::new([]),
         initializer: None,
         call_site: None,
+        kernel: None,
     };
     let mut items = IndexVec::new();
     for (n, name, sig) in [
@@ -290,11 +293,40 @@ fn intrinsic_scope_run_passes_validation() {
     assert!(after.precounted);
 }
 
-/// The table holds `scope_run` under its runtime name, and nothing else in
-/// M2 (D-693).
+/// The table holds `scope_run` under its runtime name (D-693), then
+/// `std::list`'s `push`, `prepend` and `sort_with`, then the updates of
+/// `std::heap`.
 #[test]
 fn intrinsic_table() {
-    assert_eq!(intrinsic_symbols(), ["cheby_rt_scope_run"]);
+    assert_eq!(
+        intrinsic_symbols(),
+        [
+            "cheby_rt_scope_run",
+            "cheby_rt_std_list_push",
+            "cheby_rt_std_list_prepend",
+            "cheby_rt_std_list_sort_with",
+            "cheby_rt_std_heap_push",
+            "cheby_rt_std_heap_pop",
+            "cheby_rt_std_heap_from_list",
+            "cheby_rt_std_heap_to_list"
+        ]
+    );
+    assert_eq!(
+        Intrinsic::from_symbol("cheby_rt_std_list_sort_with"),
+        Some(Intrinsic::ListSortWith)
+    );
+    // The kernel a direct call no longer reaches is no intrinsic.
+    assert_eq!(Intrinsic::from_symbol("cheby_list_sort_with"), None);
+    assert_eq!(
+        Intrinsic::from_symbol("cheby_rt_std_list_push"),
+        Some(Intrinsic::ListPush)
+    );
+    assert_eq!(
+        Intrinsic::from_symbol("cheby_rt_std_list_prepend"),
+        Some(Intrinsic::ListPrepend)
+    );
+    // The helpers the two bodies call are not intrinsics.
+    assert_eq!(Intrinsic::from_symbol("cheby_rt_list_push"), None);
     assert_eq!(
         Intrinsic::ALL.map(Intrinsic::symbol).as_slice(),
         intrinsic_symbols()

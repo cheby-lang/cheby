@@ -1,0 +1,34 @@
+fn spec app::sorted#0 of std::list::sort_with(_0: value, _1: value) -> value check str#0 {
+  str#0 = "std/list.cheby:821:8"
+bb0:
+  _2: value = call_runtime sort_start(borrow _0)
+  _3: u64 = call_runtime buffer_step(borrow _2, borrow const int -1)
+  goto bb1(_3)
+bb1(_4: u64):
+  _5: bool = compare ne u64 _4, const u64 0
+  branch _5, bb2, bb3
+bb2:
+  call_runtime loop_check()
+  _6: value = call_runtime pair_left(borrow _4)
+  _7: value = call_runtime pair_right(borrow _4)
+  _13: int = unbox int _6
+  _14: int = unbox int _7
+  _15: bool = compare lt int _14, _13
+  branch _15, bb4, bb5
+bb3:
+  _11: value = call_runtime buffer_finish(_2, borrow _0)
+  return _11
+bb4:
+  goto bb6(const ctor Less)
+bb5:
+  _17: bool = compare gt int _14, _13
+  branch _17, bb7, bb8
+bb6(_16: value):
+  _9: int = read_tag _16 of order
+  _10: u64 = call_runtime buffer_step(borrow _2, borrow _9)
+  goto bb1(_10)
+bb7:
+  goto bb6(const ctor Greater)
+bb8:
+  goto bb6(const ctor Equal)
+}

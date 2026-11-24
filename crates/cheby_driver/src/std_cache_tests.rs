@@ -258,7 +258,11 @@ fn std_cache_one_code_for_every_command() {
     let app = f.package(&[("main.cheby", CONST_MAIN)]);
     let run = f.run(&app);
     assert!(!lines(&run, "parse.std").is_empty(), "{run:?}");
-    for log in [f.check(&app), f.test(&app), f.run(&app)] {
+    // A check whose constant hits the run's entry builds no evaluation
+    // module (D-1260), so the check is of a package whose constant misses.
+    let edited = CONST_MAIN.replace("range(0, 10)", "range(0, 11)");
+    let missing = f.package(&[("main.cheby", &edited)]);
+    for log in [f.check(&missing), f.test(&app), f.run(&app)] {
         assert!(misses(&log, "code.std").is_empty(), "{log:?}");
         assert!(!lines(&log, "code.std").is_empty(), "{log:?}");
         assert!(lines(&log, "parse.std").is_empty(), "{log:?}");
@@ -314,6 +318,7 @@ fn std_cache_keys() {
         checked_counts: false,
         stack_check: true,
         target: "aarch64-macos".to_owned(),
+        release: None,
     };
     let std = std_settings(&command);
     assert_eq!(std.kind, BuildKind::Std);
@@ -334,6 +339,13 @@ fn std_cache_keys() {
         ..std.clone()
     };
     assert_ne!(key, std_code_key(BUILD, "std::io", &naive));
+    // Std has one code per profile.
+    let release = Settings {
+        release: Some(cheby_mir::ReleaseOptions::ALL),
+        ..std.clone()
+    };
+    assert_ne!(key, std_code_key(BUILD, "std::io", &release));
+    assert_eq!(std_settings(&release).release, release.release);
     let self_test = Settings {
         kind: BuildKind::StdSelfTest,
         ..std
@@ -388,6 +400,66 @@ fn std_cache_masks_whole() {
     assert_eq!(whole.modules().len(), std_lib::STD_MODULES.len());
     let again = std_cache::whole_std().unwrap();
     assert_eq!(whole.named(), again.named());
+}
+
+/// Design T9: std's release code is optimized, its masks inferred over it
+/// as one unit (D-968), the same twice; some of its exports call a std
+/// function that borrows, which is why a release build writes std's
+/// release masks into its package units.
+#[test]
+fn std_cache_release_exports_and_masks() {
+    let release = std_cache::release_std(cheby_mir::ReleaseOptions::ALL).unwrap();
+    assert!(!release.named().is_empty(), "no std function borrows");
+    assert!(!release.exports().is_empty(), "std exports nothing");
+    let borrows: std::collections::BTreeSet<(&str, &str)> = release
+        .named()
+        .iter()
+        .map(|(m, i, _)| (m.as_str(), i.as_str()))
+        .collect();
+    let mut calls = Vec::new();
+    for (name, body) in release.exports() {
+        let b = body.body();
+        for f in std::iter::once(&b.function).chain(&b.closures) {
+            for block in &f.blocks {
+                let callees = block.stmts.iter().filter_map(|s| {
+                    if let cheby_mir::Stmt::Assign {
+                        value: cheby_mir::Rvalue::Call { callee, .. },
+                        ..
+                    } = s
+                    {
+                        callee.direct()
+                    } else {
+                        None
+                    }
+                });
+                let tail = if let cheby_mir::Terminator::TailCall { callee, .. } = &block.term {
+                    callee.direct()
+                } else {
+                    None
+                };
+                for def in callees.chain(tail) {
+                    if let Some(callee) = body.name_of(def)
+                        && borrows.contains(&callee)
+                    {
+                        calls.push(format!(
+                            "{}::{} ({}) -> {}::{}",
+                            name.0,
+                            name.1,
+                            body.cost(),
+                            callee.0,
+                            callee.1
+                        ));
+                    }
+                }
+            }
+        }
+    }
+    calls.sort();
+    calls.dedup();
+    assert!(
+        !calls.is_empty(),
+        "no export calls a borrowing std function"
+    );
 }
 
 /// A constant whose evaluation keeps lists live through `std::list`'s
@@ -770,7 +842,7 @@ fn std_cache_priv_constant_of_std_is_evaluated() {
         None,
         &mut out,
         Some(&cache),
-        Some((false, None)),
+        Some((false, None, Profile::Debug)),
     )
     .unwrap()
     .unwrap();
@@ -794,4 +866,115 @@ fn std_cache_priv_constant_of_std_is_evaluated() {
             .any(|(path, ..)| path == "std::log::scoped"),
         "{from_records:?}"
     );
+}
+
+/// Design T15: std's export record gives back every std export and std's
+/// release masks as `ReleaseStd` holds them, its bytes are a function of
+/// what it holds, and a damaged or cut record decodes to nothing (a miss).
+/// Std's exports use the `Convert` and `Wrapping` of the instruction
+/// kernels (`cheby_mir::kernels_instr`), so the round trips cover their
+/// tags; no exported std body takes a square root, and `cheby_mir`'s
+/// `export_bytes_round_trip_instruction_kernels` covers `FloatSqrt`.
+#[test]
+fn std_cache_export_record_round_trips() {
+    let release = std_cache::release_std(cheby_mir::ReleaseOptions::ALL).unwrap();
+    let made = std_cache::exports_in_process(cheby_mir::ReleaseOptions::ALL).unwrap();
+    assert_eq!(made.decoded().unwrap(), *release.exports());
+    assert!(!made.bodies().is_empty() && !made.named().is_empty());
+    for operation in ["Convert {", "Wrapping {"] {
+        assert!(
+            release
+                .exports()
+                .values()
+                .any(|body| format!("{body:?}").contains(operation)),
+            "no std export uses {operation}"
+        );
+    }
+    // Every body alone, then the whole record.
+    for (name, body) in release.exports() {
+        let one: cheby_mir::export::PortableBodies =
+            std::iter::once((name.clone(), body.clone())).collect();
+        let bytes = cheby_mir::export::encode_bodies(&one);
+        assert_eq!(
+            cheby_mir::export::decode_bodies(&bytes).unwrap(),
+            one,
+            "{}::{}",
+            name.0,
+            name.1
+        );
+    }
+    // Design T10: std's literal constants, by path, which a package's
+    // release units fold; a computed one such as `float::infinity` is not
+    // among them.
+    let literals = made.literals();
+    assert_eq!(literals, release.literals());
+    assert!(
+        literals.contains(&(
+            "std::float::pi".to_owned(),
+            cheby_mir::Const::Float(std::f64::consts::PI.to_bits())
+        )),
+        "{literals:?}"
+    );
+    assert!(
+        literals
+            .iter()
+            .all(|(path, _)| path != "std::float::infinity"),
+        "{literals:?}"
+    );
+    let payload = made.encode();
+    let back = std_cache::StdExports::decode(&payload).unwrap();
+    assert!(back.same(&made));
+    assert_eq!(back.named(), made.named());
+    assert_eq!(back.literals(), literals);
+    assert_eq!(back.encode(), payload);
+    // A body is decoded alone, as a build asks for it.
+    let encoded =
+        cheby_mir::export::EncodedBodies::read(cheby_mir::export::encode_bodies(release.exports()))
+            .unwrap();
+    assert_eq!(encoded.decode_all().unwrap(), *release.exports());
+    for (name, body) in release.exports() {
+        assert_eq!(encoded.get(name).unwrap().as_ref(), Some(body));
+    }
+    let absent = (Box::from("std::nothing"), Box::from("nothing"));
+    assert_eq!(encoded.get(&absent).unwrap(), None);
+    assert!(std_cache::StdExports::decode(&payload[..payload.len() - 1]).is_none());
+    let sealed = cache::front::sealed(payload);
+    for at in [0, sealed.len() / 2, sealed.len() - 1] {
+        let mut damaged = sealed.clone();
+        damaged[at] ^= 0x40;
+        assert!(
+            cache::front::unsealed(&damaged)
+                .and_then(std_cache::StdExports::decode)
+                .is_none(),
+            "byte {at}"
+        );
+    }
+}
+
+/// Design T15: the export record's key holds std's release settings, so
+/// each lever set has its own record and a debug build's settings name
+/// none of them.
+#[test]
+fn std_cache_export_key_follows_the_release_settings() {
+    let mir = cheby_mir::MirOptions {
+        release: Some(cheby_mir::ReleaseOptions::ALL),
+        ..cheby_mir::MirOptions::default()
+    };
+    let settings = std_settings(&borrowing::settings(BuildKind::Std, mir));
+    let key = std_cache::std_export_key(BUILD, &settings);
+    assert_eq!(key, std_cache::std_export_key(BUILD, &settings));
+    let other = Settings {
+        release: None,
+        ..settings.clone()
+    };
+    assert_ne!(key, std_cache::std_export_key(BUILD, &other));
+    let fewer = Settings {
+        release: Some(cheby_mir::ReleaseOptions {
+            clif: false,
+            ..cheby_mir::ReleaseOptions::ALL
+        }),
+        ..settings.clone()
+    };
+    assert_ne!(key, std_cache::std_export_key(BUILD, &fewer));
+    assert_ne!(key, std_cache::std_export_key(BuildId([13; 16]), &settings));
 }

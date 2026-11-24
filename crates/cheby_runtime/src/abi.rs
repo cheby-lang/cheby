@@ -316,18 +316,185 @@ pub const CTX_UNWIND: i32 = 12;
 /// `scope_close` (D-693), stored by generated code right before that call.
 /// The waiting kernels copy it into the fiber's wait site when they park,
 /// and a deadlock report starts its frame walk there
-/// (`locate::locate`). Generated code only writes it; the Rust part of
-/// the block starts after it, at byte 24.
+/// (`locate::locate`). Generated code only writes it.
 pub const CTX_WAIT_FRAME: i32 = 16;
+
+/// Byte offset of the fiber control block's inline allocation record, a
+/// pointer: the block cache that generated code takes blocks from and
+/// gives blocks back to without a call ([`block_cache`]). It is the cache
+/// of the thread the fiber runs on while the inline path may serve the
+/// fiber, and otherwise a cache that never serves, whose every stack is
+/// empty and full at once: a memory budget, event counting, poisoning, the
+/// address sanitizer or a shard the fiber does not hold alone. The runtime
+/// rewrites it whenever the fiber becomes current on a thread and when it
+/// stops being current, so generated code loads it again at each use.
+pub const CTX_ALLOC_CACHE: i32 = 24;
+
+/// Byte offset of the word where an allocation's slow path leaves its
+/// result: the object, or 0 when the allocation raised. The slow paths
+/// are called with a convention that returns nothing
+/// ([`sym::ALLOC_SLOW`]), so generated code loads the word after the
+/// call.
+pub const CTX_ALLOC_RESULT: i32 = 32;
+
+/// Byte offset of the word where the outer function of a large frame
+/// (D-679) leaves its frame size, a `u64`, right before it calls
+/// [`sym::STACK_SLOW_FRAME_UNWIND`], which reads it there. Passed as an
+/// argument, it would be the helper's seventh, which System V x86-64
+/// passes on the stack, and the caller's frame would never be empty.
+/// Generated code only writes it. The Rust part of the block starts after
+/// it, at byte 48.
+pub const CTX_FRAME_SIZE: i32 = 40;
+
+/// The block cache as generated code reads and writes it
+/// (`crate::alloc::BlockCache`, at [`CTX_ALLOC_CACHE`]): for each of its
+/// [`CLASSES`](block_cache::CLASSES) size classes a stack of free blocks, then the shard of the
+/// domain counters that the current fiber charges.
+///
+/// A class's stack is a word array whose first slot holds 0. `top` points
+/// to the slot of the last block kept, so an empty stack's `top` points to
+/// a 0 and a pop is a load, a test and a store, with no count. `limit`
+/// points to the last slot: a push is inline while `top` is below it. A
+/// class whose stack does not exist yet has its `top` at a static 0 and
+/// a null `limit`, and so does every class of a cache that never serves,
+/// so its pops find nothing and its pushes find it full. A runtime with
+/// debug assertions keeps every `limit` null, so each sized free reaches
+/// the runtime, which checks its size (D-1772).
+///
+/// An inline allocation of class `c` loads `top`, loads the block it
+/// points to, and takes the slow path on 0; then it loads the shard and
+/// takes the slow path when the shard's bytes would pass its high, which
+/// is where the runtime samples the peak. Only then does it write: the
+/// shard's objects and bytes, `top` minus 8 and the block's header. An
+/// inline free of a block of class `c` takes the slow path unless `top`
+/// is below `limit`, then writes the shard's objects and bytes, the block
+/// in the slot after `top`, and `top` plus 8. A free never samples the
+/// peak, as the runtime's own frees do not.
+pub mod block_cache {
+    /// The number of size classes: allocations of 8 to 256 bytes, in steps
+    /// of 8.
+    pub const CLASSES: usize = 32;
+    /// The bytes of one class's entry: `top`, then `limit`.
+    pub const CLASS_SIZE: i32 = 16;
+    /// Byte offset in a class's entry of `top`.
+    pub const TOP_OFFSET: i32 = 0;
+    /// Byte offset in a class's entry of `limit`.
+    pub const LIMIT_OFFSET: i32 = 8;
+    /// Byte offset in the cache of the shard the current fiber charges,
+    /// exclusive to its thread.
+    pub const SHARD_OFFSET: i32 = 512;
+    /// Byte offset in a shard of its live objects, an `i64`.
+    pub const SHARD_OBJECTS_OFFSET: i32 = 0;
+    /// Byte offset in a shard of its live bytes, an `i64`.
+    pub const SHARD_BYTES_OFFSET: i32 = 8;
+    /// Byte offset in a shard of its high, an `i64`: an allocation that
+    /// takes the bytes above it samples the domain's peak in the runtime.
+    pub const SHARD_HIGH_OFFSET: i32 = 16;
+
+    /// The size class of an allocation of `size` bytes, as the runtime
+    /// rounds it: `(size - 1) / 8`, or `None` for 0 and past the last
+    /// class. Objects are at least the header's 8 bytes.
+    #[must_use]
+    pub fn class_of(size: u64) -> Option<usize> {
+        let class = usize::try_from(size.checked_sub(1)? / super::OBJECT_ALIGN).ok()?;
+        (class < CLASSES).then_some(class)
+    }
+
+    /// The size in bytes of the blocks of class `class`.
+    #[must_use]
+    pub fn class_bytes(class: usize) -> u64 {
+        u64::try_from(class)
+            .unwrap_or(u64::MAX)
+            .saturating_add(1)
+            .saturating_mul(super::OBJECT_ALIGN)
+    }
+
+    /// Byte offset in the cache of class `class`'s entry, for a class
+    /// below [`CLASSES`].
+    #[must_use]
+    pub fn class_offset(class: usize) -> Option<i32> {
+        (class < CLASSES)
+            .then(|| i32::try_from(class).ok()?.checked_mul(CLASS_SIZE))
+            .flatten()
+    }
+}
+
+pub mod heap {
+    //! The stack slot of a direct call of `std::heap`'s updates
+    //! (`sym::HEAP_PUSH`), where their start leaves the steps of a sift.
+
+    /// The slot's size in bytes; the runtime checks that its steps fit.
+    pub const STEPS_SIZE: usize = 512;
+    /// Byte offset in the slot of the address of the first pair to
+    /// compare, or 0 when there is none, which the start writes.
+    pub const STEPS_FIRST_OFFSET: i32 = 0;
+    /// [`STEPS_SIZE`] as code generation's slot size.
+    pub const STEPS_SLOT_SIZE: u32 = 512;
+    const _: () = assert!(STEPS_SIZE == 512 && STEPS_SLOT_SIZE == 512);
+}
+
+pub mod map {
+    //! What generated code reads and writes in a map: the placeholder a
+    //! value slot holds while a direct call of `map::upsert` has the value
+    //! moved out (`sym::MAP_UPSERT`).
+
+    /// The placeholder: the tagged word of `Int` 0, which a release of
+    /// the map skips.
+    pub const HOLE: i64 = 1;
+}
 
 /// List roots (D-563): the header (layout [`layout::LIST_FIRST`]), then
 /// the tree, the view's offset into it and the view's length, the last two
-/// raw. Generated code reads a list's length from its root (D-910), so the
-/// offset is part of the ABI between generated code and the runtime.
+/// raw. Generated code reads a list's length from its root (D-910), and
+/// works on the leaf at either end of a unique list in place (D-1759), so
+/// these offsets and headers are part of the ABI between generated code and
+/// the runtime.
+///
+/// A list of more than one leaf that grows or shrinks at an end has a big
+/// root (D-1757, layout [`list::BIG_ROOT_LAYOUT`]): a root's fields, then a head leaf,
+/// the index in it of the list's first element, and a tail leaf, each
+/// leaf 0 for none. A leaf is its header, a raw word holding its length
+/// in the low 32 bits and its capacity in the high ones, then its slots.
 pub mod list {
+    use super::{LayoutId, RC_UNIQUE, header, layout, tag_int};
+
+    /// Byte offset of a root's tree: a leaf, a branch or 0.
+    pub const ROOT_TREE_OFFSET: i32 = 8;
+    /// Byte offset of the index in the tree of a root's first element, a
+    /// raw `u64`.
+    pub const ROOT_OFFSET_OFFSET: i32 = 16;
     /// Byte offset of a root's length, a raw `u64`. The static empty list
     /// holds 0 there.
     pub const ROOT_LEN_OFFSET: i32 = 24;
+    /// Byte offset of a big root's head leaf, or 0.
+    pub const BIG_HEAD_OFFSET: i32 = 32;
+    /// Byte offset of the index in the head leaf of a big root's first
+    /// element, a raw `u64`.
+    pub const BIG_HEAD_POS_OFFSET: i32 = 40;
+    /// Byte offset of a big root's tail leaf, or 0.
+    pub const BIG_TAIL_OFFSET: i32 = 48;
+    /// Byte offset of a leaf's length and capacity.
+    pub const LEAF_META_OFFSET: i32 = 8;
+    /// The layout of roots that are not big: the tree is the whole list.
+    pub const ROOT_LAYOUT: LayoutId = layout::LIST_FIRST;
+    /// Byte offset of a leaf's first slot.
+    pub const LEAF_SLOTS_OFFSET: i32 = 16;
+    /// The layout of leaves.
+    pub const LEAF_LAYOUT: LayoutId = layout::LIST_FIRST + 1;
+    /// The layout of big roots.
+    pub const BIG_ROOT_LAYOUT: LayoutId = layout::LIST_FIRST + 3;
+    /// The header of a root with count one.
+    pub const UNIQUE_ROOT: u64 = header(RC_UNIQUE, 0, layout::LIST_FIRST);
+    /// The header of a big root with count one.
+    pub const UNIQUE_BIG_ROOT: u64 = header(RC_UNIQUE, 0, BIG_ROOT_LAYOUT);
+    /// The header of a leaf with count one.
+    pub const UNIQUE_LEAF: u64 = header(RC_UNIQUE, 0, LEAF_LAYOUT);
+    /// What a leaf's slot holds once its element moved out: the tagged
+    /// `Int` 0, which owns nothing (D-893).
+    pub const CLEARED: u64 = match tag_int(0) {
+        Some(word) => word,
+        None => panic!("0 is a tagged Int"),
+    };
 }
 
 /// The values of the unwind flag at [`CTX_UNWIND`] (D-685).
@@ -340,10 +507,13 @@ pub mod unwind_flag {
     pub const CANCEL: u32 = 2;
 }
 
-/// The most counted words the entry check's releasing slow paths
-/// ([`sym::STACK_SLOW_UNWIND`], [`sym::STACK_SLOW_FRAME_UNWIND`]) take in
-/// registers (D-775). Code generation keeps the
-/// translated entry pad chain for a function with more counted parameters.
+/// The counted words the entry check's releasing slow paths
+/// ([`sym::STACK_SLOW_UNWIND`], [`sym::STACK_SLOW_FRAME_UNWIND`]) take,
+/// after `ctx` and the location, so that all six arguments travel in
+/// registers on AAPCS64 and System V x86-64 (D-775). A function with fewer
+/// counted parameters passes 0 for the rest, which the helpers skip, and
+/// code generation keeps the translated entry pad chain for a function
+/// with more.
 pub const ENTRY_UNWIND_WORDS: u32 = 4;
 
 /// D-742's measurement switch: `CHEBY_UNWIND_EDGES=off` skips the unwind
@@ -604,16 +774,16 @@ pub mod sym {
     /// Data: the static `Err(Nil)` the `scope_run` intrinsic returns on
     /// failure (D-693).
     pub const STATIC_ERR_NIL: &str = "cheby_rt_static_err_nil";
-    /// `uint32_t cheby_rt_stack_slow_unwind(ExecCtx *ctx, uint64_t location, uint32_t count,
-    /// uint64_t p0, uint64_t p1, uint64_t p2, uint64_t p3)`: the entry check's slow path of a
-    /// function with at most four counted parameters (D-775). Runs
-    /// [`STACK_SLOW`]; when that started an unwinding, releases `p0` to `p(count-1)` and
-    /// returns 1, else returns 0 and leaves them untouched.
+    /// `void cheby_rt_stack_slow_unwind(ExecCtx *ctx, uint64_t location, uint64_t p0,
+    /// uint64_t p1, uint64_t p2, uint64_t p3)`: the entry check's slow path of a function
+    /// with at most four counted parameters (D-775), which passes 0 for the words it does
+    /// not use. Runs [`STACK_SLOW`]; when that started an unwinding (the unwind flag is
+    /// set), releases `p0` to `p3`, skipping 0, else leaves them untouched.
     pub const STACK_SLOW_UNWIND: &str = "cheby_rt_stack_slow_unwind";
-    /// `uint32_t cheby_rt_stack_slow_frame_unwind(ExecCtx *ctx, uint64_t location,
-    /// uint64_t frame_size, uint32_t count, uint64_t p0, uint64_t p1, uint64_t p2, uint64_t p3)`:
-    /// [`STACK_SLOW_UNWIND`] for the outer function of a large frame, through
-    /// [`STACK_SLOW_FRAME`] (D-743, D-775).
+    /// `void cheby_rt_stack_slow_frame_unwind(ExecCtx *ctx, uint64_t location, uint64_t p0,
+    /// uint64_t p1, uint64_t p2, uint64_t p3)`: [`STACK_SLOW_UNWIND`] for the outer
+    /// function of a large frame, through [`STACK_SLOW_FRAME`] (D-743, D-775), with the
+    /// frame size that the caller wrote at [`super::CTX_FRAME_SIZE`] right before the call.
     pub const STACK_SLOW_FRAME_UNWIND: &str = "cheby_rt_stack_slow_frame_unwind";
     /// `uint64_t cheby_rt_blocking_call(ExecCtx *ctx, void (*shim)(const uint64_t *args,
     /// uint64_t *out), const uint64_t *args, size_t nargs)`: an `@blocking` call (D-683,
@@ -627,7 +797,8 @@ pub mod sym {
     /// value fields of a unique constructor or tuple object.
     pub const RELEASE_FIELDS: &str = "cheby_rt_release_fields";
     /// `void cheby_rt_reuse_hit(void)`: counts a reuse hit, out of line
-    /// behind [`STATS_COUNTING`] (D-716, D-768).
+    /// behind [`STATS_COUNTING`] (D-716, D-768). A stub that saves every
+    /// register, as [`ALLOC_SLOW`] is.
     pub const REUSE_HIT: &str = "cheby_rt_reuse_hit";
     /// `uint64_t cheby_rt_alloc_miss(ExecCtx *ctx, uint64_t size, uint64_t header)`:
     /// [`ALLOC`] for an `alloc_reuse` whose token is 0, counting the miss.
@@ -641,11 +812,12 @@ pub mod sym {
     /// token and both sizes, writes the header over it or allocates; 0
     /// when the allocation raised.
     pub const ALLOC_REUSE_CHECKED: &str = "cheby_rt_alloc_reuse_checked";
-    /// `void cheby_rt_free_unique(ExecCtx *ctx, uint64_t obj)`: the hit path
-    /// of a drop specialized by constructor (D-716, D-850):
+    /// `void cheby_rt_free_unique(ExecCtx *ctx, uint64_t obj, uint64_t size)`: the hit
+    /// path of a drop specialized by constructor (D-716, D-850):
     /// frees the block of a unique constructor or tuple object whose value
     /// fields generated code already released or moved to its kept
-    /// projections, charging the domain as a free does.
+    /// projections, charging the domain as a free does. `size` is the
+    /// object's allocation size, rounded as `cheby_rt_alloc` rounds it.
     pub const FREE_UNIQUE: &str = "cheby_rt_free_unique";
     /// `uint64_t cheby_rt_list_uncons(ExecCtx *ctx, uint64_t list, int64_t at, int64_t start,
     /// int64_t end, uint64_t *head)`: `LIST_GET` of `at`, written to `*head`, and the
@@ -656,6 +828,102 @@ pub mod sym {
     /// consumes, which moves the head out of a unique list in the descent that
     /// cuts it.
     pub const LIST_UNCONS_OWNED: &str = "cheby_rt_list_uncons_owned";
+    /// `uint64_t cheby_rt_list_prepend(ExecCtx *ctx, uint64_t list, uint64_t elem)`:
+    /// consumes both, in place when the list is unique, as `LIST_PUSH`
+    /// does at the other end (D-1758).
+    pub const LIST_PREPEND: &str = "cheby_rt_list_prepend";
+    /// `uint64_t cheby_rt_map_find(ExecCtx *ctx, uint64_t map, uint64_t key)`:
+    /// the address of the value stored under the borrowed `key` in the
+    /// borrowed map, or 0 when the key is absent; hashes and compares the
+    /// key as `cheby_map_get` does.
+    pub const MAP_FIND: &str = "cheby_rt_map_find";
+    /// `uint64_t cheby_rt_map_value_at(uint64_t address)`: the word at a
+    /// nonzero address [`MAP_FIND`] gave, of a map still held, dup'd.
+    /// Generated code reads it inline instead.
+    pub const MAP_VALUE_AT: &str = "cheby_rt_map_value_at";
+    /// `uint64_t cheby_rt_list_set(ExecCtx *ctx, uint64_t list, int64_t index, uint64_t item)`:
+    /// `list::set` of a list and an item it consumes, in place when the
+    /// list is unique; outside the list the list unchanged and the item
+    /// released. Generated code writes a unique one-leaf list inline
+    /// instead ([`super::list`]).
+    pub const LIST_SET: &str = "cheby_rt_list_set";
+    /// `void cheby_rt_alloc_slow(ExecCtx *ctx, uint64_t size, uint64_t header)`:
+    /// what an inline allocation does not serve ([`super::block_cache`]).
+    /// Allocates as [`ALLOC`] does, refilling the size class's stack from
+    /// the system in a batch when it is empty, and leaves the object, or 0
+    /// when the allocation raised, at [`super::CTX_ALLOC_RESULT`]. A stub
+    /// that saves every register, called with Cranelift's `preserve_all`
+    /// convention where the runtime has such stubs, as the entry check's
+    /// slow paths are (D-1775).
+    pub const ALLOC_SLOW: &str = "cheby_rt_alloc_slow";
+    /// `void cheby_rt_alloc_miss_slow(ExecCtx *ctx, uint64_t size, uint64_t header)`:
+    /// [`ALLOC_SLOW`] for an `alloc_reuse` whose token is 0, counting the
+    /// miss as [`ALLOC_MISS`] does.
+    pub const ALLOC_MISS_SLOW: &str = "cheby_rt_alloc_miss_slow";
+    /// `void cheby_rt_free_unique_slow(ExecCtx *ctx, uint64_t obj, uint64_t size)`:
+    /// what an inline sized free does not serve: [`FREE_UNIQUE`], in a
+    /// stub that saves every register.
+    pub const FREE_UNIQUE_SLOW: &str = "cheby_rt_free_unique_slow";
+    /// `void cheby_rt_drop_saving(ExecCtx *ctx, uint64_t value)`: [`DROP`],
+    /// in a stub that saves every register, for the cold drop of a shared
+    /// object on the paths of a reuse and of a drop specialized by
+    /// constructor.
+    pub const DROP_SAVING: &str = "cheby_rt_drop_saving";
+    /// `uint64_t cheby_rt_map_upsert(ExecCtx *ctx, uint64_t map, uint64_t key, uint64_t *out)`:
+    /// `map::upsert` at a direct call, whose callback generated code calls
+    /// (`MapUpsert`). Consumes `map` and borrows `key`; returns the map
+    /// with a root of the caller's own and the path to the key's entry
+    /// writable, and writes to `out` the address of the entry's value
+    /// slot, that address plus 1 for a key it put in with a placeholder,
+    /// or 1 for an empty map.
+    pub const MAP_UPSERT: &str = "cheby_rt_map_upsert";
+    /// `uint64_t cheby_rt_map_slot_take(uint64_t address)`: the value at a
+    /// present key's slot that [`MAP_UPSERT`] gave, moved out, with the
+    /// placeholder left. Generated code does this inline instead.
+    pub const MAP_SLOT_TAKE: &str = "cheby_rt_map_slot_take";
+    /// `uint64_t cheby_rt_map_upsert_found(ExecCtx *ctx, uint64_t address)`:
+    /// the `Option` an upsert's callback gets for an address [`MAP_UPSERT`]
+    /// gave: `Some` of the stored value, moved out with the placeholder
+    /// left, or the static `None`.
+    pub const MAP_UPSERT_FOUND: &str = "cheby_rt_map_upsert_found";
+    /// `uint64_t cheby_rt_map_upsert_store(ExecCtx *ctx, uint64_t map, uint64_t address, uint64_t key, uint64_t value)`:
+    /// stores the owned `value` over the placeholder in a slot that
+    /// [`MAP_UPSERT`] gave and returns the map it consumes, or for an empty
+    /// map inserts the key, hashing it. Generated code stores into a slot
+    /// inline.
+    pub const MAP_UPSERT_STORE: &str = "cheby_rt_map_upsert_store";
+    /// `uint64_t cheby_rt_sort_start(ExecCtx *ctx, uint64_t xs)`: the state of a
+    /// direct `list::sort_with` of the borrowed `xs`, whose comparison
+    /// generated code calls: an object it owns, or a tagged word for fewer
+    /// than two elements (`list/steps.rs`).
+    pub const SORT_START: &str = "cheby_rt_sort_start";
+    /// `uint64_t cheby_rt_buffer_step(uint64_t state, int64_t tag)`: takes the tag
+    /// of the `Order` that answers the pending comparison of a
+    /// [`SORT_START`] or [`HEAP_LIST_START`] state and returns the
+    /// address of the next two elements to compare, or 0 when done.
+    pub const BUFFER_STEP: &str = "cheby_rt_buffer_step";
+    /// `uint64_t cheby_rt_buffer_finish(ExecCtx *ctx, uint64_t state, uint64_t source)`:
+    /// the list a finished state holds, consuming the state; the borrowed
+    /// `source` is the list its start was given.
+    pub const BUFFER_FINISH: &str = "cheby_rt_buffer_finish";
+    /// `uint64_t cheby_rt_heap_list_start(ExecCtx *ctx, uint64_t items, bool max, uint64_t by)`:
+    /// the state of a direct `heap::to_list`, stepped as [`SORT_START`]'s.
+    pub const HEAP_LIST_START: &str = "cheby_rt_heap_list_start";
+    /// `uint64_t cheby_rt_heap_push(ExecCtx *ctx, uint64_t items, uint64_t item, bool max,
+    /// uint64_t by, uint64_t *slot)`: `heap::push`'s start at a direct call: the
+    /// list with `item` added, consuming both, and the steps of its sift in
+    /// `slot` ([`super::heap::STEPS_SIZE`] bytes).
+    pub const HEAP_PUSH: &str = "cheby_rt_heap_push";
+    /// `uint64_t cheby_rt_heap_pop(ExecCtx *ctx, uint64_t items, bool max, uint64_t by,
+    /// uint64_t *slot)`: `heap::pop`'s start, as [`HEAP_PUSH`]'s.
+    pub const HEAP_POP: &str = "cheby_rt_heap_pop";
+    /// `uint64_t cheby_rt_heap_heapify(ExecCtx *ctx, uint64_t items, bool max, uint64_t by,
+    /// uint64_t *slot)`: `heap::from_list`'s start, as [`HEAP_PUSH`]'s.
+    pub const HEAP_HEAPIFY: &str = "cheby_rt_heap_heapify";
+    /// `uint64_t cheby_rt_heap_step(ExecCtx *ctx, uint64_t *slot, int64_t tag)`: the next step of
+    /// the steps a [`HEAP_PUSH`], [`HEAP_POP`] or [`HEAP_HEAPIFY`] wrote, as
+    /// [`BUFFER_STEP`] steps a state.
+    pub const HEAP_STEP: &str = "cheby_rt_heap_step";
     /// Data: the runtime's event-counting flag, one byte
     /// (`crate::stats::counting_flag`): not [`COUNTING_OFF`] while
     /// counting is on or not yet settled.
@@ -663,9 +931,18 @@ pub mod sym {
     /// The value of the byte at [`STATS_COUNTING`] when events are not
     /// counted (D-768).
     pub const COUNTING_OFF: u8 = crate::stats::COUNTING_OFF;
-    /// Std externals whose bodies the compiler generates (D-693). Never
-    /// registered.
-    pub const INTRINSICS: [&str; 1] = ["cheby_rt_scope_run"];
+    /// Std externals whose bodies the compiler generates (D-693, D-1758).
+    /// Never registered.
+    pub const INTRINSICS: [&str; 8] = [
+        "cheby_rt_scope_run",
+        "cheby_rt_std_list_push",
+        "cheby_rt_std_list_prepend",
+        "cheby_rt_std_list_sort_with",
+        "cheby_rt_std_heap_push",
+        "cheby_rt_std_heap_pop",
+        "cheby_rt_std_heap_from_list",
+        "cheby_rt_std_heap_to_list",
+    ];
     /// `void cheby_io_print(uint64_t text)`, `text` borrowed.
     pub const IO_PRINT: &str = "cheby_io_print";
     /// `void cheby_io_println(uint64_t text)`, `text` borrowed.
@@ -751,7 +1028,7 @@ pub mod sym {
     /// order `symbols()` lists them first. Kernels
     /// (`cheby_<module>_<function>`) follow in `symbols()`; they come from
     /// each kernel module's registration (plan §4.3.3).
-    pub const ALL: [&str; 74] = [
+    pub const ALL: [&str; 94] = [
         ALLOC,
         DUP,
         DROP,
@@ -800,6 +1077,26 @@ pub mod sym {
         FREE_UNIQUE,
         LIST_UNCONS,
         LIST_UNCONS_OWNED,
+        LIST_PREPEND,
+        MAP_FIND,
+        MAP_VALUE_AT,
+        LIST_SET,
+        ALLOC_SLOW,
+        ALLOC_MISS_SLOW,
+        FREE_UNIQUE_SLOW,
+        DROP_SAVING,
+        MAP_UPSERT,
+        MAP_SLOT_TAKE,
+        MAP_UPSERT_FOUND,
+        MAP_UPSERT_STORE,
+        SORT_START,
+        BUFFER_STEP,
+        BUFFER_FINISH,
+        HEAP_LIST_START,
+        HEAP_PUSH,
+        HEAP_POP,
+        HEAP_HEAPIFY,
+        HEAP_STEP,
         STATS_COUNTING,
         DESC_SYMBOLS[0],
         DESC_SYMBOLS[1],
@@ -990,9 +1287,9 @@ mod tests {
             assert_eq!(sym::desc_symbol(name), Some(symbol));
         }
         assert_eq!(sym::desc_symbol("dyn"), None);
-        assert_eq!(sym::ALL.get(49..72), Some(&sym::DESC_SYMBOLS[..]));
+        assert_eq!(sym::ALL.get(69..92), Some(&sym::DESC_SYMBOLS[..]));
         assert_eq!(
-            sym::ALL.get(72..),
+            sym::ALL.get(92..),
             Some(&[sym::FFI_EXTERNAL, sym::FFI_VALUE][..])
         );
         assert_eq!(
@@ -1020,15 +1317,23 @@ mod tests {
     }
 
     /// D-685, D-742, D-856: the generated-code view of the control block
-    /// ends at the wait-frame word (D-868), the
+    /// ends at the large frame's size, after the wait-frame word (D-868), the
     /// measurement switch keeps its name, and a deadlock exits with 103
     /// (D-724).
     #[test]
     fn the_control_blocks_offsets_and_the_unwind_switch() {
         assert_eq!(UNWIND_EDGES_ENV, "CHEBY_UNWIND_EDGES");
         assert_eq!(
-            (CTX_STACK_LIMIT, CTX_MODE, CTX_UNWIND, CTX_WAIT_FRAME),
-            (0, 8, 12, 16)
+            (
+                CTX_STACK_LIMIT,
+                CTX_MODE,
+                CTX_UNWIND,
+                CTX_WAIT_FRAME,
+                CTX_ALLOC_CACHE,
+                CTX_ALLOC_RESULT,
+                CTX_FRAME_SIZE
+            ),
+            (0, 8, 12, 16, 24, 32, 40)
         );
         assert_eq!(
             (

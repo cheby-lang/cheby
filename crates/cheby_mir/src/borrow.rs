@@ -401,6 +401,18 @@ impl FactName {
     }
 }
 
+/// The module path (empty for the builtin module) and item text by which
+/// facts, masks and portable bodies name `def` ([`find_defs`] finds it
+/// again), read through `defs`.
+///
+/// # Errors
+///
+/// An [`Ice`] if `defs` cannot see `def`.
+pub(crate) fn def_text(def: DefId, defs: &Defs<'_>) -> Result<(Box<str>, Box<str>), Ice> {
+    let name = FactName::of(def, defs)?;
+    Ok((name.module, name.item))
+}
+
 /// The text of `item` (the item `def`) in a [`FactName`].
 fn item_text(def: DefId, item: &cheby_iface::IfaceItem, defs: &Defs<'_>) -> Result<String, Ice> {
     let names = &defs.globals.names;
@@ -1001,7 +1013,8 @@ pub fn infer(
             | FnKey::Trampoline(_)
             | FnKey::TupleDictFn { .. }
             | FnKey::DynForward { .. }
-            | FnKey::Continuation { .. } => None,
+            | FnKey::Continuation { .. }
+            | FnKey::Specialized { .. } => None,
         })
         .collect();
     let mut masks: Vec<BorrowMask> = module
@@ -1101,7 +1114,8 @@ pub fn infer(
             | FnKey::Trampoline(_)
             | FnKey::TupleDictFn { .. }
             | FnKey::DynForward { .. }
-            | FnKey::Continuation { .. } => None,
+            | FnKey::Continuation { .. }
+            | FnKey::Specialized { .. } => None,
         })
         .collect()
 }
@@ -1142,17 +1156,29 @@ fn initial_mask(
     BorrowMask(mask.0 & !forced.0)
 }
 
-/// Whether `f` calls a foreign function: the shape of an `@external`
-/// wrapper (D-455), which D-525 needs owned.
+/// Whether `f` passes one of its counted parameters to a foreign
+/// function: the shape of an `@external` wrapper (D-455), which D-525
+/// needs owned. A direct call of a std kernel (`lower/external.rs`)
+/// passes owned temporaries, never a counted parameter, and its move into
+/// the temporary consumes the parameter as the wrapper's call did. A raw
+/// parameter (`Int`, `Float`, …) is never in a mask.
 fn has_foreign_call(f: &Function) -> bool {
-    f.blocks.iter().flat_map(|b| &b.stmts).any(|s| {
-        matches!(
-            s,
-            Stmt::Assign {
-                value: Rvalue::CallForeign { .. },
-                ..
-            } | Stmt::Eval(Rvalue::CallForeign { .. })
-        )
+    let counted_param =
+        |l: Local| f.params.contains(&l) && f.local(l).is_ok_and(|decl| decl.repr == Repr::Value);
+    f.blocks.iter().flat_map(|b| &b.stmts).any(|s| match s {
+        Stmt::Assign {
+            value: Rvalue::CallForeign { args, .. },
+            ..
+        }
+        | Stmt::Eval(Rvalue::CallForeign { args, .. }) => {
+            args.iter().any(|a| a.local().is_some_and(counted_param))
+        }
+        Stmt::Assign { .. }
+        | Stmt::Eval(_)
+        | Stmt::Dup(_)
+        | Stmt::Drop(_)
+        | Stmt::DropKeep { .. }
+        | Stmt::ClearUnwind => false,
     })
 }
 
@@ -1375,6 +1401,9 @@ impl Scan<'_> {
             | Rvalue::FloatArith { .. }
             | Rvalue::Bitwise { .. }
             | Rvalue::FloatNeg { .. }
+            | Rvalue::Convert { .. }
+            | Rvalue::FloatSqrt { .. }
+            | Rvalue::Wrapping { .. }
             | Rvalue::Not(_)
             | Rvalue::ReadTag { .. }
             | Rvalue::DropReuse { .. }

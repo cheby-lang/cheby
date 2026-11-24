@@ -34,7 +34,7 @@ use crate::borrow::{
     BorrowMask, BuildFacts, IfaceEligibility, Masks, UnitFacts, collect_facts, infer, infer_build,
     unit_facts,
 };
-use crate::lower::{lower_items_split, lower_tests_split};
+use crate::lower::{lower_items_late_bound, lower_items_split, lower_tests_split};
 use crate::{
     Defs, EntryKind, EntryRequest, LowerCx, MirModule, MirOptions, Program, Root, Stage,
     count_lowered_with, dump, dump_function, lower_entries, reachable, validate,
@@ -91,6 +91,15 @@ pub(crate) enum Mode {
     /// As `Counted`, counted with these options (fusion's tests compare
     /// options, D-850).
     CountedWith(MirOptions),
+    /// As `Uncounted`, the code units lowered as a REPL session lowers
+    /// them ([`lower_items_late_bound`]).
+    LateBound,
+    /// As a release build with the `inline` and `consts` levers: the
+    /// reads of every scalar literal constant folded
+    /// ([`crate::fold_consts`]), the package's units inlined and cleaned up
+    /// ([`crate::inline::optimize`]) and checked as lowered again, then,
+    /// when `counted`, as `Counted`; otherwise left as lowered.
+    Release { counted: bool },
 }
 
 impl Lowered {
@@ -332,6 +341,13 @@ pub(crate) fn lower_source_split(files: &[(&str, &str)], size: usize, with_tests
         .unwrap_or_else(|errors| panic!("front-end errors: {errors}"))
 }
 
+/// [`lower_source_uncounted`] whose code units are lowered as a REPL
+/// session lowers them: every constant read from its slot.
+pub(crate) fn lower_source_late_bound(files: &[(&str, &str)]) -> Lowered {
+    lower_package_with("app", files, false, None, Mode::LateBound)
+        .unwrap_or_else(|errors| panic!("front-end errors: {errors}"))
+}
+
 /// [`lower_source`] without reference counts: the units as lowered,
 /// validated at `Stage::Lowered` (what borrowing inference reads).
 pub(crate) fn lower_source_uncounted(files: &[(&str, &str)]) -> Lowered {
@@ -379,6 +395,14 @@ pub(crate) fn lower_std_inferred() -> Result<Lowered, String> {
         None,
         Mode::Inferred { reach_all: true },
     )
+}
+
+/// [`lower_source`] as a release build with the `inline` lever lowers it
+/// ([`Mode::Release`]): counted when `counted`, else as lowered and
+/// optimized.
+pub(crate) fn lower_source_release(files: &[(&str, &str)], counted: bool) -> Lowered {
+    lower_package_with("app", files, false, None, Mode::Release { counted })
+        .unwrap_or_else(|errors| panic!("front-end errors: {errors}"))
 }
 
 /// [`lower_package_inferred`] for package `app`; front-end errors panic.
@@ -569,6 +593,34 @@ fn lower_package_with(
     })
 }
 
+/// Where `mode` cuts large literals (D-780), `None` at [`crate::lower::SPLIT_SIZE`].
+const fn split_of(mode: Mode) -> Option<usize> {
+    match mode {
+        Mode::Split { size } => Some(size),
+        Mode::Counted
+        | Mode::Uncounted
+        | Mode::Inferred { .. }
+        | Mode::CountedWith(_)
+        | Mode::LateBound
+        | Mode::Release { .. } => None,
+    }
+}
+
+/// The code unit of `thir`'s items that `wanted` selects, lowered as
+/// `mode` asks.
+fn lower_code(
+    thir: &thir::Module,
+    wanted: &dyn Fn(DefId) -> bool,
+    cx: &LowerCx<'_>,
+    mode: Mode,
+) -> MirModule {
+    if matches!(mode, Mode::LateBound) {
+        lower_items_late_bound(thir, wanted, cx).unwrap()
+    } else {
+        lower_items_split(thir, wanted, cx, split_of(mode)).unwrap()
+    }
+}
+
 /// The back end of [`lower_package_with`]: the units, each counted and
 /// checked or only validated as lowered (`mode`), and the borrow masks
 /// of [`Mode::Inferred`]. An internal error panics with the unit's dump.
@@ -656,13 +708,9 @@ fn back_end(
             sources,
         };
         let wanted = |def| reach_all || reach.contains(def);
-        let split = match mode {
-            Mode::Split { size } => Some(size),
-            Mode::Counted | Mode::Uncounted | Mode::Inferred { .. } | Mode::CountedWith(_) => None,
-        };
-        push(lower_items_split(thir, &wanted, &cx, split).unwrap());
+        push(lower_code(thir, &wanted, &cx, mode));
         if tests.iter().any(|&(m, _)| m == id) {
-            push(lower_tests_split(thir, &cx, split).unwrap());
+            push(lower_tests_split(thir, &cx, split_of(mode)).unwrap());
         }
     }
     let mut all: Vec<ModuleId> = order.to_vec();
@@ -686,6 +734,9 @@ fn back_end(
         info: Some(&t.entry),
     }));
     push(lower_entries(&requests, &cx).unwrap());
+    if matches!(mode, Mode::Release { .. }) {
+        optimize_local(&mut units, modules, &cx.defs, checked, globals);
+    }
     // The facts each unit contributes, named through the whole build's
     // interfaces, and their union (D-969).
     let facts = matches!(mode, Mode::Inferred { .. }).then(|| facts_check(&units, &cx.defs));
@@ -694,6 +745,66 @@ fn back_end(
     };
     let masks = finish(&mut units, mode, &per_unit);
     (units, masks, facts)
+}
+
+/// What the `consts` lever folds in a test build: what a release build
+/// knows without an evaluation, every scalar literal constant of
+/// `checked`, std's included.
+fn literal_values(
+    checked: &BTreeMap<ModuleId, (thir::Module, Vec<ModuleId>)>,
+    globals: &Globals,
+) -> crate::fold_consts::ConstValues {
+    checked
+        .values()
+        .flat_map(|(thir, _)| &thir.consts)
+        .filter_map(|c| Some((c.def, crate::scalar_literal(c, globals)?)))
+        .collect()
+}
+
+/// The release passes on the package's own units, before borrowing is
+/// inferred, as the driver runs them: in layers, each unit inlining the
+/// package's bodies of earlier layers and std's bodies by name (exported
+/// from the std units lowered here and imported back through `defs`, as
+/// a release build reads std's own front end's), and each unit checked as
+/// lowered again. The reads of the scalar literal constants of `checked`
+/// are folded first and in the clean-up ([`literal_values`],
+/// [`crate::fold_consts`]).
+fn optimize_local(
+    units: &mut [MirModule],
+    modules: &ModuleTable,
+    defs: &Defs<'_>,
+    checked: &BTreeMap<ModuleId, (thir::Module, Vec<ModuleId>)>,
+    globals: &Globals,
+) {
+    let values = &literal_values(checked, globals);
+    let is_std = |unit: &MirModule| {
+        unit.module()
+            .and_then(|m| modules.get(m))
+            .is_some_and(|info| info.package == PackageId::STD)
+    };
+    let std_units: Vec<MirModule> = units.iter().filter(|u| is_std(u)).cloned().collect();
+    let budget = crate::inline::InlineBudget::DEFAULT;
+    let portable = crate::export::portable_exports(&std_units, defs, &budget, true).unwrap();
+    let local = |unit: &MirModule| {
+        unit.module()
+            .and_then(|m| modules.get(m))
+            .is_some_and(|info| info.package == PackageId::LOCAL)
+    };
+    let each = |refs: &mut [&mut MirModule], step: &crate::export::LayerStep<'_>| {
+        refs.iter_mut().map(|unit| step(unit)).collect()
+    };
+    let passes = crate::inline::Passes::ALL;
+    for unit in units.iter_mut().filter(|unit| local(unit)) {
+        crate::fold_consts::fold_unit(unit, values);
+    }
+    if let Err(ice) = crate::export::optimize_build(
+        units, &local, &portable, defs, &budget, passes, values, &each,
+    )
+    .map(|_| ())
+    {
+        let dumps: Vec<String> = units.iter().filter_map(|u| dump(u).ok()).collect();
+        panic!("{ice}\n{}", dumps.join("\n"));
+    }
 }
 
 /// The facts each unit of `units` contributes, named through `defs` (the
@@ -740,12 +851,18 @@ fn finish(
         }
         // As a build does it (D-779): every unit lowered, then the masks
         // inferred over all of them and written into each, then counting.
-        Mode::Counted | Mode::Split { .. } | Mode::CountedWith(_) => {
+        Mode::Counted
+        | Mode::Split { .. }
+        | Mode::CountedWith(_)
+        | Mode::Release { counted: true } => {
             let options = match mode {
                 Mode::CountedWith(options) => options,
-                Mode::Counted | Mode::Uncounted | Mode::Split { .. } | Mode::Inferred { .. } => {
-                    MirOptions::default()
-                }
+                Mode::Counted
+                | Mode::Uncounted
+                | Mode::Split { .. }
+                | Mode::Inferred { .. }
+                | Mode::LateBound
+                | Mode::Release { .. } => MirOptions::default(),
             };
             // A build infers borrowing only when its options borrow
             // (D-808).
@@ -761,7 +878,7 @@ fn finish(
             }
             found
         }
-        Mode::Uncounted => BTreeMap::new(),
+        Mode::Uncounted | Mode::LateBound | Mode::Release { counted: false } => BTreeMap::new(),
     };
     masks
         .into_iter()

@@ -280,8 +280,8 @@ test "each sees every key with its values" {
 
 /// Combines the keys in the multimap's order like `fold`, each with all of
 /// its values, and stops at the first `Err` that `f` returns (D-1080,
-/// D-1082). It walks the order tree through `ordered_map::try_fold`, so a
-/// walk that stops after k keys takes O(log n + k).
+/// D-1082). It follows the order through `ordered_map::try_fold`, so a
+/// walk that stops after k keys takes O(k).
 pub fn try_fold<K, V, A, E>(
   m: OrderedMultimap<K, V>,
   initial: A,

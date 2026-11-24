@@ -64,8 +64,8 @@ unsafe fn extend(
     let (mut out, reused) = unsafe { string::with_room(data, to_u64(extra), reuse) };
     write(&mut |piece: &[u8]| {
         // SAFETY: `out` is unique with room for every piece (`with_room`),
-        // so `append` writes in place, and the pieces lie outside it.
-        out = unsafe { string::append(out, piece) };
+        // and the pieces lie outside it.
+        out = unsafe { string::append_in_room(out, piece) };
     });
     if reused {
         // SAFETY: `out` is the live argument, changed in place; the caller
@@ -115,7 +115,7 @@ pub(crate) unsafe extern "C" fn cheby_bytes_from_list(values: Word) -> Word {
             if used == chunk.len() {
                 // SAFETY: `out` is the unique `Bytes` built here; the chunk
                 // lies outside it.
-                out = unsafe { string::append(out, &chunk) };
+                out = unsafe { string::append_in_room(out, &chunk) };
                 used = 0;
             }
             if let Some(slot) = chunk.get_mut(used) {
@@ -124,7 +124,7 @@ pub(crate) unsafe extern "C" fn cheby_bytes_from_list(values: Word) -> Word {
             used = used.saturating_add(1);
         }
         // SAFETY: as above.
-        unsafe { string::append(out, chunk.get(..used).unwrap_or_default()) }
+        unsafe { string::append_in_room(out, chunk.get(..used).unwrap_or_default()) }
     })
 }
 
@@ -160,7 +160,9 @@ pub(crate) unsafe extern "C" fn cheby_bytes_length(data: Word) -> i64 {
 
 /// `bytes::get`: `Some(byte)`, or `None` outside `0..length` (D-318).
 /// O(1). Both results are static objects, so it allocates nothing and
-/// never raises (D-902).
+/// never raises (D-902). A direct call whose result is only taken apart
+/// does not call it: generated code tests the bounds and loads the byte
+/// (`cheby_mir`'s `lookup`).
 ///
 /// # Safety
 ///
@@ -191,10 +193,7 @@ pub(crate) unsafe extern "C" fn cheby_bytes_json_plain_end(data: Word, from: i64
     let data = unsafe { arg(data) };
     let start = clamp(from, data.len());
     let rest = data.get(start..).unwrap_or_default();
-    let found = rest
-        .iter()
-        .position(|&byte| byte < 0x20 || byte == b'"' || byte == b'\\')
-        .unwrap_or(rest.len());
+    let found = crate::text::kernels::first_json_escape(rest).unwrap_or(rest.len());
     i64::try_from(start.saturating_add(found)).unwrap_or(i64::MAX)
 }
 
@@ -337,7 +336,7 @@ pub(crate) unsafe extern "C" fn cheby_bytes_concat(parts: Word) -> Word {
         for (_, piece) in pieces() {
             // SAFETY: `out` is the unique `Bytes` built here, with room for
             // every piece; the pieces lie outside it.
-            out = unsafe { string::append(out, piece) };
+            out = unsafe { string::append_in_room(out, piece) };
         }
         out
     })

@@ -319,6 +319,19 @@ pub enum FnKey {
     /// function holding the literal, each later one by a tail call of
     /// the one before.
     Continuation { owner: DefId, index: u32 },
+    /// A clone of the top-level function `origin` made by the release
+    /// profile for what one of its calls knows (design T12, T13,
+    /// [`crate::specialize`]): numbered in its unit in creation order, owned
+    /// by the closure owner of the function whose call made it, so the keys
+    /// of two units never meet. Cheby ABI with a signature of its own
+    /// ([`Function::sig`]); never borrowing (it is not an item, D-715).
+    /// Called only through [`Callee::Code`] from its own unit. A backtrace
+    /// names it as `origin`.
+    Specialized {
+        owner: DefId,
+        index: u32,
+        origin: DefId,
+    },
 }
 
 impl FnKey {
@@ -822,6 +835,30 @@ pub enum Rvalue {
     /// Sign flip of a `Float`/`F32` (built-in unary `-`, D-118, D-527):
     /// `-0.0` for `0.0`.
     FloatNeg { value: Operand, repr: Repr },
+    /// A raw number of `from` as a `to`, for the conversions that cannot
+    /// fail ([`Repr::converts_exactly`]): an integer into an integer type
+    /// that holds every value of `from`, sign-extended from a signed type
+    /// and zero-extended from an unsigned one; an integer into `Float` or
+    /// `F32`, to nearest, ties to even; `F32` into `Float`, exactly; and
+    /// `Float` into `F32`, to nearest, ties to even, an infinity beyond
+    /// `F32`'s range (D-308, D-359). These are the std conversions that
+    /// return their target directly. Never panics.
+    Convert {
+        value: Operand,
+        from: Repr,
+        to: Repr,
+    },
+    /// The square root of a `Float` or `F32`, correctly rounded (IEEE
+    /// 754): NaN for a negative operand, `-0.0` for `-0.0`. Never panics.
+    FloatSqrt { value: Operand, repr: Repr },
+    /// `Add`, `Sub` or `Mul` on `Int` or a sized integer, modulo 2^width
+    /// (the std `wrapping_` functions, D-025). Never panics.
+    Wrapping {
+        op: ArithOp,
+        lhs: Operand,
+        rhs: Operand,
+        repr: Repr,
+    },
     /// `!` on an unboxed `Bool`.
     Not(Operand),
     /// The constructor tag (declaration order) of `base` (borrowed), a
@@ -974,6 +1011,8 @@ impl Rvalue {
             Self::Box { value, .. }
             | Self::Unbox { value, .. }
             | Self::FloatNeg { value, .. }
+            | Self::Convert { value, .. }
+            | Self::FloatSqrt { value, .. }
             | Self::Not(value)
             | Self::ReadTag { base: value, .. } => {
                 operand_uses(std::slice::from_ref(value), UseKind::Borrowed, &mut out);
@@ -981,7 +1020,8 @@ impl Rvalue {
             Self::Checked { lhs, rhs, .. }
             | Self::Compare { lhs, rhs, .. }
             | Self::FloatArith { lhs, rhs, .. }
-            | Self::Bitwise { lhs, rhs, .. } => {
+            | Self::Bitwise { lhs, rhs, .. }
+            | Self::Wrapping { lhs, rhs, .. } => {
                 operand_uses(&[lhs.clone(), rhs.clone()], UseKind::Borrowed, &mut out);
             }
         }
@@ -997,6 +1037,8 @@ impl Rvalue {
             | Self::Box { value: op, .. }
             | Self::Unbox { value: op, .. }
             | Self::FloatNeg { value: op, .. }
+            | Self::Convert { value: op, .. }
+            | Self::FloatSqrt { value: op, .. }
             | Self::Not(op)
             | Self::ReadTag { base: op, .. } => vec![op.clone()],
             Self::Call { callee, args } => {
@@ -1022,7 +1064,8 @@ impl Rvalue {
             Self::Checked { lhs, rhs, .. }
             | Self::Compare { lhs, rhs, .. }
             | Self::FloatArith { lhs, rhs, .. }
-            | Self::Bitwise { lhs, rhs, .. } => vec![lhs.clone(), rhs.clone()],
+            | Self::Bitwise { lhs, rhs, .. }
+            | Self::Wrapping { lhs, rhs, .. } => vec![lhs.clone(), rhs.clone()],
         }
     }
 
@@ -1057,6 +1100,9 @@ impl Rvalue {
             | Self::FloatArith { .. }
             | Self::Bitwise { .. }
             | Self::FloatNeg { .. }
+            | Self::Convert { .. }
+            | Self::FloatSqrt { .. }
+            | Self::Wrapping { .. }
             | Self::Not(_)
             | Self::ReadTag { .. }
             | Self::AllocReuse { .. } => &[],
@@ -1081,7 +1127,9 @@ impl Stmt {
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub enum Callee {
     /// A top-level Cheby function, always through its indirection slot
-    /// (D-043), even in the same module. Its signature is in
+    /// (D-043), even in the same module. Native code generation compiles a
+    /// function's tail call of itself as a jump inside the function
+    /// instead, outside the REPL. Its signature is in
     /// [`MirModule::callees`]. Every argument is owned.
     Direct(DefId),
     /// [`Callee::Direct`] of a function that borrows the parameters its
@@ -1382,11 +1430,170 @@ pub enum RuntimeFn {
     /// [`Self::ListUnconsOwned`] right before it kept. Result owned. Runs
     /// no code and cannot raise.
     ListUnconsHead,
+    /// `(list owned, elem owned) -> List`: adds `elem` at the front, in
+    /// place when the list is unique, as [`Self::ListPush`] does at the
+    /// end. Result owned. The body of `std::list`'s `prepend` is one
+    /// (`lower::intrinsic`, D-1758), and a list literal prepends the
+    /// elements before its first spread onto it (`lower::list`).
+    ListPrepend,
+    /// `(map borrowed, key borrowed) -> U64`: the address of the value
+    /// word stored under `key` in the map's node, or 0 when the key is
+    /// absent. The address points into the map, which must stay held until
+    /// the [`Self::MapValueAt`] that reads it. The key is hashed and
+    /// compared as `map::get` does, so the call may run `@std_hooks`
+    /// functions and raise (D-233, D-482). Only the lookup pass emits it
+    /// ([`crate::lookup`]).
+    MapFind,
+    /// `(map borrowed, address: U64) -> T`: the value word at `address`,
+    /// a nonzero result of a [`Self::MapFind`] of the same map, dup'd, so
+    /// the result is owned. A load and a dup: it cannot raise.
+    MapValueAt,
+    /// `(list owned, index: Int, item owned) -> List`: `list::set` at a
+    /// direct call (D-318): the list with element `index` replaced by
+    /// `item`, in place along the path when the list is unique, or the
+    /// list unchanged and `item` released when `index` is outside it,
+    /// negative included. Result owned. Consumes both even when it raises
+    /// (D-698), as [`Self::ListPush`] does.
+    ListSet,
+    /// `() -> Float`: the element that the [`Self::ListUncons`] or
+    /// [`Self::ListUnconsOwned`] right before it kept, a `Float`, as its
+    /// raw value, with the element's reference given up: the
+    /// [`Self::ListUnconsHead`], the `unbox` and the `drop` of an element
+    /// whose only use is that `unbox`, in one step. Only the RC pass emits
+    /// it ([`crate::rc`]). Like the head it replaces, it must be the very
+    /// next statement after the step, and it cannot raise.
+    ListUnconsHeadFloat,
+    /// `() -> F32`: [`Self::ListUnconsHeadFloat`] for an element of type
+    /// `F32`.
+    ListUnconsHeadF32,
+    /// `(list borrowed, index: Int) -> Float`: the element at `index`, a
+    /// `Float`, as its raw value, which lowering has checked is in range:
+    /// the [`Self::ListGet`], the `unbox` and the `drop` of an element
+    /// whose only use is that `unbox`, in one step. Only the RC pass emits
+    /// it ([`crate::rc`]). It cannot raise.
+    ListGetFloat,
+    /// `(list borrowed, index: Int) -> F32`: [`Self::ListGetFloat`] for
+    /// an element of type `F32`.
+    ListGetF32,
+    /// `(map owned, key borrowed) -> Map`: the first step of a direct call
+    /// of `map::upsert`, whose callback generated code calls
+    /// (`lower/upsert.rs`). Returns the map with a root of its own, unique
+    /// or empty, and the path to the key's entry writable, and keeps a word
+    /// for the [`Self::MapUpsertAddress`] of the result that follows it in
+    /// the block, with no other `MapUpsert` between (the validator checks
+    /// it): the address of the entry's value slot when the key is present,
+    /// that address plus 1 when it was absent and is now in with a
+    /// placeholder value, or 1 for an empty map, whose key is not hashed.
+    /// The key is hashed and compared as `map::upsert` does, so the call
+    /// may run `@std_hooks` functions and raise (D-233, D-482). Consumes
+    /// the map even when it raises (D-698).
+    MapUpsert,
+    /// `(map borrowed) -> U64`: the word the [`Self::MapUpsert`] that
+    /// defined the map kept. Runs no code and cannot raise.
+    MapUpsertAddress,
+    /// `(map borrowed, address: U64) -> T`: the value in the slot at a
+    /// present key's address from [`Self::MapUpsertAddress`], moved out,
+    /// so the result is owned and has the count it had in the map; the
+    /// slot holds a placeholder that a release of the map skips. Writes
+    /// into the map, which only this code holds. Only the release clean-up
+    /// emits it, where it takes a [`Self::MapUpsertFound`] apart
+    /// ([`crate::lookup`]). Cannot raise.
+    MapSlotTake,
+    /// `(map borrowed, address: U64) -> Option<T>`: the `Option` the
+    /// callback of an upsert gets: `Some` of the value at a present key's
+    /// address from [`Self::MapUpsertAddress`], moved out as by
+    /// [`Self::MapSlotTake`], or the static `None`. Result owned. May
+    /// raise when the `Some` cannot be allocated, with the value released.
+    MapUpsertFound,
+    /// `(map owned, address: U64, key borrowed, value owned) -> Map`: the
+    /// last step of an upsert: stores `value` in the slot at an address
+    /// from [`Self::MapUpsertAddress`], over the placeholder there, and
+    /// returns the map; for an empty map (address 1) a map of the one entry
+    /// instead, whose key is hashed as `map::insert` hashes it, so it may
+    /// raise (D-233). Consumes the map and the value even when it raises
+    /// (D-698).
+    MapUpsertStore,
+    /// `(xs borrowed) -> State`: the state of a direct `list::sort_with`
+    /// whose comparison generated code calls (`lower/intrinsic.rs`): an
+    /// object that holds the elements of `xs` borrowed, so `xs` must stay
+    /// held until the [`Self::BufferFinish`], or a tagged word for fewer
+    /// than two elements. Result owned. May raise when the state cannot be
+    /// allocated.
+    SortStart,
+    /// `(items borrowed, max: Bool, by borrowed) -> State`: the state of a
+    /// direct `heap::to_list`, stepped as [`Self::SortStart`]'s; when the
+    /// elements' `compare` is built in, the work is done here (D-1613).
+    HeapListStart,
+    /// `(state borrowed, tag: Int) -> U64`: takes the tag of the `Order`
+    /// that answers the pending comparison of a [`Self::SortStart`] or
+    /// [`Self::HeapListStart`] state (any value before the first) and
+    /// returns the address of the next two elements to compare, which
+    /// [`Self::PairLeft`] and [`Self::PairRight`] read, or 0 when the
+    /// algorithm is done. Writes into the state, which only this code
+    /// holds. Cannot raise.
+    BufferStep,
+    /// `(state owned, source borrowed) -> List`: the result of a state
+    /// whose last step returned 0, a new list of its elements, or `source`,
+    /// the list its start was given, for a sort of fewer than two
+    /// elements. Consumes the state even when it raises (D-698).
+    BufferFinish,
+    /// `() -> U64`: the address of a stack slot of this statement's own,
+    /// where the [`Self::HeapPush`], [`Self::HeapPop`] or
+    /// [`Self::HeapHeapify`] that takes it leaves the steps of a sift. Runs
+    /// no code and cannot raise.
+    HeapSlot,
+    /// `(items owned, item owned, max: Bool, by borrowed, slot: U64) ->
+    /// List`: the start of a direct `heap::push`: `items` with `item` at
+    /// the end, in place when `items` is unique, and the steps of its
+    /// sift-up in `slot`, done when the elements' `compare` is built in
+    /// (D-1613). Result owned; the steps borrow it, so it must stay held
+    /// until the last [`Self::HeapStep`]. Consumes `items` and `item`
+    /// even when it raises (D-698).
+    HeapPush,
+    /// `(items owned, max: Bool, by borrowed, slot: U64) -> List`: the
+    /// start of a direct `heap::pop` once its root is read, as
+    /// [`Self::HeapPush`]'s.
+    HeapPop,
+    /// `(items owned, max: Bool, by borrowed, slot: U64) -> List`: the
+    /// start of a direct `heap::from_list`, as [`Self::HeapPush`]'s.
+    HeapHeapify,
+    /// `(slot: U64) -> U64`: the address of the first pair to compare that
+    /// the start before it left in `slot`, or 0 when there is none. A load:
+    /// it runs no code and cannot raise.
+    HeapFirst,
+    /// `(slot: U64, tag: Int) -> U64`: the next step of the steps in
+    /// `slot`, as [`Self::BufferStep`] steps a state. Writes into the list
+    /// its start returned, in place; may raise when it copies a shared path.
+    HeapStep,
+    /// `(address: U64) -> T`: the first element of a pair whose address a
+    /// [`Self::BufferStep`] or [`Self::HeapStep`] returned, dup'd, so the
+    /// result is owned. A load and a dup: it cannot raise.
+    PairLeft,
+    /// `(address: U64) -> T`: the second element of such a pair, as
+    /// [`Self::PairLeft`] reads the first.
+    PairRight,
+    /// `() -> void`: the check a function's entry makes, inside a loop of
+    /// an intrinsic body that is no self tail call: when the fiber is asked
+    /// to yield, is cancelled or is past its deadline, the runtime's slow
+    /// path of the entry check runs, and the unwinding it may start leaves
+    /// through the statement's edge (D-028, D-124, D-453). Evaluated for
+    /// effect ([`Stmt::Eval`]).
+    LoopCheck,
+    /// `(data borrowed, index: Int) -> Bool`: whether `index` is in
+    /// `0..length` of a `Bytes`, whose object holds its length in a word
+    /// (D-454): a load and one unsigned comparison. Only the lookup pass
+    /// emits it, for a `bytes::get` taken apart at once
+    /// ([`crate::lookup`]). It cannot raise.
+    BytesInRange,
+    /// `(data borrowed, index: Int) -> U8`: the byte at `index` of a
+    /// `Bytes`, which the lookup pass has checked is in range: a load. It
+    /// cannot raise.
+    BytesByte,
 }
 
 impl RuntimeFn {
     /// Every helper, in declaration order.
-    pub const ALL: [Self; 17] = [
+    pub const ALL: [Self; 45] = [
         Self::StrWithCapacity,
         Self::StrAppend,
         Self::StrEq,
@@ -1404,16 +1611,140 @@ impl RuntimeFn {
         Self::ListUncons,
         Self::ListUnconsOwned,
         Self::ListUnconsHead,
+        Self::ListPrepend,
+        Self::MapFind,
+        Self::MapValueAt,
+        Self::ListSet,
+        Self::ListUnconsHeadFloat,
+        Self::ListUnconsHeadF32,
+        Self::ListGetFloat,
+        Self::ListGetF32,
+        Self::MapUpsert,
+        Self::MapUpsertAddress,
+        Self::MapSlotTake,
+        Self::MapUpsertFound,
+        Self::MapUpsertStore,
+        Self::SortStart,
+        Self::HeapListStart,
+        Self::BufferStep,
+        Self::BufferFinish,
+        Self::HeapSlot,
+        Self::HeapPush,
+        Self::HeapPop,
+        Self::HeapHeapify,
+        Self::HeapFirst,
+        Self::HeapStep,
+        Self::PairLeft,
+        Self::PairRight,
+        Self::LoopCheck,
+        Self::BytesInRange,
+        Self::BytesByte,
     ];
 
+    /// Whether the helper is a head of the pattern step right before it
+    /// (D-909): [`Self::ListUnconsHead`] or one that reads the element as
+    /// a raw number.
+    #[must_use]
+    pub const fn is_uncons_head(self) -> bool {
+        matches!(
+            self,
+            Self::ListUnconsHead | Self::ListUnconsHeadFloat | Self::ListUnconsHeadF32
+        )
+    }
+
+    /// For a helper that reads a list's element as a raw number, the
+    /// helper that reads the element as a uniform word and the number's
+    /// representation; `None` for every other helper.
+    #[must_use]
+    pub const fn scalar_read(self) -> Option<(Self, Repr)> {
+        match self {
+            Self::ListUnconsHeadFloat => Some((Self::ListUnconsHead, Repr::Float)),
+            Self::ListUnconsHeadF32 => Some((Self::ListUnconsHead, Repr::F32)),
+            Self::ListGetFloat => Some((Self::ListGet, Repr::Float)),
+            Self::ListGetF32 => Some((Self::ListGet, Repr::F32)),
+            Self::StrWithCapacity
+            | Self::StrAppend
+            | Self::StrEq
+            | Self::ListPush
+            | Self::ListAppend
+            | Self::ListLength
+            | Self::ListGet
+            | Self::ListSlice
+            | Self::ListSliceOwned
+            | Self::Equal
+            | Self::Debug
+            | Self::EffectCheck
+            | Self::ScopeOpen
+            | Self::ScopeClose
+            | Self::ListUncons
+            | Self::ListUnconsOwned
+            | Self::ListUnconsHead
+            | Self::ListPrepend
+            | Self::MapFind
+            | Self::MapValueAt
+            | Self::ListSet
+            | Self::MapUpsert
+            | Self::MapUpsertAddress
+            | Self::MapSlotTake
+            | Self::MapUpsertFound
+            | Self::MapUpsertStore
+            | Self::SortStart
+            | Self::HeapListStart
+            | Self::BufferStep
+            | Self::BufferFinish
+            | Self::HeapSlot
+            | Self::HeapPush
+            | Self::HeapPop
+            | Self::HeapHeapify
+            | Self::HeapFirst
+            | Self::HeapStep
+            | Self::PairLeft
+            | Self::PairRight
+            | Self::LoopCheck
+            | Self::BytesInRange
+            | Self::BytesByte => None,
+        }
+    }
+
+    /// The helper that reads the element `self` reads, a
+    /// [`Self::ListUnconsHead`] or a [`Self::ListGet`], as a raw number of
+    /// `repr`, when there is one: `Float` and `F32`, whose uniform words
+    /// are always boxes (D-521).
+    #[must_use]
+    pub fn as_scalar(self, repr: Repr) -> Option<Self> {
+        Self::ALL
+            .into_iter()
+            .find(|f| f.scalar_read() == Some((self, repr)))
+    }
+
     /// Whether a call of the helper may start or pass on an unwinding
-    /// (D-698): false for `StrEq`, `ListLength` and `ListGet`, true for
+    /// (D-698): false for `StrEq`, `ListLength`, `ListGet`, the heads of a
+    /// pattern step, `MapValueAt`, the reads of an element as a raw
+    /// number, an upsert's address and `MapSlotTake`, and `BufferStep`,
+    /// `HeapSlot`, the reads of a pair and the reads of a `Bytes`, true for
     /// every other helper.
     #[must_use]
     pub const fn may_unwind(self) -> bool {
         !matches!(
             self,
-            Self::StrEq | Self::ListLength | Self::ListGet | Self::ListUnconsHead
+            Self::StrEq
+                | Self::ListLength
+                | Self::ListGet
+                | Self::ListUnconsHead
+                | Self::MapValueAt
+                | Self::ListUnconsHeadFloat
+                | Self::ListUnconsHeadF32
+                | Self::ListGetFloat
+                | Self::ListGetF32
+                | Self::MapUpsertAddress
+                | Self::MapSlotTake
+                | Self::BufferStep
+                | Self::HeapSlot
+                | Self::HeapFirst
+                | Self::PairLeft
+                | Self::PairRight
+                | Self::BytesInRange
+                | Self::BytesByte
         )
     }
 
@@ -1421,16 +1752,35 @@ impl RuntimeFn {
     /// consumes it ([`UseKind::Owned`]) or only reads it.
     #[must_use]
     pub const fn params(self) -> &'static [(Repr, UseKind)] {
-        use Repr::{Bool, Int, Value};
+        use Repr::{Bool, Int, U64, Value};
         use UseKind::{Borrowed, Owned};
         match self {
             Self::StrWithCapacity => &[(Int, Borrowed)],
-            Self::StrAppend | Self::ListAppend => &[(Value, Owned), (Value, Borrowed)],
-            Self::StrEq => &[(Value, Borrowed), (Value, Borrowed)],
+            Self::StrAppend | Self::ListAppend | Self::MapUpsert => {
+                &[(Value, Owned), (Value, Borrowed)]
+            }
+            Self::StrEq | Self::MapFind => &[(Value, Borrowed), (Value, Borrowed)],
+            Self::MapValueAt | Self::MapSlotTake | Self::MapUpsertFound => {
+                &[(Value, Borrowed), (U64, Borrowed)]
+            }
+            Self::MapUpsertStore => &[
+                (Value, Owned),
+                (U64, Borrowed),
+                (Value, Borrowed),
+                (Value, Owned),
+            ],
             Self::Equal => &[(Value, Borrowed), (Value, Borrowed), (Value, Borrowed)],
-            Self::ListPush => &[(Value, Owned), (Value, Owned)],
-            Self::ListLength | Self::Debug | Self::EffectCheck => &[(Value, Borrowed)],
-            Self::ListGet => &[(Value, Borrowed), (Int, Borrowed)],
+            Self::ListPush | Self::ListPrepend => &[(Value, Owned), (Value, Owned)],
+            Self::ListSet => &[(Value, Owned), (Int, Borrowed), (Value, Owned)],
+            Self::ListLength | Self::Debug | Self::EffectCheck | Self::MapUpsertAddress => {
+                &[(Value, Borrowed)]
+            }
+            Self::ListGet
+            | Self::ListGetFloat
+            | Self::ListGetF32
+            | Self::BufferStep
+            | Self::BytesInRange
+            | Self::BytesByte => &[(Value, Borrowed), (Int, Borrowed)],
             Self::ListSlice => &[(Value, Borrowed), (Int, Borrowed), (Int, Borrowed)],
             Self::ListSliceOwned => &[(Value, Owned), (Int, Borrowed), (Int, Borrowed)],
             Self::ScopeOpen => &[(Bool, Borrowed), (Int, Borrowed), (Int, Borrowed)],
@@ -1447,7 +1797,29 @@ impl RuntimeFn {
                 (Int, Borrowed),
                 (Int, Borrowed),
             ],
-            Self::ListUnconsHead => &[],
+            Self::ListUnconsHead
+            | Self::ListUnconsHeadFloat
+            | Self::ListUnconsHeadF32
+            | Self::HeapSlot
+            | Self::LoopCheck => &[],
+            Self::SortStart => &[(Value, Borrowed)],
+            Self::HeapListStart => &[(Value, Borrowed), (Bool, Borrowed), (Value, Borrowed)],
+            Self::BufferFinish => &[(Value, Owned), (Value, Borrowed)],
+            Self::HeapPush => &[
+                (Value, Owned),
+                (Value, Owned),
+                (Bool, Borrowed),
+                (Value, Borrowed),
+                (U64, Borrowed),
+            ],
+            Self::HeapPop | Self::HeapHeapify => &[
+                (Value, Owned),
+                (Bool, Borrowed),
+                (Value, Borrowed),
+                (U64, Borrowed),
+            ],
+            Self::HeapStep => &[(U64, Borrowed), (Int, Borrowed)],
+            Self::PairLeft | Self::PairRight | Self::HeapFirst => &[(U64, Borrowed)],
         }
     }
 
@@ -1466,11 +1838,35 @@ impl RuntimeFn {
             | Self::ListUncons
             | Self::ListUnconsOwned
             | Self::ListUnconsHead
+            | Self::ListPrepend
             | Self::Debug
-            | Self::ScopeOpen => Some(Repr::Value),
-            Self::StrEq | Self::Equal | Self::ScopeClose => Some(Repr::Bool),
+            | Self::ScopeOpen
+            | Self::MapValueAt
+            | Self::ListSet
+            | Self::MapUpsert
+            | Self::MapSlotTake
+            | Self::MapUpsertFound
+            | Self::MapUpsertStore
+            | Self::SortStart
+            | Self::HeapListStart
+            | Self::BufferFinish
+            | Self::HeapPush
+            | Self::HeapPop
+            | Self::HeapHeapify
+            | Self::PairLeft
+            | Self::PairRight => Some(Repr::Value),
+            Self::StrEq | Self::Equal | Self::ScopeClose | Self::BytesInRange => Some(Repr::Bool),
             Self::ListLength => Some(Repr::Int),
-            Self::EffectCheck => None,
+            Self::BytesByte => Some(Repr::U8),
+            Self::MapFind
+            | Self::MapUpsertAddress
+            | Self::BufferStep
+            | Self::HeapSlot
+            | Self::HeapFirst
+            | Self::HeapStep => Some(Repr::U64),
+            Self::ListUnconsHeadFloat | Self::ListGetFloat => Some(Repr::Float),
+            Self::ListUnconsHeadF32 | Self::ListGetF32 => Some(Repr::F32),
+            Self::EffectCheck | Self::LoopCheck => None,
         }
     }
 
@@ -1495,6 +1891,34 @@ impl RuntimeFn {
             Self::ListUncons => "list_uncons",
             Self::ListUnconsOwned => "list_uncons_owned",
             Self::ListUnconsHead => "list_uncons_head",
+            Self::ListPrepend => "list_prepend",
+            Self::MapFind => "map_find",
+            Self::MapValueAt => "map_value_at",
+            Self::ListSet => "list_set",
+            Self::ListUnconsHeadFloat => "list_uncons_head_float",
+            Self::ListUnconsHeadF32 => "list_uncons_head_f32",
+            Self::ListGetFloat => "list_get_float",
+            Self::ListGetF32 => "list_get_f32",
+            Self::MapUpsert => "map_upsert",
+            Self::MapUpsertAddress => "map_upsert_address",
+            Self::MapSlotTake => "map_slot_take",
+            Self::MapUpsertFound => "map_upsert_found",
+            Self::MapUpsertStore => "map_upsert_store",
+            Self::SortStart => "sort_start",
+            Self::HeapListStart => "heap_list_start",
+            Self::BufferStep => "buffer_step",
+            Self::BufferFinish => "buffer_finish",
+            Self::HeapSlot => "heap_slot",
+            Self::HeapPush => "heap_push",
+            Self::HeapPop => "heap_pop",
+            Self::HeapHeapify => "heap_heapify",
+            Self::HeapFirst => "heap_first",
+            Self::HeapStep => "heap_step",
+            Self::PairLeft => "pair_left",
+            Self::PairRight => "pair_right",
+            Self::LoopCheck => "loop_check",
+            Self::BytesInRange => "bytes_in_range",
+            Self::BytesByte => "bytes_byte",
         }
     }
 }

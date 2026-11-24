@@ -1,14 +1,26 @@
 //! Target flags and the ISA (E1, D-259, D-913, D-921): the JIT, the cache
 //! and executables build their ISA with [`host_isa`], from [`flags`] and
-//! one fixed feature set per target.
+//! one fixed feature set per target. A release build uses
+//! [`host_isa_with`] and [`OptLevel::Speed`]; everything else is the same.
 
 use cranelift_codegen::ir::LibCall;
 use cranelift_codegen::isa::OwnedTargetIsa;
 use cranelift_codegen::settings::{self, Configurable};
 
-use crate::CodegenError;
+use crate::{CodegenError, OptLevel};
 
-/// The shared Cranelift flags: no optimization (D-259), frame pointers kept
+/// The shared Cranelift flags of a debug build: [`flags_with`] at
+/// [`OptLevel::None`].
+///
+/// # Errors
+///
+/// A [`CodegenError`] if Cranelift does not know a flag.
+pub fn flags() -> Result<settings::Flags, CodegenError> {
+    flags_with(OptLevel::None)
+}
+
+/// The shared Cranelift flags at `opt`: no optimization in debug builds
+/// (D-259), `speed` in release builds, frame pointers kept
 /// for stack walking (the deadlock report's walk, D-856, and profilers),
 /// and the verifier in debug builds of the compiler.
 ///
@@ -29,7 +41,7 @@ use crate::CodegenError;
 /// # Errors
 ///
 /// A [`CodegenError`] if Cranelift does not know a flag.
-pub fn flags() -> Result<settings::Flags, CodegenError> {
+pub fn flags_with(opt: OptLevel) -> Result<settings::Flags, CodegenError> {
     let mut builder = settings::builder();
     let verifier = if cfg!(debug_assertions) {
         "true"
@@ -37,7 +49,7 @@ pub fn flags() -> Result<settings::Flags, CodegenError> {
         "false"
     };
     for (name, value) in [
-        ("opt_level", "none"),
+        ("opt_level", opt.flag()),
         ("preserve_frame_pointers", "true"),
         ("is_pic", "false"),
         ("use_colocated_libcalls", "false"),
@@ -136,9 +148,18 @@ const SUPPORTED: &str =
 /// [`isa_for`] (macOS on x86-64 among them, D-892), and a
 /// [`CodegenError`] if Cranelift refuses a flag.
 pub fn host_isa() -> Result<OwnedTargetIsa, CodegenError> {
+    host_isa_with(OptLevel::None)
+}
+
+/// [`host_isa`] at the optimization level `opt`.
+///
+/// # Errors
+///
+/// As [`host_isa`].
+pub fn host_isa_with(opt: OptLevel) -> Result<OwnedTargetIsa, CodegenError> {
     let triple =
         TARGET_TRIPLE.ok_or_else(|| CodegenError::UnsupportedHost(SUPPORTED.to_owned()))?;
-    isa_for(triple)
+    isa_with(triple, opt)
 }
 
 /// The ISA for `triple` (D-921): [`flags`] and the target's one fixed CPU
@@ -168,6 +189,15 @@ pub fn host_isa() -> Result<OwnedTargetIsa, CodegenError> {
 /// whose Cranelift backend is not built in, and a [`CodegenError`] if
 /// Cranelift refuses a flag.
 pub fn isa_for(triple: &str) -> Result<OwnedTargetIsa, CodegenError> {
+    isa_with(triple, OptLevel::None)
+}
+
+/// [`isa_for`] at the optimization level `opt`.
+///
+/// # Errors
+///
+/// As [`isa_for`].
+pub fn isa_with(triple: &str, opt: OptLevel) -> Result<OwnedTargetIsa, CodegenError> {
     let (triple, features) = TARGETS
         .iter()
         .find(|&&(known, _)| known == triple)
@@ -181,7 +211,7 @@ pub fn isa_for(triple: &str) -> Result<OwnedTargetIsa, CodegenError> {
             .map_err(|e| CodegenError::ice(format!("Cranelift ISA flag `{name}`: {e}")))?;
     }
     builder
-        .finish(flags()?)
+        .finish(flags_with(opt)?)
         .map_err(|e| CodegenError::UnsupportedHost(format!("{triple}: {e}")))
 }
 

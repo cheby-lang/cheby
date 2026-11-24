@@ -1,0 +1,45 @@
+// @milestone: M2
+// @decisions: D-043, D-712
+> import std::channel
+> import std::fiber
+> let (in_tx, in_rx) = channel::new::<Int>(1)
+> let (out_tx, out_rx) = channel::new::<Int>(1)
+> fn serve(rx: channel::Receiver<Int>, out: channel::Sender<Int>) -> Int {
+.   case channel::receive(rx) {
+.     Ok(0) => {
+.       let _ = channel::send(out, -1)
+.       1
+.     }
+.     Ok(n) => {
+.       let _ = channel::send(out, n)
+.       serve(rx, out)
+.     }
+.     Err(_) => 0
+.   }
+. }
+> fiber::spawn_detached(fn() { serve(in_rx, out_tx) })
+> channel::send(in_tx, 7)
+Ok(Nil) : Result<Nil, Int>
+> channel::receive(out_rx)
+Ok(7) : Result<Int, Nil>
+> fn serve(rx: channel::Receiver<Int>, out: channel::Sender<Int>) -> Int {
+.   case channel::receive(rx) {
+.     Ok(0) => {
+.       let _ = channel::send(out, -2)
+.       2
+.     }
+.     Ok(n) => {
+.       let _ = channel::send(out, n)
+.       serve(rx, out)
+.     }
+.     Err(_) => 0
+.   }
+. }
+> channel::send(in_tx, 5)
+Ok(Nil) : Result<Nil, Int>
+> channel::receive(out_rx)
+Ok(5) : Result<Int, Nil>
+> channel::send(in_tx, 0)
+Ok(Nil) : Result<Nil, Int>
+> channel::receive(out_rx)
+Ok(-2) : Result<Int, Nil>

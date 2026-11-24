@@ -55,9 +55,9 @@ mod object_tests;
 mod program_tests;
 
 /// Why an object could not be written or a program could not be linked.
-/// Every variant but [`LinkError::Record`], [`LinkError::Object`] and
-/// [`LinkError::Copies`] is a tool error of `cheby build`, whose text is
-/// its `Display` (D-1114).
+/// Every variant but [`LinkError::Record`], [`LinkError::Object`],
+/// [`LinkError::Copies`] and [`LinkError::Profiles`] is a tool error of
+/// `cheby build`, whose text is its `Display` (D-1114).
 #[derive(Debug)]
 pub enum LinkError {
     /// The code record is malformed or does not fit the target.
@@ -67,6 +67,9 @@ pub enum LinkError {
     /// D-918's check: two local copies of one name differ (an internal
     /// error).
     Copies(String),
+    /// The records of one link were compiled in different profiles (an
+    /// internal error, [`crate::link::check_profiles`]).
+    Profiles(String),
     /// The runtime archive does not exist (D-929).
     MissingArchive(PathBuf),
     /// `CHEBY_RT_ARCHIVE` names a relative path (D-929).
@@ -89,7 +92,10 @@ impl LinkError {
     /// `cheby build`, rather than an internal failure.
     #[must_use]
     pub const fn is_tool_error(&self) -> bool {
-        !matches!(self, Self::Record(_) | Self::Object(_) | Self::Copies(_))
+        !matches!(
+            self,
+            Self::Record(_) | Self::Object(_) | Self::Copies(_) | Self::Profiles(_)
+        )
     }
 }
 
@@ -102,7 +108,9 @@ impl fmt::Display for LinkError {
         match self {
             Self::Record(error) => write!(f, "{error}"),
             Self::Object(message) => write!(f, "writing an object failed: {message}"),
-            Self::Copies(message) | Self::Io(message) => write!(f, "{message}"),
+            Self::Copies(message) | Self::Profiles(message) | Self::Io(message) => {
+                write!(f, "{message}")
+            }
             Self::MissingArchive(path) => write!(
                 f,
                 "the runtime archive `{}` does not exist, and `cheby build` links it into every \
@@ -148,6 +156,7 @@ impl std::error::Error for LinkError {
             Self::Record(error) => Some(error),
             Self::Object(_)
             | Self::Copies(_)
+            | Self::Profiles(_)
             | Self::MissingArchive(_)
             | Self::RelativeArchiveVar(_)
             | Self::BadArchive { .. }

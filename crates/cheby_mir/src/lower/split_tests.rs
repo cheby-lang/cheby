@@ -265,6 +265,32 @@ fn a_list_is_split_into_a_chain_of_continuations() {
     }
 }
 
+/// Elements held for a spread are pushed onto the empty list when a cut
+/// comes before the spread, so the continuation takes one list and the
+/// spread is appended; without a cut they are prepended onto the spread.
+#[test]
+fn held_elements_become_the_list_at_a_cut() {
+    let src = "//! A literal that conses onto a spread.\n\nimport std::io\nimport std::list\n\nfn build(x: Int, xs: List<Int>) -> List<Int> {\n  [x + 1, x + 2, x + 3, x + 4, x + 5, x + 6, ..xs, x + 7]\n}\n\nfn main() {\n  let n = list::length(build(1, [0]))\n  io::println(\"{n}\")\n}\n";
+    let split = lower_source_split(&[("", src)], 6, false);
+    let heads = headers(&split);
+    assert!(
+        heads
+            .iter()
+            .any(|h| h.starts_with("fn continuation app::build#0(")),
+        "{heads:#?}"
+    );
+    let text = split.dump();
+    assert!(!text.contains("list_prepend"), "{text}");
+    let build = split.function("app", "app::build");
+    assert!(build.contains("list_push(const empty_list, "), "{build}");
+    assert!(text.contains("list_append("), "{text}");
+    let whole = lower_source(&[("", src)]);
+    let build = whole.function("app", "app::build");
+    assert_eq!(build.matches("list_prepend(").count(), 6, "{build}");
+    assert_eq!(build.matches("list_push(").count(), 1, "{build}");
+    assert!(!build.contains("list_append("), "{build}");
+}
+
 /// Splitting is a pure function of the MIR (D-264): the same source
 /// lowers to the same text.
 #[test]

@@ -1,0 +1,173 @@
+// @mode: run-pass
+// @decisions: D-893, D-1757, D-1759, D-1781
+//! Pattern steps over a list that another reference holds: a parameter
+//! the caller still uses, a record's field, a constant and a closure's
+//! capture. Each walk dups its elements out of the shared leaves and
+//! leaves the other list as it was, so a second walk sees the same
+//! elements. The lengths sit around the edges of a leaf of 32 elements.
+//! Lists of `Float` and `String` hold counted elements, which the leak
+//! check finds released at the end. The last walk pushes onto and
+//! prepends to the other holder as it goes (§6.4, §9.3).
+
+import std::float
+import std::int
+import std::io
+import std::list
+import std::string
+
+type Holder {
+  items: List<Int>,
+}
+
+const squares: List<Int> = [
+  0, 1, 4, 9, 16, 25, 36, 49, 64, 81, 100, 121, 144, 169, 196, 225, 256, 289, 324, 361, 400, 441,
+  484, 529, 576, 625, 676, 729, 784, 841, 900, 961, 1024, 1089, 1156, 1225, 1296, 1369, 1444, 1521,
+]
+
+/// The elements of `xs` front to back, folded into one number that
+/// depends on their order.
+fn hash_front(xs: List<Int>, acc: Int) -> Int {
+  case xs {
+    [] => acc
+    [x, ..rest] => hash_front(rest, acc * 31 % 1_000_003 + x)
+  }
+}
+
+/// The elements of `xs` back to front, folded as `hash_front` does.
+fn hash_back(xs: List<Int>, acc: Int) -> Int {
+  case xs {
+    [] => acc
+    [..rest, x] => hash_back(rest, acc * 31 % 1_000_003 + x)
+  }
+}
+
+/// The sum of `x * i` over the elements `x` of `xs`, front to back,
+/// where `i` counts from `i`.
+fn dot_front(xs: List<Float>, i: Int, acc: Float) -> Float {
+  case xs {
+    [] => acc
+    [x, ..rest] => dot_front(rest, i + 1, acc + x * float::from_int(i))
+  }
+}
+
+/// `dot_front` back to front, where `i` is the index of the last
+/// element.
+fn dot_back(xs: List<Float>, i: Int, acc: Float) -> Float {
+  case xs {
+    [] => acc
+    [..rest, x] => dot_back(rest, i - 1, acc + x * float::from_int(i))
+  }
+}
+
+/// The strings of `xs` joined, front to back.
+fn join_front(xs: List<String>, acc: String) -> String {
+  case xs {
+    [] => acc
+    [x, ..rest] => join_front(rest, "{acc}{x}")
+  }
+}
+
+/// The strings of `xs` joined back to front.
+fn join_back(xs: List<String>, acc: String) -> String {
+  case xs {
+    [] => acc
+    [..rest, x] => join_back(rest, "{acc}{x}")
+  }
+}
+
+/// Walks `rest` from the front while `other`, which held the same list
+/// at the start, grows at both ends: each element is pushed onto
+/// `other`, and its negation is prepended.
+fn walk_and_grow(rest: List<Int>, other: List<Int>, acc: Int) -> (Int, List<Int>) {
+  case rest {
+    [] => (acc, other)
+    [x, ..tail] => {
+      let pushed = [..other, x]
+      walk_and_grow(tail, [-x, ..pushed], acc + x)
+    }
+  }
+}
+
+/// The sum of `xs`.
+fn sum(xs: List<Int>) -> Int {
+  list::fold(xs, 0, fn(acc, x) { acc + x })
+}
+
+/// Walks a list of `n` elements that the caller keeps, twice from each
+/// end, and checks it against `list::get` after the walks.
+fn ints(n: Int) {
+  let xs = list::map(list::range(0, n), fn(i) { i * 7 - 3 })
+  let front = hash_front(xs, 0)
+  let back = hash_back(xs, 0)
+  let again = hash_front(xs, 0) == front && hash_back(xs, 0) == back
+  let reversed = hash_front(list::reverse(xs), 0) == back
+  let last = case n {
+    0 => 0
+    _ => {
+      let assert Some(x) = list::get(xs, n - 1)
+      x
+    }
+  }
+  let len = list::length(xs)
+  io::println("ints {n}: {front} {back} {again} {reversed} {len} {last}")
+}
+
+/// `ints` for a list of `Float`.
+fn floats(n: Int) {
+  let xs = list::map(list::range(0, n), fn(i) { float::from_int(i) * 0.5 })
+  let front = dot_front(xs, 0, 0.0)
+  let back = dot_back(xs, n - 1, 0.0)
+  let again = dot_front(xs, 0, 0.0) == front && dot_back(xs, n - 1, 0.0) == back
+  let len = list::length(xs)
+  io::println("floats {n}: {front} {back} {again} {len}")
+}
+
+/// `ints` for a list of `String`.
+fn strings(n: Int) {
+  let xs = list::map(list::range(0, n), fn(i) {
+    let digits = int::show(i)
+    "<{digits}>"
+  })
+  let front = join_front(xs, "")
+  let back = join_back(xs, "")
+  let again = join_front(xs, "") == front && join_back(xs, "") == back
+  let front_size = string::length(front)
+  let back_size = string::length(back)
+  let len = list::length(xs)
+  io::println("strings {n}: {front_size} {back_size} {again} {len}")
+}
+
+/// `walk_and_grow` over a list of `n` elements, and the list it started
+/// from afterwards.
+fn grow(n: Int) {
+  let xs = list::range(0, n)
+  let (total, grown) = walk_and_grow(xs, xs, 0)
+  let kept = hash_front(xs, 0) == hash_front(list::range(0, n), 0)
+  let len = list::length(grown)
+  let grown_sum = sum(grown)
+  let hash = hash_front(grown, 0)
+  io::println("grow {n}: {total} {len} {grown_sum} {hash} {kept}")
+}
+
+fn main() {
+  let lengths = [1, 2, 3, 31, 32, 33, 34, 63, 64, 65, 100, 1025, 1100]
+  list::each(lengths, ints)
+  list::each(lengths, floats)
+  list::each([1, 2, 31, 32, 33, 65, 200], strings)
+  list::each([1, 2, 32, 33, 100], grow)
+  let holder = Holder { items: list::range(0, 70) }
+  let from_field = hash_front(holder.items, 0)
+  let field_back = hash_back(holder.items, 0)
+  let field_again = hash_front(holder.items, 0) == from_field
+  io::println("field: {from_field} {field_back} {field_again}")
+  let constant_front = hash_front(squares, 0)
+  let constant_back = hash_back(squares, 0)
+  let constant_sum = sum(squares)
+  io::println("constant: {constant_front} {constant_back} {constant_sum}")
+  let captured = list::range(0, 90)
+  let walk = fn(start) { hash_front(captured, start) }
+  let first = walk(0)
+  let second = walk(1)
+  let captured_len = list::length(captured)
+  io::println("closure: {first} {second} {captured_len}")
+}

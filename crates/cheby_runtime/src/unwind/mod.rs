@@ -539,6 +539,44 @@ mod tests {
         assert_eq!(ran.domain.live_objects(), 0);
     }
 
+    /// A key that holds a function raises in `cheby_rt_map_upsert` as in
+    /// the kernel, `EqualityOnFunction`, and the map it was given is
+    /// released: a unique one whole, a shared one by one reference.
+    #[test]
+    fn map_upsert_releases_its_map_when_the_key_cannot_be_hashed() {
+        let ran = on_flag_entry(EntryMode::Test, None, Callbacks::default(), |ctx| {
+            let key = crate::generic::tests::closure(&[]);
+            let one = values::int_word(1);
+            // SAFETY: live words, borrowed; the empty map is static.
+            let build = || unsafe { hamt::cheby_map_insert(hamt::cheby_map_new(), one, one) };
+            let (unique, shared) = (build(), build());
+            // SAFETY: a live map; the test now holds two references.
+            unsafe { rc::dup(shared) };
+            let mut at = 0;
+            let ctx_ptr = std::ptr::from_ref(ctx).cast_mut();
+            // SAFETY: an owned map, given up, a live key and a writable word.
+            let first = unsafe { hamt::cheby_rt_map_upsert(ctx_ptr, unique, key, &raw mut at) };
+            let first_flag = flag_of(ctx);
+            record::take_unwound(ctx);
+            // SAFETY: as above; the test keeps its other reference.
+            let second = unsafe { hamt::cheby_rt_map_upsert(ctx_ptr, shared, key, &raw mut at) };
+            // SAFETY: a live map and key, borrowed.
+            let still = unsafe { hamt::cheby_map_has_key(shared, one) };
+            // SAFETY: the test's references.
+            unsafe {
+                rc::drop(shared);
+                rc::drop(key);
+            }
+            (first, first_flag, second, still, at)
+        });
+        let (first, first_flag, second, still, at) = ran.value;
+        assert_eq!((first, first_flag, second), (0, unwind_flag::PANIC, 0));
+        assert!(still);
+        assert_eq!(at, 0, "nothing is written when it raises");
+        assert_eq!(report(&ran.outcome).kind, PanicKind::EqualityOnFunction);
+        assert_eq!(ran.domain.live_objects(), 0);
+    }
+
     /// A one-field value of a test type registered as `name` with the test
     /// hooks: the type's layout id.
     fn hooked_type(name: &str) -> abi::LayoutId {
@@ -753,10 +791,24 @@ mod tests {
         ])
     }
 
+    /// A list of four elements in a leaf with no room: a push must
+    /// allocate.
+    fn full() -> Word {
+        list::from_iter((1..=4).map(values::int_word))
+    }
+
+    /// A list of more than one leaf, one of its elements an object: its
+    /// first pattern step must allocate.
+    fn long() -> Word {
+        list::from_iter(
+            std::iter::once(values::string("first")).chain((1..40).map(values::int_word)),
+        )
+    }
+
     #[test]
     fn list_push_consumes_its_list_and_element_when_it_raises() {
         let ran = consumes_when_raising(
-            three,
+            full,
             (|_| values::string("four"), Second::Owned),
             |ctx, list, elem| {
                 // SAFETY: both are given up.
@@ -790,11 +842,11 @@ mod tests {
 
     #[test]
     fn list_uncons_owned_consumes_its_list_when_it_raises() {
-        let ran = consumes_when_raising(three, (|_| 0, Second::Owned), |ctx, list, _| {
+        let ran = consumes_when_raising(long, (|_| 0, Second::Owned), |ctx, list, _| {
             let mut head: Word = 7;
             // SAFETY: `list` is given up; `head` is writable.
             let rest =
-                unsafe { list::cheby_rt_list_uncons_owned(ctx, list, 0, 1, 3, &raw mut head) };
+                unsafe { list::cheby_rt_list_uncons_owned(ctx, list, 0, 1, 40, &raw mut head) };
             // The element is written only when the call returns normally
             // (D-909).
             assert_eq!(head, 7);
@@ -1039,6 +1091,10 @@ mod tests {
     const READS: &str = "reads its arguments and allocates nothing";
     const COUNTS: &str = "adds one to a counter of the current domain (D-768)";
     const LIST_GET: &str = "reads an element whose index lowering checked";
+    const MAP_VALUE_AT: &str = "reads and dups the value word a lookup of a held map found";
+    const MAP_SLOT: &str = "moves a word out of a slot an upsert of a held map opened";
+    const STEP: &str =
+        "advances a state only its caller holds, over buffers it allocated, and allocates nothing";
     const STATIC: &str = "returns a static object";
     const READS_STATIC: &str = "reads its arguments and returns a static object (D-902)";
     const ARITHMETIC: &str = "arithmetic on unboxed numbers";
@@ -1056,6 +1112,10 @@ mod tests {
                             (D-171, D-775)";
     const STUB: &str = "a naked stub that passes its caller's frame record to its body (D-1040), \
                         or a plain function calling that body";
+    const SAVING_STUB: &str = "a naked stub that saves every register around a call of its body, \
+                               or a plain function calling that body";
+    const ALLOC_BODY: &str = "calls `cheby_rt_alloc` or `cheby_rt_alloc_miss`, which run in their \
+                              guards, and stores the result, 0 when it raised (D-697)";
     const SLOW_BODY: &str = "runs the slow path in its guard (`stack_slow_at`), which sets the flag \
                              and returns (D-700)";
     const STREAM: &str = "loads and stores of the fiber's stream fields under its own lock; a \
@@ -1075,7 +1135,12 @@ mod tests {
         ("reuse.rs", "cheby_rt_release_fields", DROP),
         ("reuse.rs", "cheby_rt_drop_reuse_checked", DROP),
         ("reuse.rs", "cheby_rt_free_unique", DROP),
-        ("reuse.rs", "cheby_rt_reuse_hit", COUNTS),
+        ("alloc/slow.rs", "$name", SAVING_STUB),
+        ("alloc/slow.rs", "alloc_slow_from", ALLOC_BODY),
+        ("alloc/slow.rs", "alloc_miss_slow_from", ALLOC_BODY),
+        ("alloc/slow.rs", "free_unique_slow_from", DROP),
+        ("alloc/slow.rs", "drop_saving_from", DROP),
+        ("alloc/slow.rs", "reuse_hit_from", COUNTS),
         ("panic.rs", "cheby_rt_panic", RAISES_ITSELF),
         ("panic.rs", "panic_from", RAISES_ITSELF),
         ("panic.rs", "cheby_rt_stack_slow", STUB),
@@ -1109,8 +1174,11 @@ mod tests {
         ("helpers.rs", "cheby_rt_fmod_f32", ARITHMETIC),
         ("list/kernels.rs", "cheby_rt_list_length", READS),
         ("list/kernels.rs", "cheby_rt_list_get", LIST_GET),
+        ("list/steps.rs", "cheby_rt_buffer_step", STEP),
         ("list/kernels.rs", "cheby_list_length", READS),
         ("hamt/kernels.rs", "cheby_map_new", STATIC),
+        ("hamt/kernels.rs", "cheby_rt_map_value_at", MAP_VALUE_AT),
+        ("hamt/kernels.rs", "cheby_rt_map_slot_take", MAP_SLOT),
         ("hamt/kernels.rs", "cheby_map_size", READS),
         ("hamt/kernels.rs", "cheby_map_is_empty", READS),
         ("hamt/kernels.rs", "cheby_set_new", STATIC),
@@ -1405,7 +1473,7 @@ mod tests {
         ),
         (
             "callback.rs",
-            "call",
+            "call_in",
             "rethrows at once, through the kernel to its guard",
         ),
         ("consteval.rs", "cheby_rt_const_missing", "rethrows at once"),
@@ -1438,6 +1506,11 @@ mod tests {
             "restores the context of the open, then returns to Cheby or re-raises",
         ),
         ("pool/mod.rs", "run_job", "a Rust pool thread, no fiber"),
+        (
+            "rc.rs",
+            "mark_with",
+            "a count overflow's walk, which has no edge: the process ends (D-765, D-1760)",
+        ),
         (
             "sched/mod.rs",
             "spawn_root_in",

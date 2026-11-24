@@ -28,8 +28,8 @@
 use cheby_diag::{Diagnostic, Span, codes};
 use cheby_iface::{
     ConstSig, CtorFields, CtorSig, DefIndex, DefKind, FnSig, GenericParam, Generics, Ice,
-    IfaceItem, IndexVec, InterfaceDef, InterfaceFnSig, ItemSig, ModuleInterface, Name, ParamIdx,
-    ParamSig, Ty, TyKind, TypeDef, TypeDefKind, TypeHooks, builtin, interface_hash, sym,
+    IfaceItem, IndexVec, InterfaceDef, InterfaceFnSig, ItemSig, ModuleInterface, Name, PackageId,
+    ParamIdx, ParamSig, Ty, TyKind, TypeDef, TypeDefKind, TypeHooks, builtin, interface_hash, sym,
 };
 use cheby_resolve::ItemDef;
 use cheby_syntax::ast::{
@@ -177,7 +177,22 @@ impl<'a> SigCx<'a> {
             clamped,
             initializer,
             call_site,
+            kernel: self.kernel(item),
         }))
+    }
+
+    /// The native symbol a caller may call in place of the wrapper
+    /// ([`FnSig::kernel`]): a std function's `@external(native, …)` without
+    /// `@std_context` or `@blocking`, whose kernel takes exactly the
+    /// function's parameters. Read from the attributes only, like the
+    /// rest of the signature (D-246).
+    fn kernel(&self, item: &ItemDef) -> Option<Box<str>> {
+        if self.input.package != PackageId::STD || item.attrs.std_context || item.attrs.blocking {
+            return None;
+        }
+        item.attrs
+            .native_external()
+            .map(|(symbol, _)| symbol.into())
     }
 
     /// The constructor named by `@std_initializer(constructor)` (D-1599)

@@ -1,13 +1,34 @@
 //! Cheby-ABI wrappers of `@external(native, …)` functions (D-455,
 //! §12.5.1).
 //!
-//! Callers in every module call the wrapper like any function, through its
-//! slot, so externality is not part of the interface. The wrapper's body
-//! is one foreign call with borrowed arguments (D-187), then the result
-//! boxed into the uniform return (D-453, D-521): a `Nil` result is the
-//! static `Nil`, a scalar result (`Int`, `Float`, `Bool`, a sized number)
-//! is boxed, and a uniform word is returned as it is. Foreign calls are
-//! never tail calls (§12.8).
+//! Callers call the wrapper like any function, through its slot. The
+//! wrapper's body is one foreign call with borrowed arguments (D-187),
+//! then the result boxed into the uniform return (D-453, D-521): a `Nil`
+//! result is the static `Nil`, a scalar result (`Int`, `Float`, `Bool`, a
+//! sized number) is boxed, and a uniform word is returned as it is.
+//! Foreign calls are never tail calls (§12.8).
+//!
+//! A direct call of a std function bound to a plain kernel skips the
+//! wrapper (D-976): it is the wrapper's foreign call, made at the call site
+//! ([`direct_kernel`], `BodyCx::call_kernel`). Std's interface carries the
+//! binding (`FnSig::kernel`); std is keyed by the build ID, so the binding
+//! never makes a cache entry stale. Plain means no `@std_context` or `@blocking`, no
+//! intrinsic, no bounds, and a module whose wrappers make no effect check
+//! ([`DIRECT_MODULES`]). The call gives the kernel the counts the wrapper
+//! gave it (D-525): every counted argument is moved into an owned
+//! temporary that the call borrows, so a value used after the call is
+//! `dup`ed first and the kernel never updates it in place. A kernel that
+//! only reads its arguments (`crate::kernels_reading`) borrows them as
+//! they are, with no temporary. A kernel that is one machine instruction
+//! (`crate::kernels_instr`) is that instruction, with no call. The result
+//! keeps its own representation, so a `Float` result is never boxed. The
+//! wrapper stays for function values, dictionaries and every other call.
+//! A foreign call may raise (out of memory, a callback's panic), so it
+//! gets an unwind edge that releases the caller's live values, as a Cheby
+//! call does (D-698), unless its kernel never raises (D-767). It runs on
+//! the caller's frame, which passed its own entry check, so the stack
+//! headroom below the limit (D-457) is the same as below the wrapper's
+//! frame.
 //!
 //! Constant evaluation may run only the effect-free kernels of the std
 //! modules `list`, `map`, `set`, `string`, `bytes` and the numeric modules
@@ -53,15 +74,17 @@
 //! flag set, and the helper releases the result on the fiber, an external
 //! one through its drop function (D-171).
 
-use cheby_iface::{FnSig, Ice, ItemSig, PackageId, Ty, TyKind, TypeDefKind};
+use cheby_iface::{DefId, FnSig, Ice, ItemSig, ModuleId, PackageId, Ty, TyKind, TypeDefKind};
 use cheby_types::thir;
 
 use crate::builder::FunctionBuilder;
+use crate::defs::Defs;
 use crate::ir::{
     Abi, Const, FnKey, Function, Local, Operand, PanicKind, RuntimeFn, Rvalue, Stmt, Terminator,
 };
 use crate::layout::type_key;
 use crate::lower::LowerCx;
+use crate::lower::body::BodyCx;
 use crate::lower::intrinsic::{Intrinsic, lower_intrinsic};
 use crate::repr::{CType, ForeignSig, Repr, foreign_sig_with_context, repr_of};
 
@@ -340,6 +363,205 @@ pub(super) fn lower_js_only(
         loc,
     })?;
     b.finish()
+}
+
+/// The kernel of `list::set`, whose direct call is the runtime helper
+/// `list_set` ([`RuntimeFn::ListSet`]), which owns its list and its item.
+const LIST_SET: &str = "cheby_list_set";
+
+/// The std modules whose plain kernels a direct call calls at the call
+/// site, without the wrapper: the modules of [`CONST_SAFE_MODULES`]
+/// except `option`. Their wrappers make no effect check, so the wrapper's
+/// body is the foreign call and the box of its result, nothing more.
+/// `option`'s one kernel, `panic_at`, starts its backtrace at the frame
+/// of the function that called it (D-1647), which must stay the wrapper's.
+const DIRECT_MODULES: [&str; 16] = [
+    "list", "map", "set", "string", "bytes", "int", "float", "f32", "i8", "i16", "i32", "i64",
+    "u8", "u16", "u32", "u64",
+];
+
+/// The native symbol that a direct call of `def` calls in place of its
+/// wrapper, when `def` is bound to a plain kernel: a std function whose
+/// interface carries the binding (`FnSig::kernel`: an
+/// `@external(native, …)` without `@std_context` or `@blocking`), of
+/// one of [`DIRECT_MODULES`], whose symbol is no intrinsic (D-693) and
+/// whose type parameters have no bounds. Every other function, a
+/// package's `@external` included (D-940), is called through its slot.
+/// Only the interface is read (D-246).
+///
+/// # Errors
+///
+/// An [`Ice`] if `def` or its module cannot be read.
+pub(super) fn direct_kernel(def: DefId, defs: &Defs<'_>) -> Result<Option<Box<str>>, Ice> {
+    if def.module == ModuleId::BUILTIN {
+        return Ok(None);
+    }
+    let ItemSig::Fn(sig) = &defs.item(def)?.sig else {
+        return Ok(None);
+    };
+    let Some(symbol) = sig.kernel.as_deref() else {
+        return Ok(None);
+    };
+    if Intrinsic::from_symbol(symbol).is_some()
+        || sig.generics.params.iter().any(|p| !p.bounds.is_empty())
+    {
+        return Ok(None);
+    }
+    let info = defs.modules.try_get(def.module)?;
+    let direct = info.package == PackageId::STD
+        && matches!(info.path.segments(), [std, module]
+            if std == "std" && DIRECT_MODULES.contains(&module.as_str()));
+    Ok(direct.then(|| symbol.into()))
+}
+
+impl BodyCx<'_, '_> {
+    /// A direct call of `def`, bound to the plain kernel `symbol`
+    /// ([`direct_kernel`]), as the foreign call its wrapper makes, at the
+    /// call site. `args` are the call's arguments, already lowered and in
+    /// the parameters' representations, which are the kernel's (D-453).
+    ///
+    /// The kernel must see the counts the wrapper gives it (D-525): each
+    /// counted argument is moved into an owned temporary that the call
+    /// borrows (D-187) and counting releases after it. A value at its
+    /// last use arrives with the count it has, so a unique one may be
+    /// updated in place; a value used afterwards is `dup`ed into its
+    /// temporary, so the kernel sees it shared and copies it. A kernel of
+    /// [`crate::kernels_reading`] only reads its arguments, so the call
+    /// borrows them as they are, as a Cheby call borrows a parameter. A
+    /// kernel of [`crate::kernels_instr`] is no call at all, but the
+    /// instruction it computes, on its raw arguments.
+    /// `list::set` is the helper `list_set` instead, which owns the list
+    /// and the item, so a unique list is written in place without a
+    /// temporary, and `map::upsert` is the steps of `upsert.rs`, which call
+    /// the callback from here. The result
+    /// is used as it comes: a scalar stays unboxed, a `Nil` result is the
+    /// static `Nil`, and a counted one is owned by the caller. In tail
+    /// position (`tail`) a Cheby function returns it as a uniform word,
+    /// boxed as the wrapper boxes it (D-453, D-521), since a foreign call
+    /// is never a tail call (§12.8); the call then records no site, as a
+    /// tail call of the wrapper defines no local (D-852).
+    ///
+    /// # Errors
+    ///
+    /// An [`Ice`] for an unknown local or a malformed signature.
+    pub(super) fn call_kernel(
+        &mut self,
+        def: DefId,
+        symbol: Box<str>,
+        args: Vec<Operand>,
+        ret_ty: Ty,
+        tail: bool,
+    ) -> Result<Option<Operand>, Ice> {
+        let globals = self.cx.defs.globals;
+        let sig = self.cx.defs.fn_sig(def)?;
+        let fsig = foreign_sig_with_context(sig, globals, false);
+        let ret_repr = repr_of(sig.ret, globals);
+        if let Some(op) = crate::kernels_instr::op_of(&symbol) {
+            // The kernel is an instruction (`crate::kernels_instr`): its
+            // operands are raw numbers, so nothing is counted or unwound.
+            let params: Vec<Repr> = sig.params.iter().map(|p| repr_of(p.ty, globals)).collect();
+            let value = crate::kernels_instr::rvalue(op, &params, ret_repr, args)?;
+            let raw = self.b.assign(ret_repr, value)?;
+            return self.kernel_result(Operand::Local(raw), ret_repr, ret_ty, tail);
+        }
+        if &*symbol == crate::lower::upsert::MAP_UPSERT {
+            // `map::upsert` in steps, with the callback called from here
+            // (`upsert.rs`).
+            return self.call_upsert(args, ret_ty, tail);
+        }
+        if &*symbol == LIST_SET {
+            // `list::set` takes its list and its item over, so code
+            // generation can write a unique list in place (`list_set`).
+            let call = Rvalue::CallRuntime {
+                func: RuntimeFn::ListSet,
+                args,
+            };
+            return self.finish_kernel_call(call, &fsig, ret_repr, ret_ty, tail);
+        }
+        let ops = if crate::kernels_reading::only_reads(&symbol) {
+            // A kernel that only reads borrows the arguments themselves.
+            args
+        } else {
+            self.owned_temporaries(args)?
+        };
+        let call = Rvalue::CallForeign {
+            symbol,
+            sig: fsig.clone(),
+            args: ops,
+            blocking: false,
+        };
+        self.finish_kernel_call(call, &fsig, ret_repr, ret_ty, tail)
+    }
+
+    /// The operands of a direct kernel call for `args`: each counted local
+    /// moved into an owned temporary (D-525, [`Self::call_kernel`]).
+    fn owned_temporaries(&mut self, args: Vec<Operand>) -> Result<Vec<Operand>, Ice> {
+        let mut ops = Vec::with_capacity(args.len());
+        for op in args {
+            let Operand::Local(local) = op else {
+                ops.push(op);
+                continue;
+            };
+            let decl = self.b.local(local)?;
+            if decl.repr != Repr::Value {
+                ops.push(op);
+                continue;
+            }
+            let ty = decl.ty;
+            let owned = self.b.new_local(Repr::Value, None, ty)?;
+            self.emit(Stmt::Assign {
+                dst: owned,
+                value: Rvalue::Use(op),
+            })?;
+            ops.push(Operand::Local(owned));
+        }
+        Ok(ops)
+    }
+
+    /// The rest of a direct kernel call ([`Self::call_kernel`]): `call`,
+    /// whose C signature is `fsig` and whose result has `ret_repr`,
+    /// emitted, and its result converted to `ret_ty`'s representation, or
+    /// returned in tail position (`tail`).
+    fn finish_kernel_call(
+        &mut self,
+        call: Rvalue,
+        fsig: &ForeignSig,
+        ret_repr: Repr,
+        ret_ty: Ty,
+        tail: bool,
+    ) -> Result<Option<Operand>, Ice> {
+        let (result, repr) = if fsig.ret == CType::Void {
+            self.emit(Stmt::Eval(call))?;
+            (Operand::Const(Const::Nil), Repr::Value)
+        } else {
+            let raw = self.b.assign(ret_repr, call)?;
+            // The site of a kernel line of the reuse report (D-852).
+            if !tail && let Some(site) = self.site {
+                self.b.record_site(raw, site);
+            }
+            (Operand::Local(raw), ret_repr)
+        };
+        self.kernel_result(result, repr, ret_ty, tail)
+    }
+
+    /// The result of a direct kernel call, `result` of `repr`, converted to
+    /// `ret_ty`'s representation, or returned as a uniform word in tail
+    /// position (`tail`).
+    pub(super) fn kernel_result(
+        &mut self,
+        result: Operand,
+        repr: Repr,
+        ret_ty: Ty,
+        tail: bool,
+    ) -> Result<Option<Operand>, Ice> {
+        if tail && self.b.abi() == Abi::Cheby {
+            let uniform = self.to_repr(result, repr, Repr::Value, ret_ty)?;
+            self.terminate(Terminator::Return(uniform))?;
+            return Ok(None);
+        }
+        let want = self.repr_of(ret_ty);
+        self.to_repr(result, repr, want, ret_ty).map(Some)
+    }
 }
 
 /// The std modules whose kernels constant evaluation may run (D-360,

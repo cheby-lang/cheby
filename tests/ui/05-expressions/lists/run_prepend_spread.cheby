@@ -1,0 +1,97 @@
+// @mode: run-pass
+// @decisions: D-120, D-157, D-1757, D-1763
+//! Elements before a list literal's first spread are evaluated before the
+//! spread and come before its elements, in every shape: `[a, ..xs]`,
+//! `[a, b, ..xs]`, `[a, ..xs, b]`, `[a, ..xs, ..ys]`, `[..xs, a]` and
+//! `[..xs, ..ys]`. Items are evaluated from left to right (§5.13), and a
+//! spread that is used again keeps its elements. The MIR golden
+//! `data/list_literals` pins the prepends.
+
+import std::io
+import std::list
+
+fn trace(label: String, n: Int) -> Int {
+  io::println("evaluating {label}")
+  n
+}
+
+fn traced(label: String, xs: List<Int>) -> List<Int> {
+  io::println("evaluating {label}")
+  xs
+}
+
+/// The length and the elements of `xs`.
+fn items(xs: List<Int>) -> String {
+  let n = list::length(xs)
+  let shown = list::fold(xs, "", fn(acc, x) {
+    case acc {
+      "" => "{x}"
+      _ => "{acc} {x}"
+    }
+  })
+  "{n}: {shown}"
+}
+
+fn cons_one(xs: List<Int>) -> List<Int> {
+  [trace("a", 1), ..traced("xs", xs)]
+}
+
+fn cons_two(xs: List<Int>) -> List<Int> {
+  [trace("a", 1), trace("b", 2), ..traced("xs", xs)]
+}
+
+fn around(xs: List<Int>) -> List<Int> {
+  [trace("a", 1), ..traced("xs", xs), trace("b", 2)]
+}
+
+fn two_spreads(xs: List<Int>, ys: List<Int>) -> List<Int> {
+  [trace("a", 1), ..traced("xs", xs), ..traced("ys", ys)]
+}
+
+fn push_last(xs: List<Int>) -> List<Int> {
+  [..traced("xs", xs), trace("a", 1)]
+}
+
+fn spreads_only(xs: List<Int>, ys: List<Int>) -> List<Int> {
+  [..traced("xs", xs), ..traced("ys", ys)]
+}
+
+fn many(xs: List<Int>) -> List<Int> {
+  [
+    trace("1", 1),
+    trace("2", 2),
+    trace("3", 3),
+    trace("4", 4),
+    trace("5", 5),
+    trace("6", 6),
+    trace("7", 7),
+    trace("8", 8),
+    trace("9", 9),
+    ..traced("xs", xs),
+  ]
+}
+
+fn main() {
+  let xs = [10, 20, 30]
+  let ys = [40]
+  let empty: List<Int> = []
+  io::println(items(cons_one(xs)))
+  io::println(items(cons_two(xs)))
+  io::println(items(around(xs)))
+  io::println(items(two_spreads(xs, ys)))
+  io::println(items(push_last(xs)))
+  io::println(items(spreads_only(xs, ys)))
+  io::println(items(many(xs)))
+  io::println(items(cons_two(empty)))
+  io::println(items([0, ..[]]))
+  // `xs` is used after each literal, so it keeps its elements.
+  let shared = [0, ..xs]
+  let again = [1, 2, ..xs]
+  io::println(items(shared))
+  io::println(items(again))
+  io::println(items(xs))
+  // A list nothing else holds is extended in place, and the result is
+  // the same list value.
+  let fresh = [7, 8, ..list::range(0, 3)]
+  io::println(items(fresh))
+}

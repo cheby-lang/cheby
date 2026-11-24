@@ -441,6 +441,92 @@ pub(crate) fn parse_int<T: TryFrom<i128>>(text: &[u8], base: i64) -> Option<T> {
     T::try_from(value).ok()
 }
 
+/// The room [`write_decimal`] needs: a `-` and the 20 digits of `u64::MAX`.
+pub(crate) const DECIMAL_ROOM: usize = 21;
+
+/// The text of 0 to 99 in two digits each, in order.
+const DIGIT_PAIRS: &[u8; 200] = b"00010203040506070809101112131415161718192021222324252627282930313233343536373839404142434445464748495051525354555657585960616263646566676869707172737475767778798081828384858687888990919293949596979899";
+
+/// An integer as a sign and a magnitude, for [`write_decimal`].
+pub(crate) trait SignMagnitude: Copy {
+    /// Whether the value is below zero, and its absolute value.
+    fn sign_magnitude(self) -> (bool, u64);
+}
+
+/// [`SignMagnitude`] of the signed integer types.
+macro_rules! signed_magnitude {
+    ($($t:ty),*) => {
+        $(impl SignMagnitude for $t {
+            fn sign_magnitude(self) -> (bool, u64) {
+                (self < 0, u64::from(self.unsigned_abs()))
+            }
+        })*
+    };
+}
+
+/// [`SignMagnitude`] of the unsigned integer types.
+macro_rules! unsigned_magnitude {
+    ($($t:ty),*) => {
+        $(impl SignMagnitude for $t {
+            fn sign_magnitude(self) -> (bool, u64) {
+                (false, u64::from(self))
+            }
+        })*
+    };
+}
+
+signed_magnitude!(i8, i16, i32, i64);
+unsigned_magnitude!(u8, u16, u32, u64);
+
+/// `show` of an integer (D-312): a `-` when `negative`, then the decimal
+/// digits of `magnitude`, with no leading zeros. It is the text Rust's
+/// `Display` writes, written at the end of `buffer` without a heap
+/// allocation; the result is the part written.
+pub(crate) fn write_decimal(
+    negative: bool,
+    magnitude: u64,
+    buffer: &mut [u8; DECIMAL_ROOM],
+) -> &[u8] {
+    let mut start = DECIMAL_ROOM;
+    let mut rest = magnitude;
+    // Two digits at a time from the right, then the last one alone.
+    while rest >= 100 {
+        let pair = usize::try_from(rest.wrapping_rem(100))
+            .unwrap_or(0)
+            .wrapping_mul(2);
+        rest = rest.wrapping_div(100);
+        start = start.wrapping_sub(2);
+        if let (Some(to), Some(from)) = (
+            buffer.get_mut(start..start.wrapping_add(2)),
+            DIGIT_PAIRS.get(pair..pair.wrapping_add(2)),
+        ) {
+            to.copy_from_slice(from);
+        }
+    }
+    if rest >= 10 {
+        let pair = usize::try_from(rest).unwrap_or(0).wrapping_mul(2);
+        start = start.wrapping_sub(2);
+        if let (Some(to), Some(from)) = (
+            buffer.get_mut(start..start.wrapping_add(2)),
+            DIGIT_PAIRS.get(pair..pair.wrapping_add(2)),
+        ) {
+            to.copy_from_slice(from);
+        }
+    } else {
+        start = start.wrapping_sub(1);
+        if let Some(digit) = buffer.get_mut(start) {
+            *digit = b'0'.wrapping_add(u8::try_from(rest).unwrap_or(0));
+        }
+    }
+    if negative {
+        start = start.wrapping_sub(1);
+        if let Some(sign) = buffer.get_mut(start) {
+            *sign = b'-';
+        }
+    }
+    buffer.get(start..).unwrap_or_default()
+}
+
 /// `int::to_base`: `n` in `base`, from 2 to 36, with lowercase digits, `-`
 /// for a negative value, no prefix and no leading zeros (D-390).
 #[must_use]
@@ -474,6 +560,82 @@ mod tests {
     use proptest::prelude::*;
 
     use super::*;
+
+    /// The text of `n` that `write_decimal` writes.
+    fn decimal(n: impl SignMagnitude) -> String {
+        let mut buffer = [0; DECIMAL_ROOM];
+        let (negative, magnitude) = n.sign_magnitude();
+        String::from_utf8(write_decimal(negative, magnitude, &mut buffer).to_vec()).unwrap()
+    }
+
+    /// Every power of ten and its neighbours, and the ends of each type.
+    #[test]
+    fn decimal_text_is_rusts_at_the_edges() {
+        let mut power = 1_u64;
+        loop {
+            for n in [power - 1, power, power + 1] {
+                assert_eq!(decimal(n), n.to_string());
+                if let Ok(signed) = i64::try_from(n) {
+                    assert_eq!(decimal(signed), signed.to_string());
+                    assert_eq!(decimal(-signed), (-signed).to_string());
+                }
+            }
+            let Some(next) = power.checked_mul(10) else {
+                break;
+            };
+            power = next;
+        }
+        for n in [i64::MIN, i64::MIN + 1, i64::MAX, 0, -1, -9, -10, -99, -100] {
+            assert_eq!(decimal(n), n.to_string());
+        }
+        assert_eq!(decimal(u64::MAX), u64::MAX.to_string());
+        for n in [i8::MIN, -1, 0, 9, 10, 99, 100, i8::MAX] {
+            assert_eq!(decimal(n), n.to_string());
+        }
+        for n in [i16::MIN, i16::MAX] {
+            assert_eq!(decimal(n), n.to_string());
+        }
+        for n in [i32::MIN, i32::MAX] {
+            assert_eq!(decimal(n), n.to_string());
+        }
+        for n in [0, 9, 10, 99, 100, u8::MAX] {
+            assert_eq!(decimal(n), n.to_string());
+        }
+        assert_eq!(decimal(u16::MAX), u16::MAX.to_string());
+        assert_eq!(decimal(u32::MAX), u32::MAX.to_string());
+        // A magnitude no Rust integer type pairs with a sign still fits.
+        let mut buffer = [0; DECIMAL_ROOM];
+        assert_eq!(
+            write_decimal(true, u64::MAX, &mut buffer),
+            format!("-{}", u64::MAX).as_bytes()
+        );
+    }
+
+    proptest! {
+        // 4 cases under Miri, as the Miri job's `PROPTEST_CASES` (D-721).
+        #![proptest_config(ProptestConfig::with_cases(if cfg!(miri) { 4 } else { 10_000 }))]
+
+        #[test]
+        fn decimal_text_is_rusts(
+            a in any::<i64>(),
+            b in any::<u64>(),
+            c in any::<i32>(),
+            d in any::<u32>(),
+            e in any::<i16>(),
+            f in any::<u16>(),
+            g in any::<i8>(),
+            h in any::<u8>(),
+        ) {
+            prop_assert_eq!(decimal(a), a.to_string());
+            prop_assert_eq!(decimal(b), b.to_string());
+            prop_assert_eq!(decimal(c), c.to_string());
+            prop_assert_eq!(decimal(d), d.to_string());
+            prop_assert_eq!(decimal(e), e.to_string());
+            prop_assert_eq!(decimal(f), f.to_string());
+            prop_assert_eq!(decimal(g), g.to_string());
+            prop_assert_eq!(decimal(h), h.to_string());
+        }
+    }
 
     #[test]
     fn float_show_follows_section_3_3_6() {

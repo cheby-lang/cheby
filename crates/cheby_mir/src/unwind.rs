@@ -117,6 +117,9 @@ pub fn rvalue_may_unwind(value: &Rvalue) -> bool {
         | Rvalue::FloatArith { .. }
         | Rvalue::Bitwise { .. }
         | Rvalue::FloatNeg { .. }
+        | Rvalue::Convert { .. }
+        | Rvalue::FloatSqrt { .. }
+        | Rvalue::Wrapping { .. }
         | Rvalue::Not(_)
         | Rvalue::ReadTag { .. } => false,
     }

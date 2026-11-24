@@ -10,10 +10,11 @@
 //! updates O(log n), at most 14 nodes deep; `from_list`, `keys`, `values`
 //! and `to_list` O(n).
 
-use super::node::{Collection, Root, dup_word};
-use super::ops::{self, Entries};
+use super::node::{Collection, Root, drop_word, dup_word};
+use super::ops::{self, Entries, Found};
 use crate::abi::Word;
 use crate::callback;
+use crate::ctx::ExecCtx;
 use crate::entry;
 use crate::list;
 use crate::unwind::guard::{DropOnUnwind, guarded};
@@ -141,6 +142,162 @@ pub unsafe extern "C" fn cheby_map_get(m: u64, key: u64) -> u64 {
     })
 }
 
+/// `MapFind` (`map::get` whose `Option` generated code takes apart at
+/// once): the map and the key borrowed; the address of the value stored
+/// under `key`, or 0 when the key is absent. Generated code reads the
+/// value there with [`cheby_rt_map_value_at`], or inline, while it holds
+/// the map. The key is hashed and compared as by [`cheby_map_get`].
+/// O(log n).
+///
+/// # Safety
+///
+/// `ctx` is null or the running fiber's control block, `m` is a live
+/// map and `key` a live uniform word.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn cheby_rt_map_find(ctx: *mut ExecCtx, m: u64, key: u64) -> u64 {
+    guarded(Some(ctx), || {
+        // SAFETY: forwarded from the caller.
+        ops::find(unsafe { map(m) }, Collection::Map, key).map_or(0, Found::value_address)
+    })
+}
+
+/// `MapValueAt`: the value word at `address`, dup'd, so the result is
+/// owned. Never unwinds.
+///
+/// # Safety
+///
+/// `address` is a nonzero result of [`cheby_rt_map_find`] of a map the
+/// caller still holds.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn cheby_rt_map_value_at(address: u64) -> u64 {
+    // SAFETY: forwarded from the caller: the slot of a live node.
+    let value = unsafe { crate::object::read_field(crate::object::word_to_ptr(address), 0) };
+    dup_word(value);
+    value
+}
+
+/// `MapUpsert` (`map::upsert` at a direct call, whose callback generated
+/// code calls): `m` owned, `key` borrowed. Returns a root of the caller's
+/// own, unique or empty, with the path to the key's entry writable, and
+/// writes to `out` the address of the entry's value slot, that address
+/// plus 1 for a key that was absent and is now in with a placeholder
+/// value, or 1 for an empty map, whose key is not hashed
+/// (`ops::upsert_open`). The key is hashed and compared as by
+/// [`cheby_map_upsert`]. `m` is consumed even when it raises. O(log n).
+///
+/// # Safety
+///
+/// `ctx` is null or the running fiber's control block, `m` is a live map
+/// owned by the caller and given up, `key` a live uniform word, and `out`
+/// a writable word.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn cheby_rt_map_upsert(
+    ctx: *mut ExecCtx,
+    m: u64,
+    key: u64,
+    out: *mut u64,
+) -> u64 {
+    guarded(Some(ctx), || {
+        // SAFETY: forwarded from the caller.
+        let (root, at) = ops::upsert_open(unsafe { map(m) }, key);
+        // SAFETY: forwarded from the caller.
+        unsafe { out.write(at) };
+        root.word()
+    })
+}
+
+/// `MapSlotTake`: the value word at `address`, moved out: the slot holds
+/// the placeholder `HOLE` afterwards, a tagged word that a release of the
+/// map skips. Generated code does this inline, where the release clean-up
+/// takes the `Option` of [`cheby_rt_map_upsert_found`] apart. Never
+/// unwinds.
+///
+/// # Safety
+///
+/// `address` is the address of a present key's value slot that
+/// [`cheby_rt_map_upsert`] gave, of a map the caller holds uniquely.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn cheby_rt_map_slot_take(address: u64) -> u64 {
+    let slot = crate::object::word_to_ptr(address);
+    // SAFETY: forwarded from the caller: the value slot of a live node
+    // that only the caller's map reaches.
+    unsafe {
+        let value = crate::object::read_field(slot, 0);
+        crate::object::write_field(slot, 0, super::node::HOLE);
+        value
+    }
+}
+
+/// `MapUpsertFound`: the `Option` that the callback of a direct
+/// `map::upsert` gets, for an address that [`cheby_rt_map_upsert`] gave:
+/// for a present key, `Some` of the stored value, moved out of its slot,
+/// which holds the placeholder `HOLE` afterwards (a tagged word that a
+/// release of the map skips); otherwise the static `None`. The value keeps
+/// the count it had in the map, as the kernel's `Some` does. When the
+/// `Some` cannot be allocated, the value is released and the slot keeps
+/// the placeholder.
+///
+/// # Safety
+///
+/// `ctx` is null or the running fiber's control block, and `address` a
+/// result of [`cheby_rt_map_upsert`] whose map the caller holds uniquely
+/// and has not taken the value of yet.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn cheby_rt_map_upsert_found(ctx: *mut ExecCtx, address: u64) -> u64 {
+    if address & 1 != 0 {
+        return values::none();
+    }
+    guarded(Some(ctx), || {
+        // SAFETY: forwarded from the caller.
+        let old = unsafe { cheby_rt_map_slot_take(address) };
+        let held = DropOnUnwind::new([old]);
+        // SAFETY: `ctx` is null or the running fiber's control block.
+        let some = unsafe { values::some_for(ctx, old) };
+        held.disarm();
+        some
+    })
+}
+
+/// `MapUpsertStore`: the last step of a direct `map::upsert`: stores the
+/// owned `value` in the slot at `address`, its lowest bit cleared, over
+/// the placeholder there, and returns `m`. For an empty map, whose
+/// address is 1, it is `map::insert`'s work instead, which hashes `key` as
+/// the kernel does after its callback: a map of one entry, the key with a
+/// reference added. `m` and `value` are owned and consumed even when it
+/// raises. Generated code stores into a slot inline.
+///
+/// # Safety
+///
+/// `ctx` is null or the running fiber's control block; `m` is the map
+/// and `address` a result of [`cheby_rt_map_upsert`] whose slot holds the
+/// placeholder, `key` the key it was given and `value` a live uniform
+/// word.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn cheby_rt_map_upsert_store(
+    ctx: *mut ExecCtx,
+    m: u64,
+    address: u64,
+    key: u64,
+    value: u64,
+) -> u64 {
+    if address != ops::UPSERT_EMPTY {
+        let slot = crate::object::word_to_ptr(address & !1);
+        // SAFETY: forwarded from the caller: the value slot of a live node
+        // that only the caller's map reaches.
+        unsafe { crate::object::write_field(slot, 0, value) };
+        return m;
+    }
+    guarded(Some(ctx), || {
+        let owned = DropOnUnwind::new([m, value]);
+        // SAFETY: forwarded from the caller: `m` is the empty map.
+        let inserted = ops::insert(unsafe { map(m) }, Collection::Map, key, Some(value));
+        owned.disarm();
+        drop_word(value);
+        drop_word(m);
+        inserted.word()
+    })
+}
+
 /// `map::has_key`. O(log n).
 ///
 /// # Safety
@@ -197,15 +354,24 @@ pub unsafe extern "C" fn cheby_map_upsert(m: u64, key: u64, update: u64) -> u64 
     guarded(None, || {
         // SAFETY: forwarded from the caller.
         let root = unsafe { map(m) };
+        // One lookup of the running fiber serves the `Some` and the call:
+        // the kernel runs on one fiber from its start to its end.
+        let ctx = entry::current_ctx();
         ops::upsert(root, key, |previous| {
             // The moved-out value is released if its `Some` cannot be
             // allocated.
             let held = DropOnUnwind::new([previous.unwrap_or(0)]);
-            let argument = values::option(previous);
+            let argument = match previous {
+                // SAFETY: `ctx` is the fiber running on this thread, or none.
+                Some(value) => unsafe {
+                    values::some_for(ctx.unwrap_or(std::ptr::null_mut()), value)
+                },
+                None => values::none(),
+            };
             held.disarm();
-            // SAFETY: on the caller's entry thread; the closure is borrowed
-            // and its argument given away.
-            unsafe { callback::call(update, &[argument]) }
+            // SAFETY: on the caller's entry thread, whose control block is
+            // `ctx`; the closure is borrowed and its argument given away.
+            unsafe { callback::call_in(ctx, update, &[argument]) }
         })
         .word()
     })

@@ -1,0 +1,7 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc 0eb61f2a1004edd6927804fff4ad62d1d0779e59d5ce28dfa53ab70d72b86ee6 # shrinks to keys = [Text("")], seed = 0

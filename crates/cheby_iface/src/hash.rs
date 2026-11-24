@@ -358,6 +358,13 @@ impl Encoder<'_> {
                         None => out.byte(0),
                     }
                 }
+                match &f.kernel {
+                    Some(symbol) => {
+                        out.byte(1);
+                        out.str(symbol)?;
+                    }
+                    None => out.byte(0),
+                }
             }
             ItemSig::Type(t) => {
                 out.byte(1);
@@ -530,6 +537,7 @@ mod tests {
                 clamped: Box::new([]),
                 initializer: None,
                 call_site: None,
+                kernel: None,
             }),
         }
     }
@@ -704,6 +712,15 @@ mod tests {
         assert_ne!(call_site("take_at"), call_site("take_here"));
         // The two attributes name their constructors in different places.
         assert_ne!(initializer("take_at"), call_site("take_at"));
+        let kernel = |symbol: &str| {
+            with(&|item| {
+                if let ItemSig::Fn(f) = &mut item.sig {
+                    f.kernel = Some(symbol.into());
+                }
+            })
+        };
+        assert_ne!(base, kernel("cheby_list_length"));
+        assert_ne!(kernel("cheby_list_length"), kernel("cheby_list_get"));
         // The span is not part of the hash.
         assert_eq!(base, with(&|item| item.span = Some(span(77))));
 
