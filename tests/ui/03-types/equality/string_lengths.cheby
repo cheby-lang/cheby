@@ -1,5 +1,5 @@
 // @mode: run-pass
-// @decisions: D-252
+// @decisions: D-252, D-1789
 //! `==` and `!=` on strings, and string literal patterns, compare by
 //! bytes: strings of different lengths differ, strings of one length are
 //! compared byte by byte, and the empty string equals only itself. Two

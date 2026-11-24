@@ -1,6 +1,6 @@
 // @mode: run-pass
 // @milestone: M3
-// @decisions: D-318, D-902, D-1773
+// @decisions: D-318, D-902, D-1773, D-1788
 //! `bytes::get` taken apart at once at the edges of `Bytes` of 0, 1 and
 //! 4 bytes: an index of -1, of the length, of `int::max_value` or of
 //! `int::min_value` is outside and gives `None`. The forms a scanner

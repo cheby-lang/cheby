@@ -744,3 +744,73 @@ Tried and not kept: the merge sort written in Cheby. On a million `Int`s it reti
 
 Left open: in release a heap's `compare` is still a call, since `heap`'s updates reach their intrinsics through a private helper that builds a closure. The `Order` a comparison returns is still built and read through a block parameter in the sort's loop.
 
+## 2026-11-24: scanning and allocation, from a profile of `json_roundtrip`
+
+The user asked how to make `json_roundtrip` faster with a solid solution, not one tuned to the benchmark, and chose to build now the parts that add no standard-library name. A profile of the release executable (2.86 s, 7.4× Rust) gave: allocating and freeing 30%, the field lookup of `std::json::decode` about 16%, allocator slow paths and the OS about 16%, the parser and the writer about 25%. One pass makes 13.7 million allocations for 50,000 records.
+
+### A matched `bytes::get` is a bounds test and a load (D-1788)
+
+Instructions retired against `84f978f0`, debug and release:
+
+| Program                               |  Debug | Release |
+| ------------------------------------- | -----: | ------: |
+| `json_roundtrip`                      |  −8.7% |   −8.4% |
+| `json/roundtrip` of bench/runtime     |  −8.0% |   −7.7% |
+| `json/value` of bench/runtime         | −14.3% |  −13.2% |
+| A line and integer scanner over 10 MB | −40.5% |  −37.9% |
+| `word_freq`                           |      0 |       0 |
+
+The bounds test written as two signed comparisons in MIR gave 7.7% on `json_roundtrip`; one helper with one unsigned comparison gave 8.65%.
+
+### String `==` tests the lengths first; the escape scans read eight bytes at a time (D-1789)
+
+The length test: `word_freq` −1.65% in release over three runs, `json_roundtrip` −0.4%. The scan: `json_roundtrip` −1.1%, `json/roundtrip` −0.8%. Tried and not kept: `str::from_utf8` before the lossy decoding in `from_byte_range`, at most 0.35%.
+
+With D-1788 and D-1789 together `json_roundtrip` retires 10.0% fewer instructions in debug and 9.8% fewer in release.
+
+### The global allocator calls `mi_malloc` for word-aligned requests (D-1790)
+
+Release executables, three interleaved rounds:
+
+| Program                        | Instructions | Cycles (min) | Peak RSS |
+| ------------------------------ | -----------: | -----------: | -------: |
+| `json_roundtrip`               |        −1.8% |        −2.2% |     same |
+| `binary_trees`                 |        −4.1% |        −1.9% |     same |
+| `rc/string_building`           |        −2.5% |         same |     same |
+| `collections/sorted_set`       |        −1.2% |          −9% |     −22% |
+| `collections/sorted_map`       |        −1.0% |         −13% |     −22% |
+| `collections/sorted_multimap`  |        −0.6% |          −5% |      −7% |
+| `collections/multimap`         |        −1.1% |          −1% |      −5% |
+| `json/roundtrip`               |        −1.3% |          −5% |     −11% |
+
+`word_freq`, `lru_cache`, `ping_pong` and `spawn_many` did not move.
+
+### Measured and not built
+
+mimalloc's purge delay, on Linux:
+
+| Delay             | `json_roundtrip`: sys time, faults, peak RSS | `binary_trees`: CPU, peak RSS | Held after a burst, idle (macOS) |
+| ----------------- | -------------------------------------------- | ----------------------------- | -------------------------------- |
+| 0                 | 0.46 s, 282K, 159 MB                         | 1.49 s, 42 MB                 | about 4 MB                       |
+| 100 ms            | 0.30 s, 183K, 169 MB                         | 1.24 s, 50 MB                 | 9 to 94 MB                       |
+| 1000 ms (current) | 0.07 to 0.13 s, 20K, 193 to 209 MB           | 1.28 to 1.31 s, 54 MB         | 99 MB                            |
+| 10 s              | 0.01 to 0.04 s, 274, 211 MB                  | 1.25 s, 64 MB                 | 99 to 121 MB                     |
+| never             | 0.015 s, 274, 211 MB                         | 1.24 s, 64 MB                 | 99 to 121 MB                     |
+
+A longer delay saves about 1.5% of `json_roundtrip` and raises `binary_trees`' peak by 19%. The last column is a finding of its own: with the current setting a program that frees 100 MB and idles keeps 99 MB, because mimalloc purges only inside its own calls. It is an Open item of the log.
+
+The block cache at larger fixed sizes, in cycles:
+
+| Blocks per class | `json_roundtrip` | `binary_trees` |
+| ---------------- | ---------------: | -------------: |
+| 2,048            |               0% |          −4.8% |
+| 8,192            |            +0.6% |          −8.6% |
+| 65,536           |            +7.6% |         −13.5% |
+| 1M               |             +30% |           −21% |
+
+`json_roundtrip` retires fewer instructions with a large stack and takes more cycles: the stack hands blocks back in free order from many pages, where mimalloc hands out one page at a time. Both programs show the same signal, give-backs equal to refills, so a cache that grows on overflow ends at its limit and behaves as the fixed size does. Refill batches of 16, 64 and 128 did not move anything.
+
+### Left open
+
+The tree and the field lookup of `std::json` are most of what is left, and they need new standard-library names. List and string kernels that allocate without the fiber's context read it from thread-local storage, about 2.6% of `json_roundtrip`'s samples.
+
