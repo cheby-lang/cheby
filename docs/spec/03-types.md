@@ -404,6 +404,7 @@ Some standard-library types print differently (D-342):
 
 - `Map`, `Set` and `multimap` values print as `map::from_list([…])`, `set::from_list([…])` and `multimap::from_list([…])`, so the text reads as the code that rebuilds the value (D-382). `Map` and `Set` list their entries sorted by each entry's printed text, so the output is the same on every run despite the random iteration order (D-344). The texts are compared as UTF-8 bytes, which is the order of scalar values and of `String`'s `compare`, so `10` comes before `9`. A map entry's text is that of the pair `(key, value)`, and a nested collection counts with its own sorted text (D-587). A `multimap` lists one pair per value: its keys sorted by their printed text, compared the same way, and each key's pairs in insertion order. Keys with the same printed text are ordered by the text of their pairs (D-847).
 - Sorted and insertion-ordered collections list their entries in their own order, not their internal tree or list nodes (D-342).
+- A `secret::Secret` prints as `<redacted>`, whatever it holds (D-1902).
 - `io::Error` prints the same text as its `show`, a fixed message for each kind the standard library knows, and never the operating system's internal fields (D-345).
 
 Values without printable structure print as fixed placeholders (D-233):

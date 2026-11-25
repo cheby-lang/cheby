@@ -185,6 +185,10 @@ pub const STD_MODULES: &[StdModule] = &[
         source: include_str!("../../../std/runtime.cheby"),
     },
     StdModule {
+        path: "secret",
+        source: include_str!("../../../std/secret.cheby"),
+    },
+    StdModule {
         path: "selector",
         source: include_str!("../../../std/selector.cheby"),
     },

@@ -3194,3 +3194,23 @@ Open:
 
 - The sanitizer jobs use the dev profile too and have not run with it.
 - The LSP trials' `threads-required = 2` (D-1555). _Proposed:_ 1, if CI still waits on slots with D-1900.
+
+## 2026-11-26: `std::secret`
+
+Goal: add a type for redacted fields, whose values never appear in debug text, failed assertions or logs, from the user's answers to eight questions.
+
+- **D-1901 `std::secret`**: A new module, `std::secret`, in tier 4, with the opaque type `Secret<T>`, which holds one value of any type. A field is redacted by its type, as in `password: Secret<String>`. The module is Cheby with no kernels and no imports, so it ships on native before M4 and runs on JS unchanged, as `std::filepath` does (D-1432). It is tested by its page's tests and by UI tests, with no example program. Its page is `docs/stdlib/secret.md`. Why: debug printing shows the fields of every type and user code cannot override it (D-047, D-134), so a package cannot write such a type itself. A type stays hidden wherever the value goes, also outside its record. Rejected: a `Secret` that holds text only, which leaves out `Bytes` keys and structured credentials; an attribute `@redacted` on record fields, which is a language change (D-514) and hides a value only until it is read from its record; a `log::secret` field builder, which protects one log call and neither `{x:?}` nor `assert`; an example program, since the UI tests pin the same rules.
+- **D-1902 Debug text of a secret**: `Secret` carries `@std_hooks` (D-342), and its debug text is `<redacted>`, whatever it holds, alone and inside any other value. Why: the text says why the value is missing, and a log line needs no quotes around it. Rejected: `<Secret>`, the form of the handles' placeholders (D-647), which reads like a handle; `Secret(<redacted>)`, which is longer and looks like a constructor that a program may write.
+- **D-1903 `Secret` satisfies `Show` with the placeholder**: `show<T>(s: Secret<T>) -> String` returns `<redacted>`, and `T` has no bound, so `Secret<T>` satisfies `Show` for every `T`. It satisfies neither `Compare` nor `json::ToJson`. Why: the user chose that interpolation and `log::field` work on a secret. The price is that `"Bearer {token}"` compiles and gives `Bearer <redacted>`, which the page says. Rejected: no `Show`, which makes that line a compile error and leaves logging to `log::inspect` and `{token:?}`.
+- **D-1904 Equality and hashing of secrets**: Two secrets are `==` when their values are, and a secret hashes as its value, through the same hooks. Both panic where they panic for the values (D-233). `==` is not constant-time, and the page says that checking a guess from outside waits for a cryptography module (D-656). Why: a record with a secret still compares in a test and is still a map key. Rejected: panicking, as for a function value, which would make `==` of every record with a secret panic at run time without W0011, since that warning stops at types with hooks (D-518).
+- **D-1905 The functions of `std::secret`**: `new<T>(value: T) -> Secret<T>`, `expose<T>(s: Secret<T>) -> T`, `map<T, U>(s: Secret<T>, f: fn(T) -> U) -> Secret<U>` and `show` (D-1903). Why: `map` keeps what is made from a secret hidden, and a search for `expose` and `map` finds every read. Rejected: leaving out `map`, after which a derived secret is unwrapped and wrapped again; `reveal` in place of `expose`.
+- **D-1906 Secrets in constants, and what is not hidden**: Every function of the module runs in constants, and a constant may hold a secret. Its value is in the executable and in the build cache, as every literal is. The memory of a secret is not cleared when it is released. The page states both. Why: redaction is about text, a test value in a constant is useful, and a rule against it would need a kernel or a compiler rule while a function with the same literal gets around it. Rejected: an error for a secret in a constant.
+
+Open:
+
+- `http::Request` is exposed, and its debug text shows its headers, an `authorization` header among them. A program that logs requests keeps them out itself.
+- A constant-time comparison waits for a cryptography module (D-656).
+- A builder that reads a secret from the environment, and one that decodes it from JSON, were not asked for: `option::map(env::get(name), secret::new)` and `decode::map(decode::string(), secret::new)` do it.
+- Tree-sitter: no grammar change. `../zed-cheby` needs nothing.
+
+Spec: §3.13 and §8.8 follow D-1902 and D-1903.
