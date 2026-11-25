@@ -181,6 +181,10 @@ fn set_mode(file: &fs::File, executable: bool) -> std::io::Result<()> {
 }
 
 #[cfg(not(unix))]
+#[expect(
+    clippy::unnecessary_wraps,
+    reason = "the Unix version can fail, and the caller handles both alike"
+)]
 fn set_mode(_file: &fs::File, _executable: bool) -> std::io::Result<()> {
     Ok(())
 }
