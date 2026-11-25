@@ -51,6 +51,16 @@ pub struct Dependencies {
     pub keys: BTreeMap<String, String>,
 }
 
+/// Whether this platform stops the package at `dir` because it has a git
+/// dependency, as Windows does until M6 (D-1878): the tests that take every
+/// package through the front end leave such a package out.
+#[cfg(test)]
+pub(crate) fn not_yet_here(dir: &Path) -> bool {
+    cfg!(windows)
+        && std::fs::read_to_string(dir.join(cheby_package::MANIFEST_FILE))
+            .is_ok_and(|manifest| manifest.lines().any(|line| line.contains("{ git = ")))
+}
+
 /// What the first segment of an import means in each package of a build
 /// (§7.5, D-238).
 #[derive(Clone, Debug, Default)]

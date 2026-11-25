@@ -3623,6 +3623,7 @@ fn main() {
             .map(|entry| entry.unwrap().path())
             .filter(|dir| dir.join("cheby.toml").is_file())
             .filter(|dir| !crate::native::not_yet_here(dir))
+            .filter(|dir| !crate::dependencies::not_yet_here(dir))
             .collect();
         dirs.sort();
         dirs

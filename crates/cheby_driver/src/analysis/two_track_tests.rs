@@ -559,6 +559,7 @@ fn manifest_never_good_is_syntax_only() {
 }
 
 #[test]
+#[cfg_attr(windows, ignore = "git dependencies on Windows are M6 (D-1878)")]
 fn example_030_reports_e0036_only() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../docs/examples/030_shop_service");
     let mut s = Session::new(SessionConfig {

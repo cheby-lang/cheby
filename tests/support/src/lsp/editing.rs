@@ -1521,6 +1521,19 @@ impl Settle {
             self.since = at;
             return Ok(());
         }
+        Self::quiet(client)
+    }
+
+    /// Waits until `cheby/status` shows no session running, debouncing or
+    /// holding a parked request. The server answers after the inputs sent
+    /// before the request, and every session is listed, a single-file one
+    /// too, so this waits for an input that more than one session answers.
+    ///
+    /// # Errors
+    ///
+    /// Returns a message for a broken stream or a server that does not
+    /// catch up in time.
+    pub fn quiet(client: &mut Client) -> Result<(), String> {
         let deadline = Instant::now()
             .checked_add(client.timeout())
             .unwrap_or_else(Instant::now);

@@ -4007,10 +4007,14 @@ fn will_rename_step(
     if answer.is_null() || is_error(&answer) {
         let mut reactions = Vec::new();
         editing::move_files(client, texts, moves, &mut reactions)?;
-        settle.after(client, &reactions)?;
-        // A phase-A publish can come before the full run's, as in
-        // `check_applied`, so the publishes alone are not enough.
-        settle.wait(client)?;
+        for (uri, version) in &reactions {
+            client.diagnostics(uri, *version)?;
+        }
+        // A file moved to a name that is no module path gets a single-file
+        // session of its own, whose publish may come after the package's
+        // last `cheby/idle`, or before the package's run ends. So the
+        // publish does not tell when the package is done.
+        editing::Settle::quiet(client)?;
     } else {
         let rules = editing::EditRules {
             new_errors: &header.new_errors,

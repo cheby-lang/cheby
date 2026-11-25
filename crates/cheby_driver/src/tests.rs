@@ -165,6 +165,9 @@ fn front_end_output(dir: &Path) -> (String, Vec<(String, Vec<u8>, String)>) {
 fn the_front_end_is_deterministic() {
     let mut modules = 0;
     for dir in examples() {
+        if dependencies::not_yet_here(&dir) {
+            continue;
+        }
         let first = front_end_output(&dir);
         let second = front_end_output(&dir);
         assert_eq!(first.0, second.0, "{}", dir.display());
@@ -287,6 +290,10 @@ fn lowering_reports_no_e0038() {
     let mut not_yet = 0_usize;
     for dir in examples() {
         let name = dir.file_name().unwrap().to_string_lossy().into_owned();
+        // 030, which is not one of the 33 below.
+        if dependencies::not_yet_here(&dir) {
+            continue;
+        }
         if native::not_yet_here(&dir) {
             not_yet += 1;
             continue;
