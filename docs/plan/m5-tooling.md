@@ -25,6 +25,7 @@ The formatter core, the LSP core and `cheby new` were placed with M2 and did not
 | Doc examples as tests   | M4                                | code blocks in doc comments run by `cheby test` (D-197, D-265)                                                                                                                                                                                                                                               |
 | JSON code action        | M4                                | `to_json` and decoder generation in the LSP (D-210, D-215, D-224, D-225), offered only when neither function exists (D-1402), with the shapes of D-1403 to D-1409                                                                                                                                            |
 | Editor integration      | M4                                | `zed-cheby` points at `cheby lsp`; tree-sitter stays for highlighting; `runnables.scm` and `tasks.json` give tests gutter buttons (D-1397)                                                                                                                                                                   |
+| Path dependencies       | now, beside M4                    | `kind` in the manifest, libraries in `build`, `run` and `new`, and path dependencies through every command (D-1851 to D-1874, D-1861)                                                                                                                                                                        |
 | Package manager         | M5                                | `cheby add`, `update`, `fetch`, git dependencies, lockfile with checksums, package identity by URL and major (D-044, D-097, D-238, D-239), minimal version selection (D-192), paths of dependency files in locations (D-468)                                                                                 |
 
 ## Exit criteria
@@ -38,7 +39,7 @@ The formatter core, the LSP core and `cheby new` were placed with M2 and did not
 
 ## Status
 
-In progress. The formatter core and `cheby new` landed with M3. `cheby doc`, `add`, `update` and `fetch` are still stubs, and doc examples are not run as tests.
+In progress. The formatter core and `cheby new` landed with M3. Libraries and path dependencies work in `check`, `build`, `run`, `test` and `repl` (D-1851 to D-1875). Git dependencies, `cheby.lock`, `cheby add`, `update`, `fetch` and overrides work there too (D-1876 to D-1884), and the language server loads dependencies of both kinds (D-1874). Example 030 passes, with its git dependency served from a fixture repository (D-1889, D-1892). A dependency's modules have front and code records as the local package's do (D-1896 to D-1898), and a library's build reads and writes `cheby run`'s (D-1899). `cheby doc` is still a stub, and doc examples are not run as tests.
 
 `cheby lsp` has waves W0 to W9, W9f, which fixed checkpoint 2's findings (D-1506 to D-1515), and W10, WS and W11, the waves of group G1. That covers the slices LSP core, LSP constant evaluation, LSP type-driven editing, LSP navigation, and LSP fixes and imports:
 

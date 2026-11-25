@@ -58,7 +58,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use cheby_codegen_clif::record::CodeRecord;
 use cheby_codegen_clif::{CodegenOptions, mangle};
-use cheby_iface::{DepView, Ice, ModuleId, PackageId};
+use cheby_iface::{DepView, Ice, ModuleId};
 use cheby_mir::borrow::{self, BorrowMask, BuildFacts, UnitFacts};
 use cheby_mir::{Defs, FnKey, MirModule, MirOptions, RcMode, UnitKind};
 use rayon::prelude::*;
@@ -475,7 +475,7 @@ fn recorded_unit(
         UnitKind::Entries => return None,
     };
     let info = front.modules.get(module)?;
-    (info.package == PackageId::LOCAL && sink.modules.contains_key(&info.path.to_string()))
+    (info.package.has_records() && sink.modules.contains_key(&info.path.to_string()))
         .then_some((part, module))
 }
 
@@ -549,7 +549,7 @@ pub(crate) fn plan<V: KeyView + ?Sized>(
         .par_iter()
         .map(|&(part, module)| {
             let info = view.module_table().get(module)?;
-            if info.package != PackageId::LOCAL {
+            if !info.package.has_records() {
                 return None;
             }
             let path = info.path.to_string();
@@ -869,7 +869,7 @@ pub(crate) fn unit_keys<V: KeyView + ?Sized>(
             let local = view
                 .module_table()
                 .get(def.module)
-                .is_some_and(|info| info.package == PackageId::LOCAL);
+                .is_some_and(|info| info.package.has_records());
             if local && def.module != unit.module {
                 let name = cheby_mir::DefName {
                     def,

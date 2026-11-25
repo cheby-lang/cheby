@@ -9,6 +9,8 @@
 use std::io::Write as _;
 use std::path::{Path, PathBuf};
 
+use cheby_driver::Kind;
+
 /// The `.gitignore` of a new package: the build's output directory.
 pub(crate) const GITIGNORE: &str = "build/\n";
 
@@ -16,9 +18,14 @@ pub(crate) const GITIGNORE: &str = "build/\n";
 /// `cheby_package` refuses in a manifest although it is a `LOWER` name.
 const RESERVED_NAME: &str = "std";
 
-/// The `cheby.toml` of a new package `name` (D-097).
-pub(crate) fn manifest(name: &str) -> String {
-    format!("name = \"{name}\"\nversion = \"0.1.0\"\n")
+/// The `cheby.toml` of a new package `name` (D-097); a program's names no
+/// kind (D-1851).
+pub(crate) fn manifest(name: &str, kind: Kind) -> String {
+    let kind = match kind {
+        Kind::Program => "",
+        Kind::Library => "kind = \"library\"\n",
+    };
+    format!("name = \"{name}\"\nversion = \"0.1.0\"\n{kind}")
 }
 
 /// The `src/main.cheby` of a new package `name`: a `//!` comment and a
@@ -26,6 +33,14 @@ pub(crate) fn manifest(name: &str) -> String {
 pub(crate) fn main_source(name: &str) -> String {
     format!(
         "//! The {name} program.\n\nimport std::io\n\nfn main() {{\n  io::println(\"Hello, world!\")\n}}\n"
+    )
+}
+
+/// The `src/main.cheby` of a new library `name`: a `//!` comment, one
+/// `pub` function and its test (D-1872).
+pub(crate) fn library_source(name: &str) -> String {
+    format!(
+        "//! The {name} library.\n\n/// The sum of `a` and `b`.\npub fn add(a: Int, b: Int) -> Int {{\n  a + b\n}}\n\ntest \"add sums\" {{\n  assert add(1, 2) == 3\n}}\n"
     )
 }
 
@@ -86,8 +101,8 @@ impl NewError {
 /// `base` is empty) with exactly `cheby.toml`, `src/main.cheby` and
 /// `.gitignore`. It runs no `git init` and prints nothing. An invalid name
 /// or an existing path writes nothing.
-pub(crate) fn new_package(base: &Path, name: &str) -> Result<(), NewError> {
-    new_package_with(base, name, &mut write_new_file)
+pub(crate) fn new_package(base: &Path, name: &str, kind: Kind) -> Result<(), NewError> {
+    new_package_with(base, name, kind, &mut write_new_file)
 }
 
 /// [`new_package`], with the function that writes each file, so that a
@@ -95,6 +110,7 @@ pub(crate) fn new_package(base: &Path, name: &str) -> Result<(), NewError> {
 fn new_package_with(
     base: &Path,
     name: &str,
+    kind: Kind,
     write: &mut dyn FnMut(&Path, &str) -> std::io::Result<()>,
 ) -> Result<(), NewError> {
     if !cheby_driver::is_valid_name(name) {
@@ -132,7 +148,7 @@ fn new_package_with(
         });
     }
     let mut created = vec![Created::Dir(dir.clone())];
-    let filled = fill(&dir, name, write, &mut created);
+    let filled = fill(&dir, name, kind, write, &mut created);
     if filled.is_err() {
         // Remove what this command created, the newest first. Anything
         // else found in the directory stays, and so does the directory
@@ -159,6 +175,7 @@ enum Created {
 fn fill(
     dir: &Path,
     name: &str,
+    kind: Kind,
     write: &mut dyn FnMut(&Path, &str) -> std::io::Result<()>,
     created: &mut Vec<Created>,
 ) -> Result<(), NewError> {
@@ -170,8 +187,14 @@ fn fill(
     })?;
     created.push(Created::Dir(src));
     let files = [
-        ("cheby.toml", manifest(name)),
-        ("src/main.cheby", main_source(name)),
+        ("cheby.toml", manifest(name, kind)),
+        (
+            "src/main.cheby",
+            match kind {
+                Kind::Program => main_source(name),
+                Kind::Library => library_source(name),
+            },
+        ),
         (".gitignore", GITIGNORE.to_owned()),
     ];
     for (rel, text) in files {
@@ -210,7 +233,10 @@ mod tests {
 
     use cheby_test_support::cache::FreshDir;
 
-    use super::{GITIGNORE, NewError, main_source, manifest, new_package, new_package_with};
+    use super::{
+        GITIGNORE, Kind, NewError, library_source, main_source, manifest, new_package,
+        new_package_with,
+    };
 
     /// The widths CP2 chose from (D-1150); it chose 100, `cheby_fmt::WIDTH`
     /// (D-1252). The skeleton stays a fixed point at all three.
@@ -224,10 +250,11 @@ mod tests {
         assert!(WIDTHS.contains(&cheby_fmt::WIDTH));
         let long = "a".repeat(130);
         for name in ["app", "my_app", "x1", long.as_str()] {
-            let source = main_source(name);
-            for width in WIDTHS {
-                let formatted = cheby_fmt::format_source(&source, width).unwrap();
-                assert_eq!(formatted, source, "{name} at {width}");
+            for source in [main_source(name), library_source(name)] {
+                for width in WIDTHS {
+                    let formatted = cheby_fmt::format_source(&source, width).unwrap();
+                    assert_eq!(formatted, source, "{name} at {width}");
+                }
             }
         }
     }
@@ -236,7 +263,7 @@ mod tests {
     #[test]
     fn cheby_new_skeleton_texts() {
         assert_eq!(
-            manifest("my_app"),
+            manifest("my_app", Kind::Program),
             "name = \"my_app\"\nversion = \"0.1.0\"\n"
         );
         assert_eq!(
@@ -258,33 +285,48 @@ mod tests {
     #[test]
     fn cheby_new_writes_exactly_three_files() {
         let base = FreshDir::create("cheby-new").unwrap();
-        new_package(base.path(), "my_app").unwrap();
+        new_package(base.path(), "my_app", Kind::Program).unwrap();
         let dir = base.path().join("my_app");
         assert_eq!(names_in(&dir), [".gitignore", "cheby.toml", "src"]);
         assert_eq!(names_in(&dir.join("src")), ["main.cheby"]);
         let read = |rel: &str| std::fs::read_to_string(dir.join(rel)).unwrap();
-        assert_eq!(read("cheby.toml"), manifest("my_app"));
+        assert_eq!(read("cheby.toml"), manifest("my_app", Kind::Program));
         assert_eq!(read("src/main.cheby"), main_source("my_app"));
         assert_eq!(read(".gitignore"), GITIGNORE);
+    }
+
+    /// A library names its kind and has a library's root module (D-1872).
+    #[test]
+    fn cheby_new_library_writes_its_kind() {
+        let base = FreshDir::create("cheby-new").unwrap();
+        new_package(base.path(), "geometry", Kind::Library).unwrap();
+        let dir = base.path().join("geometry");
+        assert_eq!(names_in(&dir), [".gitignore", "cheby.toml", "src"]);
+        let read = |rel: &str| std::fs::read_to_string(dir.join(rel)).unwrap();
+        assert_eq!(
+            read("cheby.toml"),
+            "name = \"geometry\"\nversion = \"0.1.0\"\nkind = \"library\"\n"
+        );
+        assert_eq!(read("src/main.cheby"), library_source("geometry"));
     }
 
     /// The error texts and help lines of the answer; nothing is written.
     #[test]
     fn cheby_new_name_errors() {
         let base = FreshDir::create("cheby-new").unwrap();
-        let err = new_package(base.path(), "MyApp").unwrap_err();
+        let err = new_package(base.path(), "MyApp", Kind::Program).unwrap_err();
         assert_eq!(
             err.message(),
             "`MyApp` is not a valid package name: package names are lower-case identifiers, \
              such as `my_app`"
         );
         assert_eq!(err.help().as_deref(), Some("try `my_app`"));
-        let err = new_package(base.path(), "---").unwrap_err();
+        let err = new_package(base.path(), "---", Kind::Program).unwrap_err();
         assert!(matches!(err, NewError::InvalidName { .. }));
         assert_eq!(err.help(), None);
-        let err = new_package(base.path(), "type").unwrap_err();
+        let err = new_package(base.path(), "type", Kind::Program).unwrap_err();
         assert_eq!(err.help().as_deref(), Some("try `type_`"));
-        let err = new_package(base.path(), "std").unwrap_err();
+        let err = new_package(base.path(), "std", Kind::Program).unwrap_err();
         assert_eq!(
             err.message(),
             "`std` is not a valid package name: it is reserved for the standard library"
@@ -308,7 +350,7 @@ mod tests {
             }
             std::fs::write(path, text)
         };
-        let err = new_package_with(base.path(), "my_app", &mut write).unwrap_err();
+        let err = new_package_with(base.path(), "my_app", Kind::Program, &mut write).unwrap_err();
         assert_eq!(
             err.message(),
             "cannot create `my_app/src/main.cheby`: disk full"
@@ -326,7 +368,7 @@ mod tests {
             std::fs::write(dir.join("other"), "")?;
             Err(std::io::Error::other(format!("no {}", path.display())))
         };
-        let err = new_package_with(base.path(), "my_app", &mut write).unwrap_err();
+        let err = new_package_with(base.path(), "my_app", Kind::Program, &mut write).unwrap_err();
         assert!(
             err.message()
                 .starts_with("cannot create `my_app/cheby.toml`: ")

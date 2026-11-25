@@ -29,19 +29,13 @@ fn package(name: &str, files: &[(&str, &[u8])]) -> PathBuf {
 
 const MANIFEST: (&str, &[u8]) = ("cheby.toml", b"name = \"app\"\nversion = \"0.1.0\"\n");
 
-/// Every example passes the syntax layer. Example 030 has dependencies,
-/// which are rejected until M5.
+/// Every example passes the syntax layer, which loads no dependency.
 #[test]
 fn examples_pass_the_syntax_layer() {
     for dir in examples() {
         let out = check_syntax(&dir).unwrap();
         let rendered = out.render();
-        if dir.ends_with("030_shop_service") {
-            assert_eq!(out.diagnostics.len(), 1, "{rendered}");
-            assert!(rendered.starts_with("error[E0036]: dependencies are not supported"));
-        } else {
-            assert_eq!(rendered, "", "{}", dir.display());
-        }
+        assert_eq!(rendered, "", "{}", dir.display());
     }
 }
 

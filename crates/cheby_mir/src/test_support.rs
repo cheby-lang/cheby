@@ -554,7 +554,7 @@ fn lower_package_with(
         };
         let (iface, d) = build_interface(&types).unwrap();
         diags.extend(d);
-        let (module, d) = check_bodies_with(&types, &iface, Tests::SkipStd).unwrap();
+        let (module, d) = check_bodies_with(&types, &iface, Tests::SkipOthers).unwrap();
         diags.extend(d);
         checked.insert(id, (module, deps));
         set.insert(Arc::new(iface)).unwrap();

@@ -10,6 +10,9 @@
 //!   args              optional, one argument per line; may hold {http_fixture}
 //!   env               optional, KEY=VALUE per line; may hold {http_fixture}
 //!   site/             optional, the files the HTTP fixture serves
+//!   cheby.lock        the example has git dependencies (D-1889)
+//!   session           optional, the requests of an example that serves
+//!   expected.session  the responses to them (D-1892)
 //!   test.toml         milestone, skip-run, reason, timing
 //! ```
 //!
@@ -169,13 +172,25 @@ pub fn serial_names(examples: &[Example]) -> Vec<&str> {
 }
 
 impl Example {
+    /// Whether the example has git dependencies, which a fixture repository
+    /// serves (D-1889).
+    #[must_use]
+    pub fn has_git_dependencies(&self) -> bool {
+        self.dir.join("cheby.lock").is_file()
+    }
+
+    /// Whether the example is a server that a session tests (D-1892).
+    #[must_use]
+    pub fn has_session(&self) -> bool {
+        self.dir.join("session").is_file()
+    }
+
     /// What a harness expects of a trial that only checks the example:
     /// `current`'s expectation of its milestone, except that a `skip-run`
     /// example of a later milestone is tolerated. Its milestone names when
     /// its fixture arrives, not when `cheby check` can handle it, so a pass
     /// before that milestone is reported as pending, not as an unexpected
-    /// pass (D-445). An example with dependencies, such as 030, has
-    /// milestone M5, when dependencies resolve (D-446). That check is
+    /// pass (D-445). That check is
     /// tolerated: a strict run does not require it before the milestone.
     /// The conformance harness's check-only trial and the language server
     /// harness's trials of examples use it (D-1352).

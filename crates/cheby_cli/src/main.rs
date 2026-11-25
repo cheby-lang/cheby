@@ -43,7 +43,6 @@
 // no code uses yet; these keep cargo's `unused_dependencies` lint quiet
 // until the milestone named on each line uses them.
 use cheby_doc as _; // M5
-use cheby_pkg as _; // M5
 
 mod build_id;
 mod color;
@@ -101,6 +100,9 @@ enum Command {
     New {
         /// Package name, a lower-case identifier
         name: String,
+        /// Create a library, which other packages can depend on (D-1872)
+        #[arg(long)]
+        library: bool,
     },
     /// Type-check the package without producing artifacts (D-282)
     Check {
@@ -189,8 +191,20 @@ enum Command {
     },
     /// Generate HTML documentation (§13.10)
     Doc,
-    /// Add a dependency to the manifest and lockfile (§13.4)
-    Add,
+    /// Add a git dependency to the manifest and lockfile (§13.4)
+    Add {
+        /// Git URL, such as `https://github.com/example/cheby-json`
+        url: String,
+        /// Tag to depend on; the newest release by default
+        #[arg(long, conflicts_with = "rev")]
+        tag: Option<String>,
+        /// Commit to depend on
+        #[arg(long)]
+        rev: Option<String>,
+        /// Key of the dependency; the package's own name by default
+        #[arg(long)]
+        name: Option<String>,
+    },
     /// Re-resolve tags and refresh the lockfile (§13.4)
     Update,
     /// Download what the lockfile names (§13.4)
@@ -315,7 +329,7 @@ fn run_command() -> ExitCode {
         return out.error(e.message());
     }
     match cli.command {
-        Command::New { name } => new(out, &name),
+        Command::New { name, library } => new(out, &name, kind(library)),
         Command::Check {
             target,
             deny_warnings,
@@ -387,9 +401,24 @@ fn run_command() -> ExitCode {
             child: std::env::current_exe().ok(),
         }),
         Command::Doc => out.not_yet("doc", "M5"),
-        Command::Add => out.not_yet("add", "M5"),
-        Command::Update => out.not_yet("update", "M5"),
-        Command::Fetch => out.not_yet("fetch", "M5"),
+        Command::Add {
+            url,
+            tag,
+            rev,
+            name,
+        } => {
+            let options = cheby_pkg::commands::AddOptions {
+                url,
+                tag,
+                rev,
+                name,
+            };
+            dependencies(out, &|root, store| {
+                cheby_pkg::commands::add(root, store, &options)
+            })
+        }
+        Command::Update => dependencies(out, &cheby_pkg::commands::update),
+        Command::Fetch => dependencies(out, &cheby_pkg::commands::fetch),
         Command::Explain { code } => explain(out, &code),
         Command::Backend(args) => cheby_lsp::child::main(args.into()),
     }
@@ -450,6 +479,43 @@ fn fallback_note(fallback: &cheby_driver::cache::Fallback) -> String {
          cache that is deleted when it ends; set CHEBY_CACHE to a writable directory to keep \
          the cache between commands\n"
     )
+}
+
+/// What [`dependencies`] runs on the package's root and the store: a line for
+/// each change.
+type DependencyCommand<'a> =
+    dyn Fn(&std::path::Path, &cheby_pkg::Store) -> Result<Vec<String>, cheby_pkg::PkgError> + 'a;
+
+/// `cheby add`, `cheby update` and `cheby fetch` (§13.4): runs `command` on
+/// the package and the store, and prints a line for each change.
+fn dependencies(out: Out, command: &DependencyCommand<'_>) -> ExitCode {
+    let root = match package_root(out) {
+        Ok(root) => root,
+        Err(code) => return code,
+    };
+    let store = match cheby_driver::dependencies::store() {
+        Ok(store) => store,
+        Err(e) => return out.error(e.message()),
+    };
+    match command(&root, &store) {
+        Ok(lines) => {
+            let mut text = lines.join("\n");
+            if !text.is_empty() {
+                text.push('\n');
+            }
+            match std::io::stdout().lock().write_all(text.as_bytes()) {
+                Ok(()) => ExitCode::SUCCESS,
+                Err(_) => ExitCode::FAILURE,
+            }
+        }
+        Err(e) => {
+            let code = out.error(e.message());
+            if let Some(help) = e.help() {
+                out.help(help);
+            }
+            code
+        }
+    }
 }
 
 /// Opens the build cache of `cheby check`, `cheby run` and `cheby test`
@@ -619,8 +685,8 @@ fn test(out: Out, options: &cheby_driver::TestOptions) -> ExitCode {
 /// the working directory and prints nothing. An invalid name and an
 /// existing path are tool errors that write nothing, the first with a
 /// `help:` line when a valid name is close (D-464).
-fn new(out: Out, name: &str) -> ExitCode {
-    match new::new_package(std::path::Path::new(""), name) {
+fn new(out: Out, name: &str, kind: cheby_driver::Kind) -> ExitCode {
+    match new::new_package(std::path::Path::new(""), name, kind) {
         Ok(()) => ExitCode::SUCCESS,
         Err(e) => {
             let code = out.error(&e.message());
@@ -872,6 +938,15 @@ const fn profile(release: bool) -> cheby_driver::Profile {
     }
 }
 
+/// The kind of `cheby new`'s package: a library with `--library` (D-1872).
+const fn kind(library: bool) -> cheby_driver::Kind {
+    if library {
+        cheby_driver::Kind::Library
+    } else {
+        cheby_driver::Kind::Program
+    }
+}
+
 /// What `cheby build` was asked for.
 struct BuildArgs {
     module_path: Option<String>,
@@ -945,7 +1020,9 @@ fn build(out: Out, args: BuildArgs) -> ExitCode {
         out.diagnostics(warnings);
     });
     let code = match built {
-        Ok(cheby_driver::BuildOutcome::Linked { .. }) => ExitCode::SUCCESS,
+        Ok(cheby_driver::BuildOutcome::Linked { .. } | cheby_driver::BuildOutcome::Compiled(_)) => {
+            ExitCode::SUCCESS
+        }
         Ok(cheby_driver::BuildOutcome::CompileFailed(result)) => {
             out.diagnostics(&result);
             ExitCode::FAILURE
@@ -1219,7 +1296,7 @@ mod tests {
     #[test]
     fn cheby_new_parses_one_name() {
         let cli = Cli::try_parse_from(["cheby", "new", "my_app"]).unwrap();
-        assert!(matches!(cli.command, Command::New { name } if name == "my_app"));
+        assert!(matches!(cli.command, Command::New { name, library: false } if name == "my_app"));
         assert!(Cli::try_parse_from(["cheby", "new"]).is_err());
         assert!(Cli::try_parse_from(["cheby", "new", "a", "b"]).is_err());
     }

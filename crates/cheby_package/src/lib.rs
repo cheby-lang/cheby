@@ -18,6 +18,7 @@ mod discover;
 pub mod graph;
 mod manifest;
 mod names;
+mod url;
 
 use std::fmt;
 
@@ -25,9 +26,11 @@ pub use discover::{
     EXTENSION, ModuleFile, ModulePath, ROOT_FILE, SOURCE_DIR, discover, module_file,
 };
 pub use manifest::{
-    Dependency, GitReference, MANIFEST_FILE, Manifest, NativeTable, Target, Targets, Version,
+    Dependency, DependencySource, GitReference, Kind, MANIFEST_FILE, Manifest, NativeTable,
+    Override, Target, Targets, Version,
 };
 pub use names::{is_keyword_or_reserved, is_valid_name, suggest_name};
+pub use url::{GitUrl, is_valid_rev, is_valid_tag};
 
 /// A failure to read the package that is not a diagnostic: an I/O error
 /// or a file too large to compile. The message names the file by its

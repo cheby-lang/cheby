@@ -84,16 +84,15 @@ fn every_example_manifest_loads() {
             assert_eq!(manifest.dependencies.len(), 1);
             let dep = manifest.dependencies.first().unwrap();
             assert_eq!(dep.key, "sql");
-            assert_eq!(dep.reference, GitReference::Tag("v1.4.0".to_owned()));
+            assert!(
+                matches!(&dep.source, DependencySource::Git { reference: GitReference::Tag(tag), .. } if tag == "v1.4.0")
+            );
             assert_eq!(
                 manifest.targets.iter().collect::<Vec<_>>(),
                 [Target::Native]
             );
             let rendered = render_all(&diags, &sources);
-            assert!(
-                rendered.contains("error[E0036]: dependencies are not supported before M5"),
-                "{rendered}"
-            );
+            assert_eq!(rendered, "");
         }
     }
 }
@@ -711,7 +710,7 @@ error[E0036]: unknown key `colour` in `cheby.toml`
 2 | colour = 1
   | ^^^^^^ unknown key
   |
-  = help: the keys are `name`, `version`, `description`, `licences`, `targets`, `[dependencies]`, `[const-eval]`, `[runtime]` and `[native]`
+  = help: the keys are `name`, `version`, `description`, `licences`, `kind`, `targets`, `[dependencies]`, `[overrides]`, `[const-eval]`, `[runtime]` and `[native]`
 
 "
     );
@@ -747,10 +746,10 @@ fn dependency_errors_point_at_the_right_key() {
     // and the key is checked against the package name even when its entry
     // has another error (D-238).
     let (_, rendered) = parse(
-        "name = \"p\"\nversion = \"1.0.0\"\n[dependencies]\np = { git = \"x\", tag = \"v\", rev = \"y\" }\n",
+        "name = \"p\"\nversion = \"1.0.0\"\n[dependencies]\np = { git = \"h:x\", tag = \"v\", rev = \"aaaaaaa\" }\n",
     );
     assert!(
-        rendered.contains("has both `tag` and `rev`\n --> cheby.toml:4:29"),
+        rendered.contains("has both `tag` and `rev`\n --> cheby.toml:4:31"),
         "{rendered}"
     );
     assert!(
@@ -760,15 +759,19 @@ fn dependency_errors_point_at_the_right_key() {
 }
 
 #[test]
-fn dependencies_are_read_then_rejected() {
+fn git_dependencies_are_read() {
     let (manifest, rendered) = parse(
         "name = \"app\"\nversion = \"0.1.0\"\n\n[dependencies]\n\
          json = { git = \"https://example.com/json\", rev = \"4f2a9c1\" }\n\
-         std = { git = \"x\", tag = \"v1\" }\n\
-         app = { git = \"x\", tag = \"v1\" }\n\
-         Bad = { git = \"x\", tag = \"v1\", rev = \"y\" }\n\
+         std = { git = \"h:x\", tag = \"v1\" }\n\
+         app = { git = \"h:x\", tag = \"v1\" }\n\
+         Bad = { git = \"h:x\", tag = \"v1\", rev = \"aaaaaaa\" }\n\
          nogit = { tag = \"v1\" }\n\
-         extra = { git = \"x\", tag = \"v1\", branch = \"main\" }\n",
+         http = { git = \"http://h/x\", tag = \"v1\" }\n\
+         short = { git = \"h:x\", rev = \"aaa\" }\n\
+         extra = { git = \"h:x\", tag = \"v1\", branch = \"main\" }\n\
+         two = { git = \"http://h/two\", tag = \"a b\", branch = \"main\" }\n\
+         none = { git = \"h:x\" }\n",
     );
     let manifest = manifest.unwrap();
     let keys: Vec<_> = manifest
@@ -779,19 +782,174 @@ fn dependencies_are_read_then_rejected() {
     // Source order (toml's `preserve_order`).
     assert_eq!(keys, ["json", "app"]);
     for expected in [
-        "error[E0036]: dependencies are not supported before M5\n --> cheby.toml:4:2",
         "error[E0036]: the dependency key `std` is reserved for the standard library",
         "error[E0036]: dependency key `app` is the package's own name",
         "error[E0036]: dependency key `Bad` is not a valid name",
         "error[E0036]: dependency `Bad` has both `tag` and `rev`",
         "error[E0036]: dependency `nogit` has no `git`",
+        "error[E0036]: the git URL `http://h/x` has a scheme other than `https` and `ssh`\n  --> cheby.toml:10:16",
+        "error[E0036]: `aaa` is not a valid `rev`\n  --> cheby.toml:11:30",
         "error[E0036]: unknown key `branch` in dependency `extra`",
+        "error[E0036]: the git URL `http://h/two` has a scheme",
+        "error[E0036]: `a b` is not a valid `tag`",
+        "error[E0036]: unknown key `branch` in dependency `two`",
+        "error[E0036]: dependency `none` has no `tag` or `rev`",
     ] {
         assert!(
             rendered.contains(expected),
             "missing {expected:?} in\n{rendered}"
         );
     }
+    // A value that is wrong is there.
+    assert_eq!(rendered.matches(" has no ").count(), 2, "{rendered}");
+}
+
+/// `kind` is a program by default (D-1851).
+#[test]
+fn the_kind_of_a_package() {
+    let of = |text: &str| parse(&format!("name = \"p\"\nversion = \"0.1.0\"\n{text}"));
+    assert_eq!(of("").0.unwrap().kind, Kind::Program);
+    assert_eq!(of("kind = \"program\"\n").0.unwrap().kind, Kind::Program);
+    let (manifest, rendered) = of("kind = \"library\"\n");
+    assert_eq!(manifest.unwrap().kind, Kind::Library);
+    assert_eq!(rendered, "");
+    let (_, rendered) = of("kind = \"tool\"\n");
+    assert!(
+        rendered.contains("error[E0036]: unknown kind `tool`\n --> cheby.toml:3:8"),
+        "{rendered}"
+    );
+}
+
+/// An override maps a URL to a directory (D-1865).
+#[test]
+fn overrides_are_read() {
+    let of = |entry: &str| {
+        parse(&format!(
+            "name = \"p\"\nversion = \"0.1.0\"\n[overrides]\n{entry}\n"
+        ))
+    };
+    let (manifest, rendered) = of("\"https://h/json\" = { path = \"../json\" }");
+    assert_eq!(rendered, "");
+    let overrides = manifest.unwrap().overrides;
+    assert_eq!(overrides.len(), 1);
+    assert_eq!(overrides[0].git.canonical(), "h/json");
+    assert_eq!(overrides[0].path, "../json");
+    for (entry, expected) in [
+        (
+            "json = { path = \"../json\" }",
+            "the git URL `json` is no git URL",
+        ),
+        ("\"h:a\" = { git = \"h:b\" }", "an override has only `path`"),
+        ("\"h:a\" = { path = \"/a\" }", "the path `/a` is absolute"),
+        (
+            "\"h:a\" = { path = \"a\" }\n\"https://h/a.git\" = { path = \"b\" }",
+            "`h/a` is overridden twice",
+        ),
+    ] {
+        let (_, rendered) = of(entry);
+        assert!(rendered.contains(expected), "{entry}: {rendered}");
+    }
+}
+
+/// Versions order by precedence, and their majors follow D-239.
+#[test]
+fn version_precedence() {
+    let of = |text: &str| Version::parse(text).unwrap();
+    let sorted = [
+        "0.9.0",
+        "1.0.0-1",
+        "1.0.0-2",
+        "1.0.0-10",
+        "1.0.0-a",
+        "1.0.0-a.1",
+        "1.0.0-b",
+        "1.0.0",
+        "1.0.1",
+        "1.2.0",
+    ];
+    for pair in sorted.windows(2) {
+        assert!(of(pair[0]).cmp_precedence(&of(pair[1])).is_lt(), "{pair:?}");
+    }
+    assert!(of("1.0.0+a").cmp_precedence(&of("1.0.0+b")).is_eq());
+    for (version, major) in [
+        ("1.4.2", "1"),
+        ("0.1.8", "0.1"),
+        ("0.0.3", "0.0.3"),
+        ("0.0.0", "0.0.0"),
+    ] {
+        assert_eq!(of(version).major_part(), major);
+    }
+}
+
+/// A path dependency has only `path`, a relative one with `/` (D-1856,
+/// D-1862).
+#[test]
+fn path_dependencies_are_read() {
+    let of = |entry: &str| {
+        parse(&format!(
+            "name = \"p\"\nversion = \"0.1.0\"\n[dependencies]\n{entry}\n"
+        ))
+    };
+    let (manifest, rendered) = of("geo = { path = \"../geometry\" }");
+    assert_eq!(rendered, "");
+    let dependencies = manifest.unwrap().dependencies;
+    assert_eq!(dependencies.len(), 1);
+    assert_eq!(dependencies[0].key, "geo");
+    assert!(
+        matches!(&dependencies[0].source, DependencySource::Path { path, .. } if path == "../geometry")
+    );
+    for (entry, expected) in [
+        (
+            "geo = { path = \"/geometry\" }",
+            "the path `/geometry` is absolute",
+        ),
+        (
+            "geo = { path = \"C:/geometry\" }",
+            "the path `C:/geometry` is absolute",
+        ),
+        ("geo = { path = '..\\geometry' }", "has a `\\`"),
+        ("geo = { path = \"\" }", "the path of a dependency is empty"),
+        (
+            "geo = { path = \"../g\", git = \"x\", tag = \"v1\" }",
+            "dependency `geo` has both `path` and `git`",
+        ),
+        (
+            "geo = { path = \"../g\", branch = \"main\" }",
+            "unknown key `branch` in dependency `geo`",
+        ),
+    ] {
+        let (manifest, rendered) = of(entry);
+        assert!(rendered.contains(expected), "{entry}: {rendered}");
+        assert_eq!(manifest.unwrap().dependencies, [], "{entry}");
+    }
+}
+
+/// A path that names no directory with a manifest is an error at the path
+/// (D-1862).
+#[test]
+fn a_path_dependency_names_a_package() {
+    let text = "name = \"p\"\nversion = \"0.1.0\"\n[dependencies]\ngeo = { path = \"../geo\" }\n";
+    let base = temp_dir("path_dependency");
+    let root = base.join("app");
+    write(&root, &[MANIFEST_FILE]);
+    std::fs::write(root.join(MANIFEST_FILE), text).unwrap();
+    let load = || {
+        let mut sources = SourceMap::new();
+        let mut diags = Vec::new();
+        let manifest = Manifest::load(&root, &mut sources, &mut diags).unwrap();
+        sources.sort(&mut diags);
+        (manifest.unwrap(), render_all(&diags, &sources))
+    };
+    let (manifest, rendered) = load();
+    assert!(
+        rendered.contains("error[E0036]: there is no package at `../geo`\n --> cheby.toml:4:16"),
+        "{rendered}"
+    );
+    assert_eq!(manifest.dependencies, []);
+    write(&base, &["geo/cheby.toml"]);
+    let (manifest, rendered) = load();
+    assert_eq!(rendered, "");
+    assert_eq!(manifest.dependencies.len(), 1);
 }
 
 /// Writes `cheby.toml` with `text` and the files `files` (empty) into a

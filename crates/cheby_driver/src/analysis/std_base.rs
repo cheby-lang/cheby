@@ -6,7 +6,7 @@
 //!   module of [`std_lib::STD_MODULES`], with `Retain::STD`: every module
 //!   keeps its tree, its resolution and its facts, and there is no
 //!   containment, so a lost body or pass fails the build as a batch run
-//!   would. Test bodies stay unchecked (`Tests::SkipStd`), so a `test`
+//!   would. Test bodies stay unchecked (`Tests::SkipOthers`), so a `test`
 //!   block of std has no facts (D-1370).
 //! - [`StdIndex`] is plain data, strings and ranges, so it crosses every
 //!   generation (A §1.5). It serves auto-import, `workspace/symbol`,
@@ -720,6 +720,7 @@ fn base_package(
         return Err(Ice::new("std's base root module does not parse").into());
     }
     Ok(Package {
+        dependencies: crate::dependencies::Dependencies::default(),
         root: PathBuf::new(),
         manifest,
         modules: vec![Module {

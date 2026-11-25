@@ -4,11 +4,15 @@ The package manager: dependency resolution, the lockfile and fetching (spec §13
 
 ## Place in the pipeline
 
-`cheby_pkg` depends on `cheby_package`, which already reads the `[dependencies]` of `cheby.toml`, with their versions and git references, and defines the names of dependency keys. This crate will resolve those dependencies to versions, write the lockfile and fetch sources, and `cheby_driver` will then load the fetched packages through `cheby_package` as it loads the local one. Only `cheby_cli` depends on it.
+`cheby_pkg` depends on `cheby_package`, which reads `cheby.toml` and checks git URLs, and on `cheby_diag` for the errors of manifests. `cheby_driver` reads the lockfile and the store through it and loads the packages, and `cheby_cli` runs its commands. Only those commands use the network (D-1881).
 
-## Status
+## Contents
 
-Planned for M5. The crate is a skeleton: one `lib.rs` with a crate-level doc comment and no items. It exists so the workspace has its final shape from the start (D-284), and so the dependency edges above are fixed before the code lands. Its first real contents are described in [`docs/plan/m5-tooling.md`](../../docs/plan/m5-tooling.md).
+- `lock`: `cheby.lock` (D-1880).
+- `git`: the `git` found on `PATH`, over bare mirrors (D-1876).
+- `store`: the machine's store of fetched sources, and their checksums (D-1877, D-1878).
+- `resolve`: minimal version selection (D-192, D-238).
+- `commands`: `add`, `update` and `fetch` (D-1882).
 
 ## Read more
 

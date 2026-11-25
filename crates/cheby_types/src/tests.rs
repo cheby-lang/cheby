@@ -632,7 +632,9 @@ fn examples_check_without_internal_errors() {
             })
             .collect();
         let syntax_errors = texts.iter().any(|(_, text)| has_syntax_errors(text));
-        if syntax_errors || phase_a.iter().any(Diagnostic::is_error) {
+        // Dependencies are loaded by the driver (D-446).
+        let skipped = syntax_errors || !manifest.dependencies.is_empty();
+        if skipped || phase_a.iter().any(Diagnostic::is_error) {
             continue;
         }
         let local: Vec<(&str, &str)> = texts

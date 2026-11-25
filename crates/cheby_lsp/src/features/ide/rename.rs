@@ -446,7 +446,10 @@ fn target(
     let index = analyzed.index();
     // A std source cannot be edited, so every name in it is refused, a
     // local's too (D-1673).
-    let read_only = matches!(snapshot.location(file), Some(FileLocation::Std(_)));
+    let read_only = matches!(
+        snapshot.location(file),
+        Some(FileLocation::Std(_) | FileLocation::Dependency(_))
+    );
     let Some(Picked {
         origin,
         module,
@@ -459,7 +462,7 @@ fn target(
     };
     let old = origin.slice(source.text()).unwrap_or_default().to_owned();
     if read_only {
-        return Err(not_editable(&old, "std"));
+        return Err(not_editable(&old, package_of(Some(view))));
     }
     if hidden.is_some() {
         return Err(Refusal(format!("`{old}` does not resolve")));
@@ -534,7 +537,7 @@ fn unpicked<'a>(
         {
             Err(unrecorded(old))
         }
-        Classified::Unknown(_) if read_only => Err(not_editable(old, "std")),
+        Classified::Unknown(_) if read_only => Err(not_editable(old, package_of(Some(view)))),
         Classified::Unknown(name) => Err(Refusal(unknown_reason(name, old, None))),
         Classified::Unnamed(Unnamed::SelfType) => {
             Err(Refusal("`Self` is not a name you declare".to_owned()))
@@ -584,12 +587,12 @@ fn allowed(
             Ok(())
         };
     }
-    let path = home_view.and_then(ModuleView::path);
-    let package = path
-        .and_then(|p| p.segments().first())
-        .map_or("another package", String::as_str);
-    let shown = match (entry.meaning, path.and_then(|p| p.segments().last())) {
-        (Meaning::Item(_), Some(last)) => format!("{last}::{old}"),
+    let package = package_of(home_view);
+    let last = home_view
+        .and_then(ModuleView::path)
+        .and_then(|p| p.segments().last());
+    let shown = match (entry.meaning, last) {
+        (Meaning::Item(_), Some(last)) => format!("{}::{old}", without_major(last)),
         (Meaning::Item(_), None)
         | (
             Meaning::Module(_)
@@ -600,6 +603,19 @@ fn allowed(
         ) => old.to_owned(),
     };
     Err(not_editable(&shown, package))
+}
+
+/// The package of the module `view`, as a refusal names it.
+fn package_of(view: Option<ModuleView<'_>>) -> &str {
+    view.and_then(ModuleView::path)
+        .and_then(|p| p.segments().first())
+        .map_or("another package", |first| without_major(first))
+}
+
+/// The segment `segment` of a module path without the major that a
+/// dependency's first one ends with (D-1884).
+fn without_major(segment: &str) -> &str {
+    segment.split_once('#').map_or(segment, |(name, _)| name)
 }
 
 /// The refusal for a name of a file that cannot be edited (D-1390).
@@ -931,7 +947,7 @@ fn place(snapshot: &Snapshot, file: FileId, offset: TextSize) -> Option<String> 
     let path = match snapshot.location(file)? {
         FileLocation::Package(path) => shown_path(snapshot, path),
         FileLocation::Std(display) => display.clone(),
-        FileLocation::Synthetic => source.path().to_owned(),
+        FileLocation::Dependency(_) | FileLocation::Synthetic => source.path().to_owned(),
     };
     Some(format!("{path}:{}", source.line_col(offset).line))
 }
@@ -1459,8 +1475,11 @@ fn bodiless_param(
                 .collect::<Vec<_>>()
         })
         .collect();
-    if matches!(snapshot.location(file), Some(FileLocation::Std(_))) {
-        return Err(not_editable(&old, "std"));
+    if matches!(
+        snapshot.location(file),
+        Some(FileLocation::Std(_) | FileLocation::Dependency(_))
+    ) {
+        return Err(not_editable(&old, package_of(Some(view))));
     }
     if view.is_broken() {
         return Err(Refusal(

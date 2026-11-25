@@ -98,6 +98,72 @@ fn cheby_new_package_checks_and_is_formatted() {
     );
 }
 
+/// A library skeleton checks, is formatted and has no default program
+/// (D-1855, D-1872).
+#[test]
+fn cheby_new_library_checks_and_is_formatted() {
+    let work = fresh();
+    let out = cheby(work.path(), &["new", "--library", "geometry"]);
+    assert_eq!(
+        (out.stdout.as_str(), out.stderr.as_str(), out.status),
+        ("", "", Some(0))
+    );
+    let dir = work.path().join("geometry");
+    for args in [["check"].as_slice(), &["fmt", "--check"]] {
+        let out = cheby(&dir, args);
+        assert_eq!(
+            (out.stdout.as_str(), out.stderr.as_str(), out.status),
+            ("", "", Some(0))
+        );
+    }
+    let out = cheby(&dir, &["run"]);
+    assert_eq!(
+        (out.stdout.as_str(), out.stderr.as_str(), out.status),
+        (
+            "",
+            "error: package `geometry` is a library, so `cheby run` needs the path of a module \
+             with `main`\n",
+            Some(1)
+        )
+    );
+}
+
+/// A library's skeleton passes its test, and `cheby build` compiles it and
+/// writes nothing (D-1852).
+#[test]
+#[cfg_attr(
+    windows,
+    ignore = "runs JIT-compiled code; Windows support is M6 (D-545)"
+)]
+fn cheby_new_library_tests_and_builds() {
+    let work = fresh();
+    cheby(work.path(), &["new", "--library", "geometry"]);
+    let dir = work.path().join("geometry");
+    let out = cheby(&dir, &["test"]);
+    assert_eq!((out.stderr.as_str(), out.status), ("", Some(0)));
+    assert!(out.stdout.contains("1 passed"), "{}", out.stdout);
+    for args in [["build"].as_slice(), &["build", "--release"]] {
+        let out = cheby(&dir, args);
+        assert_eq!(
+            (out.stdout.as_str(), out.stderr.as_str(), out.status),
+            ("", "", Some(0))
+        );
+        assert_eq!(names_in(&dir), [".gitignore", "cheby.toml", "src"]);
+    }
+    // D-1875: no file is written, so `-o` is refused.
+    let out = cheby(&dir, &["build", "-o", "geo"]);
+    assert_eq!(
+        (out.stdout.as_str(), out.stderr.as_str(), out.status),
+        (
+            "",
+            "error: package `geometry` is a library, so `cheby build` writes a file for `-o` only \
+             with the path of a module with `main`\n",
+            Some(1)
+        )
+    );
+    assert_eq!(names_in(&dir), [".gitignore", "cheby.toml", "src"]);
+}
+
 /// The skeleton runs and prints its greeting.
 #[test]
 #[cfg_attr(

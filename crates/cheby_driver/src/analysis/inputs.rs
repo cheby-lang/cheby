@@ -364,8 +364,16 @@ pub(crate) fn load(
         });
         modules.push(loaded);
     }
+    let dependencies = crate::dependencies::load_tolerant(
+        root,
+        &manifest,
+        &mut sources,
+        &mut diagnostics,
+        &mut tool,
+    );
     Ok(Loaded {
         package: Some(Package {
+            dependencies,
             root: root.to_path_buf(),
             manifest,
             modules,

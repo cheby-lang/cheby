@@ -19,7 +19,7 @@ CREATE TABLE discount_codes (
 );
 
 CREATE TABLE orders (
-  id             SERIAL  PRIMARY KEY,
+  id             INTEGER PRIMARY KEY,
   email          TEXT    NOT NULL,
   subtotal_cents INTEGER NOT NULL,
   discount_cents INTEGER NOT NULL,

@@ -1959,7 +1959,9 @@ impl EditorText for Snapshot {
             .filter_map(ModuleView::file)
             .filter_map(|file| match self.location(file)? {
                 FileLocation::Package(path) => Some(path.clone()),
-                FileLocation::Std(_) | FileLocation::Synthetic => None,
+                FileLocation::Std(_) | FileLocation::Dependency(_) | FileLocation::Synthetic => {
+                    None
+                }
             })
             .collect()
     }

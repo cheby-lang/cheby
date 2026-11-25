@@ -375,6 +375,7 @@ fn whole_std_package(
         return Err(Ice::new("std's whole-std root module does not parse").into());
     }
     Ok(Package {
+        dependencies: crate::dependencies::Dependencies::default(),
         root: PathBuf::new(),
         manifest,
         modules: vec![Module {

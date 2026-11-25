@@ -338,7 +338,10 @@ pub(crate) fn references(
             else {
                 continue;
             };
-            let in_std = matches!(snapshot.location(span.file), Some(FileLocation::Std(_)));
+            let in_std = matches!(
+                snapshot.location(span.file),
+                Some(FileLocation::Std(_) | FileLocation::Dependency(_))
+            );
             if in_std && !hits.contains(&(span.file, span.range)) {
                 hits.push((span.file, span.range));
             }

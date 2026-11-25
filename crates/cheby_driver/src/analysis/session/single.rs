@@ -189,6 +189,7 @@ impl Session {
             sources,
             phase,
             package: Package {
+                dependencies: crate::dependencies::Dependencies::default(),
                 root: self.root.clone(),
                 manifest,
                 modules: vec![module],

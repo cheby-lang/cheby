@@ -9,13 +9,15 @@
 //! - The later-tier examples, which import standard-library modules that
 //!   are planned but not shipped yet, fail with E0038 for those imports
 //!   only (D-451, D-480); warnings are allowed.
-//! - `030_shop_service` fails with E0036 only: its git dependency resolves
-//!   once fetching exists (D-446).
+//! - The git dependency of `030_shop_service` is fetched from its fixture
+//!   repository first (D-1889).
 
 use std::path::Path;
 use std::process::Command;
 
+use cheby_test_support::cache::{CACHE_ENV, FreshDir};
 use cheby_test_support::example;
+use cheby_test_support::git_fixture::Repositories;
 
 /// The examples that import unshipped standard-library modules. M2's first
 /// slice shipped `std::fiber`, `std::channel` and `std::duration`, so 005,
@@ -26,9 +28,6 @@ use cheby_test_support::example;
 /// `std::context` and `std::log` ship on native before M4's JS runtime, so
 /// no std module is planned (D-989, D-1563, D-1633).
 const LATER_TIER: [&str; 0] = [];
-
-/// The example whose dependency cannot resolve yet.
-const DEPENDENCY: &str = "030_shop_service";
 
 /// The example whose clean check allows one W0009, and the file that has
 /// it (D-663).
@@ -47,7 +46,15 @@ pub(crate) fn run(root: &Path) -> Result<(), String> {
     let mut failures = Vec::new();
     let examples = example::all(root)?;
     for ex in &examples {
-        let outcome = check(&cheby, &ex.dir)?;
+        // A cache of its own, so what is fetched is seen by this check only.
+        let store = if ex.has_git_dependencies() {
+            let store = FreshDir::create("cheby-check-examples")?;
+            Repositories::create()?.cheby(&cheby, "fetch", &ex.dir, store.path())?;
+            Some(store)
+        } else {
+            None
+        };
+        let outcome = check(&cheby, &ex.dir, store.as_ref())?;
         let verdict = judge(&ex.name, &outcome);
         match &verdict {
             Ok(note) => println!("ok    {}{note}", ex.name),
@@ -75,10 +82,15 @@ pub(crate) fn run(root: &Path) -> Result<(), String> {
     }
 }
 
-fn check(cheby: &Path, dir: &Path) -> Result<Outcome, String> {
+fn check(cheby: &Path, dir: &Path, store: Option<&FreshDir>) -> Result<Outcome, String> {
     let mut cmd = Command::new(cheby);
     cmd.args(["--color=never", "check"]).current_dir(dir);
-    crate::cache::apply(&mut cmd)?;
+    match store {
+        Some(store) => {
+            cmd.env(CACHE_ENV, store.path());
+        }
+        None => crate::cache::apply(&mut cmd)?,
+    }
     let out = cmd
         .output()
         .map_err(|e| format!("cannot run {}: {e}", cheby.display()))?;
@@ -115,14 +127,6 @@ fn header(line: &str, prefix: &str) -> Option<(String, String)> {
 /// Whether `outcome` is what `name` should give, with a note for the
 /// expected failures.
 fn judge(name: &str, outcome: &Outcome) -> Result<String, String> {
-    if name == DEPENDENCY {
-        let codes: Vec<&str> = outcome.errors.iter().map(|(c, _)| c.as_str()).collect();
-        return if !outcome.success && !codes.is_empty() && codes.iter().all(|&c| c == "E0036") {
-            Ok(" (E0036: its dependency cannot be fetched yet)".to_owned())
-        } else {
-            Err(format!("expected only E0036, got {codes:?}"))
-        };
-    }
     if LATER_TIER.contains(&name) {
         if outcome.success || outcome.errors.is_empty() {
             return Err("a later-tier example checks cleanly: remove it from the list".to_owned());

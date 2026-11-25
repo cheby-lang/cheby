@@ -1504,6 +1504,7 @@ pub(crate) fn std_test_package(
         return Err(Ice::new("the std self-test's root module does not parse").into());
     }
     Ok(Package {
+        dependencies: crate::dependencies::Dependencies::default(),
         root: PathBuf::new(),
         manifest,
         modules: vec![Module {
