@@ -4008,6 +4008,9 @@ fn will_rename_step(
         let mut reactions = Vec::new();
         editing::move_files(client, texts, moves, &mut reactions)?;
         settle.after(client, &reactions)?;
+        // A phase-A publish can come before the full run's, as in
+        // `check_applied`, so the publishes alone are not enough.
+        settle.wait(client)?;
     } else {
         let rules = editing::EditRules {
             new_errors: &header.new_errors,

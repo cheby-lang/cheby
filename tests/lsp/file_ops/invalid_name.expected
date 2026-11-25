@@ -20,6 +20,46 @@
       "severity": 1,
       "source": "cheby"
     }
+  ],
+  "src/main.cheby": [
+    {
+      "code": "E0039",
+      "codeDescription": {
+        "href": "https://github.com/cheby-lang/cheby/blob/main/docs/diagnostics/E0039.md"
+      },
+      "message": "there is no module `moves::util`\nno such module",
+      "range": {
+        "end": {
+          "character": 18,
+          "line": 4
+        },
+        "start": {
+          "character": 7,
+          "line": 4
+        }
+      },
+      "severity": 1,
+      "source": "cheby"
+    },
+    {
+      "code": "E0039",
+      "codeDescription": {
+        "href": "https://github.com/cheby-lang/cheby/blob/main/docs/diagnostics/E0039.md"
+      },
+      "message": "there is no module `moves::util`\nno such module",
+      "range": {
+        "end": {
+          "character": 18,
+          "line": 5
+        },
+        "start": {
+          "character": 7,
+          "line": 5
+        }
+      },
+      "severity": 1,
+      "source": "cheby"
+    }
   ]
 }
 

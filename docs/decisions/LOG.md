@@ -3183,3 +3183,14 @@ Open:
 - A version that changes while sources do not costs a second start. _Proposed:_ the index holds the version, when it is seen in a measurement.
 
 Spec: §13.12.2 follows D-1897. Tree-sitter: no change.
+
+## 2026-11-25: Faster test runs
+
+Goal: cut the time of the test suite, 63 to 106 minutes of nextest per CI platform on 2026-11-24.
+
+- **D-1900 The dev profile optimizes every crate at level 1**: `[profile.dev]` sets `opt-level = 1`. The overrides of Cranelift's crates and `regalloc2` (3) and of `cheby_runtime` (2) stay, and so do `debug-assertions`, `overflow-checks` and line tables. Why: the tests run the compiler far more than they build it, and `cheby_driver` and the LSP harness, 67% of the test time of `ci.yml` run 45342687942 on Linux x86-64, spend it in front-end code that was not optimized. On an Apple M3, five samples used 5.7 to 7.7 times less CPU: `snapshot_count_stays_one` 50.5 s to 6.6 s, the 75 completion goldens 96.8 s to 13.5 s, `rename_sweep/008_json` 37.7 s to 5.6 s, `lowering_reports_no_e0038` 162.6 s to 26.0 s and `no_path_tests_a_position_twice` 153.7 s to 27.2 s. A cold build of the workspace takes 1,094 s of CPU in place of 563 s, and a rebuild after an edit of a body in `cheby_types` took the same, 24 s. The machine was under other load, so CPU times are given and not wall times. The optimized server exposed a race in the LSP harness: a `willRename` step that the server refuses waited for the moved document's publish only, which may be phase A's, so `golden/file_ops/invalid_name` pinned a list without the E0039s of the full run. The step now waits for the server to catch up, as the applied-edit check does (D-1676). Rejected: one override per compiler crate, which is easy to forget for a new crate, and optimizing only in CI, since local runs spend the same time.
+
+Open:
+
+- The sanitizer jobs use the dev profile too and have not run with it.
+- The LSP trials' `threads-required = 2` (D-1555). _Proposed:_ 1, if CI still waits on slots with D-1900.

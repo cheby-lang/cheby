@@ -185,8 +185,12 @@ negative_feature_names = "deny"
 redundant_feature_names = "deny"
 wildcard_dependencies = "deny"
 
+# The tests run the compiler far more than they build it, and most of their
+# time was unoptimized front-end code (D-1900). `debug-assertions` and
+# `overflow-checks` stay on.
 [profile.dev]
 debug = "line-tables-only"
+opt-level = 1
 
 # The debug toolchain compiles Cheby code with an optimized Cranelift and
 # runs it on an optimized runtime (plan §4.4); `debug-assertions` stay on,
