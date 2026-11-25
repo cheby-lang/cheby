@@ -284,7 +284,7 @@ pub interface Show {
 
 The built-in numeric types, `String` (whose `show` returns the string unchanged), `Bool` and `Nil` satisfy `Show`. `List`, `Option` and `Result` satisfy it conditionally on their element types (D-064), and tuples satisfy it by a built-in rule when all their element types do (D-167). Their text uses the punctuation of debug printing with each element written by its own `show`, so `["a", "b"]` shows as `[a, b]` (D-355).
 
-`Map`, `Set` and `multimap` do not satisfy `Show`, because their iteration order changes between runs (D-093). A program picks an order itself, for example with `map::to_sorted_list`, or uses `{x:?}`, which prints them sorted ([§3.13](03-types.md#313-equality-hashing-and-debug-printing)). The sorted and insertion-ordered collections ([§3.8](03-types.md#38-list-map-and-set)) satisfy `Show` when their element types do, and show their entries in their own order (D-344).
+`Map`, `Set` and `multimap` do not satisfy `Show`, because their iteration order changes between runs (D-093). A program picks an order itself, for example with `map::to_sorted_list`, or uses `{x:?}`, which prints them sorted ([§3.13](03-types.md#313-equality-hashing-and-debug-printing)). The sorted and insertion-ordered collections ([§3.8](03-types.md#38-list-map-and-set)) satisfy `Show` when their element types do, and show their entries in their own order (D-344). `secret::Secret<T>` satisfies `Show` for every `T`, and its text is always `<redacted>` (D-1903).
 
 A type's text is produced only by its `show` function. The standard library has no `to_string` functions for this, so `int::show(n)` is the way to name the text of an `Int` (D-307).
 
