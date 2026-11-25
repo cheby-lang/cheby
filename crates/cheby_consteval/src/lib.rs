@@ -118,8 +118,21 @@ pub struct ConstEvalConfig {
     pub time_limit: Duration,
     /// Peak live bytes of the build while a constant is evaluated (D-536).
     pub memory_limit: u64,
+    /// The time and memory limits of the constants of dependencies, which
+    /// are their own packages' (D-1869).
+    pub overrides: BTreeMap<DefId, (Duration, u64)>,
     /// The package's targets (E0078, D-540).
     pub targets: Targets,
+}
+
+impl ConstEvalConfig {
+    /// The time and memory limits of a top-level evaluation of `def`.
+    fn limits_of(&self, def: DefId) -> (Duration, u64) {
+        self.overrides
+            .get(&def)
+            .copied()
+            .unwrap_or((self.time_limit, self.memory_limit))
+    }
 }
 
 /// One constant to evaluate.
@@ -642,11 +655,12 @@ fn over_limit(
     config: &ConstEvalConfig,
 ) -> Diagnostic {
     let name = &top.name;
+    let (time_limit, memory_limit) = config.limits_of(top.def);
     let (message, note, help) = match limit {
         Limit::Time => (
             format!(
                 "evaluating the constant `{name}` took longer than the time limit of {}",
-                duration_text(config.time_limit)
+                duration_text(time_limit)
             ),
             TIME_LIMIT_NOTE.to_owned(),
             "compute less at compile time, or raise `time-limit` in the `[const-eval]` table of \
@@ -655,7 +669,7 @@ fn over_limit(
         Limit::Memory => (
             format!(
                 "evaluating the constant `{name}` used more than the memory limit of {}",
-                bytes_text(config.memory_limit)
+                bytes_text(memory_limit)
             ),
             "the limit counts the heap bytes that the evaluation keeps live at once".to_owned(),
             "compute less at compile time, or raise `memory-limit` in the `[const-eval]` table \
@@ -705,9 +719,10 @@ fn bytes_text(limit: u64) -> String {
 /// The limits of one top-level evaluation and its seed (D-536, D-538).
 /// The runtime enforces the limits from W4-C on.
 fn limits(info: &ConstInfo, config: &ConstEvalConfig) -> ConstEvalLimits {
+    let (time_limit, memory_limit) = config.limits_of(info.def);
     ConstEvalLimits {
-        deadline: Instant::now().checked_add(config.time_limit),
-        memory: Some(config.memory_limit),
+        deadline: Instant::now().checked_add(time_limit),
+        memory: Some(memory_limit),
         seed: info.seed,
     }
 }

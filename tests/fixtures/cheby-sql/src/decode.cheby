@@ -1,0 +1,98 @@
+//! Reads rows the way `std::json::decode` reads objects: each `use` reads one
+//! column by its name and checks its type.
+
+import std::list
+import std::option
+import std::result
+
+/// A value of a row: an integer, a text, or `None` for SQL's `NULL`.
+type Cell {
+  Cell(Option<Result<Int, String>>),
+}
+
+/// A row, as the names of its columns and its cells.
+type Row {
+  names: List<String>,
+  cells: List<Cell>,
+}
+
+/// Reads a `T` from a row.
+pub type Decoder<T> {
+  Decoder(fn(Row) -> Result<T, String>),
+}
+
+/// Reads a `T` from one column.
+pub type Column<T> {
+  Column(fn(Cell) -> Result<T, String>),
+}
+
+/// Runs `decoder` on a row.
+fn run<T>(decoder: Decoder<T>, row: Row) -> Result<T, String> {
+  let Decoder(read) = decoder
+  read(row)
+}
+
+/// Reads the column `name` with `kind`, then goes on with its value.
+pub fn column<T, U>(name: String, kind: Column<T>, next: fn(T) -> Decoder<U>) -> Decoder<U> {
+  Decoder(fn(row: Row) {
+    let Column(read) = kind
+    let at = position(row.names, name, 0)
+    let cell = option::to_result(option::then(at, fn(n) { list::get(row.cells, n) }), Nil)
+    use found <- result::try(result::map_error(cell, fn(_) { "no column `{name}`" }))
+    let value = result::map_error(read(found), fn(problem) { "column `{name}`: {problem}" })
+    use decoded <- result::try(value)
+    run(next(decoded), row)
+  })
+}
+
+/// An integer.
+pub fn int() -> Column<Int> {
+  Column(fn(cell) {
+    case cell {
+      Cell(Some(Ok(n))) => Ok(n)
+      _ => Err("expected an integer")
+    }
+  })
+}
+
+/// A text.
+pub fn text() -> Column<String> {
+  Column(fn(cell) {
+    case cell {
+      Cell(Some(Err(found))) => Ok(found)
+      _ => Err("expected a text")
+    }
+  })
+}
+
+/// `NULL` as `None`, and any other value with `kind`.
+pub fn nullable<T>(kind: Column<T>) -> Column<Option<T>> {
+  Column(fn(cell) {
+    case cell {
+      Cell(None) => Ok(None)
+      _ => {
+        let Column(read) = kind
+        result::map(read(cell), Some)
+      }
+    }
+  })
+}
+
+/// Reads nothing more, and gives `value`.
+pub fn success<T>(value: T) -> Decoder<T> {
+  Decoder(fn(_) { Ok(value) })
+}
+
+/// Fails: the row should hold `expected`.
+pub fn failure<T>(expected: String) -> Decoder<T> {
+  Decoder(fn(_) { Err("expected {expected}") })
+}
+
+/// Where `name` is among `names`.
+priv fn position(names: List<String>, name: String, at: Int) -> Option<Int> {
+  case names {
+    [] => None
+    [first, ..] when first == name => Some(at)
+    [_, ..rest] => position(rest, name, at + 1)
+  }
+}

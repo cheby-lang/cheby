@@ -6,13 +6,15 @@
 //! thread variants of the conformance trials (D-722, docs/plan/testing.md),
 //! each harness's fresh `CHEBY_CACHE` (D-959), the `@aot` trial of the
 //! conformance harness (D-1025), the HTTP fixture of the examples
-//! (D-1027), and the language server harness's client, golden tests and
+//! (D-1027), the repositories of their git dependencies (D-1889), sessions
+//! with a server (D-1892), and the language server harness's client, golden tests and
 //! diagnostics parity (D-1352, D-1348).
 
 pub mod aot;
 pub mod cache;
 pub mod decisions;
 pub mod example;
+pub mod git_fixture;
 pub mod golden;
 pub mod http_fixture;
 pub mod lsp;
@@ -21,6 +23,7 @@ pub mod platform;
 pub mod process;
 pub mod progen;
 pub mod repl;
+pub mod session;
 pub mod threads;
 pub mod ui;
 

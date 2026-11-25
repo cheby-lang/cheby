@@ -112,6 +112,16 @@
 //! share it. Any other `{…}` word there fails the trial. An example
 //! without the placeholder starts no server.
 //!
+//! Git dependencies (D-1889, `cheby_test_support::git_fixture`): a trial of
+//! an example with a `cheby.lock` makes the fixture repositories, fetches
+//! from them into a cache of its own, and then runs as any other.
+//!
+//! Sessions (D-1892, `cheby_test_support::session`): an example that serves,
+//! 030, is `skip-run`, since no plain run of it ends. Its trial
+//! `<name>@session` makes its database, serves the requests of `session` with
+//! `cheby run` and with an executable, and compares the responses with
+//! `expected.session`. It needs SQLite's header and library.
+//!
 //! The cache (D-959, `cheby_test_support::cache`): the harness creates one
 //! fresh owner-only directory in the system's temporary directory when it
 //! starts and gives it to every child, `cheby` or an executable, as
@@ -133,9 +143,10 @@ use std::time::Duration;
 
 use cheby_test_support::cache::{FreshDir, HarnessCache};
 use cheby_test_support::example::{self, Example};
+use cheby_test_support::git_fixture::Repositories;
 use cheby_test_support::milestone::{Expectation, Setting, Verdicts};
 use cheby_test_support::threads::{self, Variant};
-use cheby_test_support::{aot, bless_enabled, golden, platform, process, repo_root};
+use cheby_test_support::{aot, bless_enabled, golden, platform, process, repo_root, session};
 use libtest_mimic::{Arguments, Trial};
 
 const CHEBY: &str = env!("CARGO_BIN_EXE_cheby");
@@ -246,6 +257,20 @@ fn example_trials(
             })
         })
         .collect();
+    if ex.has_session() {
+        let base = Run {
+            variant: Variant::Unset,
+            timeout,
+            cache: Arc::clone(cache),
+        };
+        trials.push(session_trial(
+            ex.clone(),
+            current,
+            verdicts.clone(),
+            bless,
+            base,
+        ));
+    }
     if !ex.config.skip_run {
         let base = Run {
             variant: Variant::Unset,
@@ -360,16 +385,15 @@ fn run_trial(ex: Example, current: Setting, verdicts: Verdicts, bless: bool, run
 /// (D-445). At the milestone it is pending too, and after it `cheby test`
 /// must pass (D-288).
 ///
-/// A `skip-run` example's tests need its fixture as much as its run does:
-/// 020's tests call the C library's symbols, which must resolve when the
-/// program loads (D-455), and 030's modules import a git dependency that
-/// only the fixture repository serves. The harness has no way yet to give
-/// `cheby test` a fixture (OQ-P9), so that trial is always pending.
+/// A `skip-run` example's tests need its fixture as much as its run does.
+/// The harness gives `cheby test` the repositories of git dependencies
+/// ([`with_dependencies`]), so an example with a session has the usual
+/// expectation. Any other `skip-run` example's trial is always pending.
 ///
 /// Both kinds of "pending before the milestone" are tolerated: a strict run
 /// (D-544) requires the trial only at its milestone and after it.
 fn test_expectation(ex: &Example, current: Setting) -> Expectation {
-    if ex.config.skip_run {
+    if ex.config.skip_run && !ex.has_session() {
         return Expectation::Tolerated;
     }
     match current.expectation(ex.config.milestone) {
@@ -384,14 +408,17 @@ fn test_trial(ex: Example, current: Setting, verdicts: Verdicts, run: Run) -> Tr
     let expectation = test_expectation(&ex, current);
     let name = run.variant.trial_name(&format!("{}::test", ex.name));
     Trial::test(name.clone(), move || {
-        let result = cheby(&ex.dir, &["test"], &[], None, &run).and_then(|out| match out.status {
-            Some(0) => Ok(()),
-            _ => Err(format!(
-                "`cheby test` failed ({})\nstdout:\n{}\nstderr:\n{}",
-                out.describe_status(),
-                out.stdout,
-                out.stderr
-            )),
+        let result = with_dependencies(&ex, &run).and_then(|run| {
+            let out = cheby(&ex.dir, &["test"], &[], None, &run)?;
+            match out.status {
+                Some(0) => Ok(()),
+                _ => Err(format!(
+                    "`cheby test` failed ({})\nstdout:\n{}\nstderr:\n{}",
+                    out.describe_status(),
+                    out.stdout,
+                    out.stderr
+                )),
+            }
         });
         verdicts.judge(&name, ex.config.milestone, expectation, result)?;
         Ok(())
@@ -400,10 +427,114 @@ fn test_trial(ex: Example, current: Setting, verdicts: Verdicts, run: Run) -> Tr
     .with_ignored_flag(platform::runs_skipped())
 }
 
+/// `run` with the git dependencies of `ex` downloaded from the fixture
+/// repositories (D-1889): into a cache of its own, so that no other trial's
+/// result depends on whether they are. An example without any keeps `run`.
+fn with_dependencies(ex: &Example, run: &Run) -> Result<Run, String> {
+    if !ex.has_git_dependencies() {
+        return Ok(run.clone());
+    }
+    let cache = HarnessCache::create_with("conformance-dependencies", None)?;
+    Repositories::create()?.cheby(Path::new(CHEBY), "fetch", &ex.dir, cache.path())?;
+    Ok(Run {
+        cache: Arc::new(cache),
+        ..run.clone()
+    })
+}
+
+/// The trial `<name>@session` of an example that serves (D-1892): its
+/// `setup` module makes a database, then `cheby run` and the executable that
+/// `cheby build` made each serve the session's requests, and are stopped.
+/// Blessing writes `cheby.lock` and `expected.session` again.
+fn session_trial(
+    ex: Example,
+    current: Setting,
+    verdicts: Verdicts,
+    bless: bool,
+    run: Run,
+) -> Trial {
+    let milestone = ex.config.milestone;
+    let expectation = current.expectation(milestone);
+    let name = format!("{}@session", ex.name);
+    Trial::test(name.clone(), move || {
+        let result = check_session(&ex, &run, bless && expectation != Expectation::Fail);
+        verdicts.judge(&name, milestone, expectation, result)?;
+        Ok(())
+    })
+    .with_kind(expectation.kind())
+    .with_ignored_flag(platform::executables_skipped())
+}
+
+fn check_session(ex: &Example, run: &Run, bless: bool) -> Result<(), String> {
+    if bless {
+        let cache = FreshDir::create("cheby-bless-lock")?;
+        Repositories::create()?.cheby(Path::new(CHEBY), "update", &ex.dir, cache.path())?;
+    }
+    let run = with_dependencies(ex, run)?;
+    let read = |name: &str| golden::read(&ex.dir.join(name));
+    let requests = read("session")?.ok_or("missing session")?;
+    let tmp = FreshDir::create("cheby-session")?;
+    let executable = tmp.path().join("server").to_string_lossy().into_owned();
+    succeeds(&ex.dir, &["build", "-o", &executable], &[], &run)?;
+    let setup = format!(
+        "{}::setup",
+        ex.name
+            .trim_start_matches(|c: char| c.is_ascii_digit())
+            .trim_start_matches('_')
+    );
+    let mut responses = Vec::new();
+    for served in ["run", "executable"] {
+        let database = tmp.path().join(format!("{served}.db"));
+        let url = (
+            "DATABASE_URL".to_owned(),
+            format!("sqlite:{}", database.display()),
+        );
+        succeeds(&ex.dir, &["run", &setup], std::slice::from_ref(&url), &run)?;
+        let answers = session::run(&requests, |port| {
+            let mut cmd = if served == "run" {
+                let mut cmd = Command::new(CHEBY);
+                cmd.args(["--color=never", "run"]);
+                cmd
+            } else {
+                Command::new(&executable)
+            };
+            let env = [url, ("PORT".to_owned(), port.to_string())];
+            cmd.current_dir(&ex.dir);
+            child_env(&mut cmd, &env, run.variant, &run);
+            cmd
+        })
+        .map_err(|e| format!("{served}: {e}"))?;
+        responses.push((served, answers));
+    }
+    if bless && let Some((_, answers)) = responses.first() {
+        golden::write(&ex.dir.join("expected.session"), answers, true)?;
+    }
+    let expected = read("expected.session")?
+        .ok_or("missing expected.session; record it with `cargo xtask bless`")?;
+    for (served, answers) in responses {
+        golden::compare(&format!("session of the {served}"), &expected, &answers)?;
+    }
+    Ok(())
+}
+
+/// Runs `cheby`, which must succeed.
+fn succeeds(dir: &Path, args: &[&str], env: &[(String, String)], run: &Run) -> Result<(), String> {
+    let out = cheby(dir, args, env, None, run)?;
+    match out.status {
+        Some(0) => Ok(()),
+        _ => Err(format!(
+            "`cheby {}` failed ({})\n{}",
+            args.join(" "),
+            out.describe_status(),
+            out.stderr
+        )),
+    }
+}
+
 /// Runs the example and compares the result with its goldens.
 fn check_example(ex: &Example, run: &Run) -> Result<(), String> {
     if ex.config.skip_run {
-        let out = cheby(&ex.dir, &["check"], &[], None, run)?;
+        let out = cheby(&ex.dir, &["check"], &[], None, &with_dependencies(ex, run)?)?;
         return match out.status {
             Some(0) => Ok(()),
             _ => Err(format!(

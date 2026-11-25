@@ -20,9 +20,9 @@ use crate::parse_file;
 const MANIFEST: &str = "name = \"app\"\nversion = \"0.1.0\"\n";
 /// Not TOML: the manifest gives nothing.
 const MANIFEST_UNUSABLE: &str = "name = \n";
-/// A manifest with an error that still gives a manifest (example 030's).
+/// A manifest with an error that still gives a manifest: a reserved key.
 const MANIFEST_USABLE: &str = "name = \"app\"\nversion = \"0.1.0\"\n\n[dependencies]\n\
-                               sql = { git = \"https://example.com/sql\", tag = \"v1.0.0\" }\n";
+                               std = { git = \"https://example.com/sql\", tag = \"v1.0.0\" }\n";
 
 const MAIN: &str = "//! Root.\n\nimport app::b\n\nfn main() {\n  let _ = b::g()\n}\n";
 const B: &str = "//! B.\n\npub fn g() -> Int {\n  2\n}\n";
@@ -559,6 +559,7 @@ fn manifest_never_good_is_syntax_only() {
 }
 
 #[test]
+#[cfg_attr(windows, ignore = "git dependencies on Windows are M6 (D-1878)")]
 fn example_030_reports_e0036_only() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../docs/examples/030_shop_service");
     let mut s = Session::new(SessionConfig {

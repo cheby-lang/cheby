@@ -155,6 +155,10 @@ pub(crate) enum Roots<'a> {
     /// Every function of the local package, lowered and compiled, nothing
     /// evaluated or run (the code-generation benchmark of I1, plan §8.5).
     AllFunctions,
+    /// Every function of the local package, through `cheby run`'s code
+    /// records (D-1285, D-1899), nothing evaluated or run: `cheby build` in
+    /// a library (D-1852).
+    Library,
 }
 
 /// One test to run, with its module.
@@ -530,7 +534,7 @@ pub(crate) fn build_scoped(
         write_dump(&dir.join("clif.txt"), &jit.take_clif().join("\n"))?;
     }
     match roots {
-        Roots::AllFunctions => {
+        Roots::AllFunctions | Roots::Library => {
             if let Some(dir) = dump {
                 write_dump(&dir.join("consts.txt"), "")?;
             }
@@ -703,6 +707,10 @@ fn evaluate_in(
         // The manifest's `[const-eval]` limits (D-536).
         time_limit: front.const_eval_time_limit,
         memory_limit: front.const_eval_memory_limit,
+        overrides: infos
+            .iter()
+            .filter_map(|info| Some((info.def, front.dependency_limits(info.def.module)?)))
+            .collect(),
         targets: front.package_targets,
     };
     // D-1123: constant evaluation reads the
@@ -812,7 +820,7 @@ pub(crate) const fn kind_options(roots: &Roots<'_>, mir: MirOptions, scope: Scop
     let plain = match roots {
         Roots::Constants => matches!(scope, Scope::Whole),
         Roots::Evaluate(_) => true,
-        Roots::Main(_) | Roots::Tests(_) | Roots::AllFunctions => false,
+        Roots::Main(_) | Roots::Tests(_) | Roots::AllFunctions | Roots::Library => false,
     };
     if plain {
         MirOptions {
@@ -867,6 +875,7 @@ fn write_mir_dumps(dir: &Path, units: &[MirModule]) -> Result<(), Ice> {
             UnitKind::Tests(_) => format!("{}.tests.mir", unit.path),
             UnitKind::Entries => "entries.mir".to_owned(),
         };
+        let name = name.replace('/', "%");
         write_dump(&dir.join("mir").join(name), &cheby_mir::dump(unit)?)?;
     }
     Ok(())
@@ -1232,7 +1241,7 @@ fn lower_reached(
             }
         }
         Roots::Constants => constant_roots(front, &local, &mut walk_roots, &mut starts)?,
-        Roots::AllFunctions => {
+        Roots::AllFunctions | Roots::Library => {
             for &module in &local {
                 let fns = &checked(front, module)?.thir.fns;
                 walk_roots.extend(fns.iter().map(Root::Fn));
@@ -1266,7 +1275,7 @@ fn lower_reached(
     let const_entries = match roots {
         Roots::Constants | Roots::Evaluate(_) => true,
         Roots::Main(_) | Roots::Tests(_) => scope == Scope::Reached,
-        Roots::AllFunctions => false,
+        Roots::AllFunctions | Roots::Library => false,
     };
     if const_entries {
         for def in reach.constant_order() {
@@ -1567,7 +1576,8 @@ const fn std_options(roots: &Roots<'_>, mir: MirOptions) -> MirOptions {
         | Roots::Tests(_)
         | Roots::Constants
         | Roots::Evaluate(_)
-        | Roots::AllFunctions => MirOptions {
+        | Roots::AllFunctions
+        | Roots::Library => MirOptions {
             record_sites: false,
             ..mir
         },
@@ -2999,6 +3009,7 @@ fn main() {
             mode: ConstMode::Check,
             time_limit: Manifest::DEFAULT_TIME_LIMIT,
             memory_limit: Manifest::DEFAULT_MEMORY_LIMIT,
+            overrides: BTreeMap::new(),
             targets: Targets::ALL,
         };
         // The evaluation module of these constants (D-978).
@@ -3612,6 +3623,7 @@ fn main() {
             .map(|entry| entry.unwrap().path())
             .filter(|dir| dir.join("cheby.toml").is_file())
             .filter(|dir| !crate::native::not_yet_here(dir))
+            .filter(|dir| !crate::dependencies::not_yet_here(dir))
             .collect();
         dirs.sort();
         dirs

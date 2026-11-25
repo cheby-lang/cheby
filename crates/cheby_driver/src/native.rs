@@ -38,6 +38,7 @@
 //! (D-973). The tool errors' texts are plan §7 Q6 (4)'s
 //! (D-1201).
 
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -107,6 +108,37 @@ impl PackageNative {
     pub(crate) fn libraries(&self) -> Vec<Arc<NativeLibrary>> {
         self.library.iter().cloned().collect()
     }
+}
+
+/// Two packages of a build may not define one C name (D-1890): an executable
+/// could not link both, and a JIT would call the first for either. Each
+/// package comes with the name messages have for it, which two packages may
+/// share (D-1857).
+///
+/// # Errors
+///
+/// A tool error that names both packages and the C name.
+pub(crate) fn check_packages<'a>(
+    packages: impl Iterator<Item = (&'a str, &'a PackageNative)>,
+) -> Result<(), Error> {
+    let mut defined: BTreeMap<String, (usize, &str)> = BTreeMap::new();
+    for (index, (package, native)) in packages.enumerate() {
+        for (source, object) in &native.objects {
+            let names = shlib::defined_symbols(object)
+                .map_err(|e| Error::new(format!("`{source}`: {e}")))?;
+            for name in names {
+                if let Some((of, first)) = defined.insert(name.clone(), (index, package))
+                    && of != index
+                {
+                    return Err(Error::new(format!(
+                        "the native code of packages `{first}` and `{package}` both defines `{name}`; \
+                         make the C function `static` in one, or give it another name"
+                    )));
+                }
+            }
+        }
+    }
+    Ok(())
 }
 
 /// Compiles and loads the native code of the package `package` at `root`

@@ -106,6 +106,7 @@ dependencies = [
  "cheby_link",
  "cheby_mir",
  "cheby_package",
+ "cheby_pkg",
  "cheby_resolve",
  "cheby_runtime",
  "cheby_syntax",
@@ -193,6 +194,16 @@ name = "cheby_package"
 version = "0.0.0"
 dependencies = [
  "cheby_diag",
+ "toml",
+]
+
+[[package]]
+name = "cheby_pkg"
+version = "0.0.0"
+dependencies = [
+ "cheby_diag",
+ "cheby_package",
+ "ring",
  "toml",
 ]
 

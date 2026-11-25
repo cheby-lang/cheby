@@ -208,7 +208,7 @@ impl FixCx<'_> {
         let file = self.view.file()?;
         match self.analyzed.snapshot.location(file)? {
             FileLocation::Package(path) => Some(path),
-            FileLocation::Std(_) | FileLocation::Synthetic => None,
+            FileLocation::Std(_) | FileLocation::Dependency(_) | FileLocation::Synthetic => None,
         }
     }
 }

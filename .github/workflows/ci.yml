@@ -156,6 +156,13 @@ jobs:
       - uses: taiki-e/install-action@v2
         with:
           tool: nextest@0.9.151
+      # Example 030's dependency, `tests/fixtures/cheby-sql`, links the
+      # system's SQLite (D-1889); macOS has it.
+      - name: SQLite (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libsqlite3-dev
       - run: cargo build --workspace --all-targets --locked
       # `cheby build` links the runtime archive next to `cheby`, which
       # nextest does not build (D-929).

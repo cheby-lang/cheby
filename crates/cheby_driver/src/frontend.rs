@@ -87,10 +87,18 @@ pub(crate) struct Frontend {
     pub package_targets: Targets,
     /// The local package's name: the first segment of its module paths.
     pub package_name: String,
+    /// What the first segment of an import means in each package.
+    pub(crate) names: crate::dependencies::PackageNames,
+    /// The local package's kind (D-1851).
+    pub package_kind: cheby_package::Kind,
     /// The local package's `[const-eval] time-limit` (D-536).
     pub const_eval_time_limit: std::time::Duration,
     /// The local package's `[const-eval] memory-limit` in bytes (D-536).
     pub const_eval_memory_limit: u64,
+    /// The `[const-eval]` limits of each dependency (D-1869).
+    pub(crate) dependency_limits: BTreeMap<PackageId, (std::time::Duration, u64)>,
+    /// The absolute path of each module file of a dependency.
+    pub(crate) dependency_files: BTreeMap<FileId, std::path::PathBuf>,
     /// The local package's `[runtime] fiber-stack` in bytes (D-660): the
     /// default stack of the fibers its runs and tests spawn.
     pub fiber_stack: u64,
@@ -119,6 +127,9 @@ pub(crate) struct Frontend {
     /// mode once the package checks; empty in `Check` mode, which compiles
     /// no C (D-532), and for a package without `[native]`.
     pub native: crate::native::PackageNative,
+    /// The native code of each dependency that has some, in build order
+    /// (D-941), prepared with [`Self::native`].
+    pub(crate) dependency_native: Vec<crate::native::PackageNative>,
     /// Where borrowing inference writes its records and logs its code
     /// keys (K4b, D-969): the cache's store and lookup log and each
     /// package module's front identity; `None` without a cache.
@@ -339,10 +350,26 @@ impl Frontend {
     }
 
     /// The package libraries a JIT of this build resolves native symbols
-    /// in, in build order (D-941): the local package's, if it has native
-    /// code.
+    /// in, in build order (D-941): those of the dependencies, then the local
+    /// package's.
     pub(crate) fn native_libraries(&self) -> Vec<Arc<cheby_jit::NativeLibrary>> {
-        self.native.libraries()
+        self.all_native()
+            .flat_map(crate::native::PackageNative::libraries)
+            .collect()
+    }
+
+    /// The native code of every package, in build order.
+    pub(crate) fn all_native(&self) -> impl Iterator<Item = &crate::native::PackageNative> {
+        self.dependency_native
+            .iter()
+            .chain(std::iter::once(&self.native))
+    }
+
+    /// The time and memory limits of the constants of `module` when it is a
+    /// dependency's (D-1869).
+    pub(crate) fn dependency_limits(&self, module: ModuleId) -> Option<(std::time::Duration, u64)> {
+        let package = self.modules.get(module)?.package;
+        self.dependency_limits.get(&package).copied()
     }
 
     /// The local module at `path`, if the package has it.
@@ -403,7 +430,7 @@ impl Frontend {
 
 /// Maps written import paths to modules, loading std modules on first use.
 struct DriverLookup<'a> {
-    package: &'a str,
+    names: &'a crate::dependencies::PackageNames,
     modules: &'a mut ModuleTable,
     sources: &'a mut SourceMap,
     trees: &'a mut Vec<Option<SyntaxTree>>,
@@ -423,14 +450,6 @@ struct DriverLookup<'a> {
 }
 
 impl DriverLookup<'_> {
-    fn local_paths(&self) -> Vec<String> {
-        self.modules
-            .iter()
-            .filter(|(_, info)| info.package == PackageId::LOCAL)
-            .map(|(_, info)| info.path.to_string())
-            .collect()
-    }
-
     fn load_std(&mut self, path: &str, module_path: ModulePath) -> Result<ModuleId, Ice> {
         let _std = crate::phases::span(crate::phases::Phase::Std);
         // A checkout's module is preloaded with its tree, a broken one
@@ -504,32 +523,17 @@ impl DriverLookup<'_> {
 }
 
 impl ModuleLookup for DriverLookup<'_> {
-    fn lookup(&mut self, _from: PackageId, path: &[&str]) -> Result<Lookup, Ice> {
+    fn lookup(&mut self, from: PackageId, path: &[&str]) -> Result<Lookup, Ice> {
         let Some((&first, rest)) = path.split_first() else {
             return Err(Ice::new("an import with an empty path"));
         };
-        let module_path = rest
-            .iter()
-            .fold(ModulePath::root(first), |p, segment| p.child(segment));
-        if first == self.package {
-            if rest == ["main"] {
-                return Ok(Lookup::RootByMainSegment);
-            }
-            if let Some(id) = self.modules.find(&module_path) {
-                return Ok(Lookup::Found(id));
-            }
-            let text = module_path.to_string();
-            let candidates = self.local_paths();
-            let closest =
-                closest_name(&text, candidates.iter().map(String::as_str)).map(str::to_owned);
-            return Ok(Lookup::NoModule {
-                package: PackageId::LOCAL,
-                closest,
-            });
+        if let Some(found) = lookup_package(self.names, self.modules, from, first, rest) {
+            return Ok(found);
         }
         if first != "std" {
             return Ok(Lookup::NoPackage);
         }
+        let module_path = module_path(first, rest);
         if let Some(id) = self.modules.find(&module_path) {
             return Ok(Lookup::Found(id));
         }
@@ -562,6 +566,63 @@ impl ModuleLookup for DriverLookup<'_> {
             closest,
         })
     }
+}
+
+/// Where the `test` blocks of a module are.
+fn test_ranges(tree: &SyntaxTree) -> Vec<cheby_diag::TextRange> {
+    use cheby_syntax::ast::{AstNode as _, Item, SourceFile};
+    SourceFile::cast(tree.root())
+        .into_iter()
+        .flat_map(|file| file.items().collect::<Vec<_>>())
+        .filter(|item| matches!(item, Item::Test(_)))
+        .map(|item| item.significant_span().range)
+        .collect()
+}
+
+/// The module path whose segments are `first` and `rest`.
+pub(crate) fn module_path(first: &str, rest: &[&str]) -> ModulePath {
+    rest.iter()
+        .fold(ModulePath::root(first), |p, segment| p.child(segment))
+}
+
+/// Where the path of `first` and `rest` leads in a module of `from`, when
+/// `first` names the package itself or one of its dependencies there (§7.5,
+/// D-238); `None` when it names neither.
+pub(crate) fn lookup_package(
+    names: &crate::dependencies::PackageNames,
+    modules: &ModuleTable,
+    from: PackageId,
+    first: &str,
+    rest: &[&str],
+) -> Option<Lookup> {
+    let (package, own) = names.find(from, first)?;
+    if rest == ["main"] {
+        return Some(Lookup::RootByMainSegment);
+    }
+    if let Some(id) = modules.find(&module_path(own, rest)) {
+        return Some(Lookup::Found(id));
+    }
+    let text = module_path(first, rest).to_string();
+    let candidates = package_paths(modules, package, first);
+    let closest = closest_name(&text, candidates.iter().map(String::as_str)).map(str::to_owned);
+    Some(Lookup::NoModule { package, closest })
+}
+
+/// The module paths of `package` that have a file, with `first` as their
+/// first segment, as the importing module writes them.
+fn package_paths(modules: &ModuleTable, package: PackageId, first: &str) -> Vec<String> {
+    modules
+        .iter()
+        .filter(|(_, info)| info.package == package && info.file.is_some())
+        .map(|(_, info)| {
+            info.path
+                .segments()
+                .iter()
+                .skip(1)
+                .fold(ModulePath::root(first), |p, segment| p.child(segment))
+                .to_string()
+        })
+        .collect()
 }
 
 /// The hidden reads among `read`, the modules a recording view of
@@ -830,7 +891,7 @@ pub(crate) fn check_extra_module(
     // Imports, against `front`'s modules.
     let requests = collect_imports(&tree, &front.globals.names);
     let mut lookup = ExtraLookup {
-        package: &front.package_name,
+        names: &front.names,
         modules: &table,
     };
     let (found, import_diags) = resolve_import_targets(
@@ -878,7 +939,7 @@ pub(crate) fn check_extra_module(
         &mut diags,
     );
     bind_natives(bindings, &mut natives, &mut diags);
-    let (thir, body_diags) = check_bodies_with(&types, &iface, Tests::SkipStd)?;
+    let (thir, body_diags) = check_bodies_with(&types, &iface, Tests::SkipOthers)?;
     diags.extend(body_diags);
     if diags.iter().any(Diagnostic::is_error) {
         return Ok(Err(diags));
@@ -981,11 +1042,11 @@ pub(crate) fn check_reloaded(
     let natives = native_bindings(&resolved, &iface, &front.globals);
     let iface = Arc::new(iface);
     front.set.publish(Arc::clone(&iface))?;
-    let (thir, found) = check_bodies_with(&types, &iface, Tests::SkipStd)?;
+    let (thir, found) = check_bodies_with(&types, &iface, Tests::SkipOthers)?;
     diags.extend(found);
     #[cfg(test)]
     let thir = drop_for_test(&types, thir);
-    let dropped = cheby_types::dropped_body(&types, &thir, Tests::SkipStd);
+    let dropped = cheby_types::dropped_body(&types, &thir, Tests::SkipOthers);
     let at = index(id)?;
     while front.checked.len() <= at {
         front.checked.push(None);
@@ -1094,42 +1155,22 @@ fn extra_deps(
 
 /// Maps an extra module's imports to the modules `front` already has.
 struct ExtraLookup<'a> {
-    package: &'a str,
+    names: &'a crate::dependencies::PackageNames,
     modules: &'a ModuleTable,
 }
 
 impl ModuleLookup for ExtraLookup<'_> {
-    fn lookup(&mut self, _from: PackageId, path: &[&str]) -> Result<Lookup, Ice> {
+    fn lookup(&mut self, from: PackageId, path: &[&str]) -> Result<Lookup, Ice> {
         let Some((&first, rest)) = path.split_first() else {
             return Err(Ice::new("an import with an empty path"));
         };
-        let module_path = rest
-            .iter()
-            .fold(ModulePath::root(first), |p, segment| p.child(segment));
-        if first == self.package {
-            if rest == ["main"] {
-                return Ok(Lookup::RootByMainSegment);
-            }
-            if let Some(id) = self.modules.find(&module_path) {
-                return Ok(Lookup::Found(id));
-            }
-            let text = module_path.to_string();
-            let candidates: Vec<String> = self
-                .modules
-                .iter()
-                .filter(|(_, info)| info.package == PackageId::LOCAL && info.file.is_some())
-                .map(|(_, info)| info.path.to_string())
-                .collect();
-            let closest =
-                closest_name(&text, candidates.iter().map(String::as_str)).map(str::to_owned);
-            return Ok(Lookup::NoModule {
-                package: PackageId::LOCAL,
-                closest,
-            });
+        if let Some(found) = lookup_package(self.names, self.modules, from, first, rest) {
+            return Ok(found);
         }
         if first != "std" {
             return Ok(Lookup::NoPackage);
         }
+        let module_path = module_path(first, rest);
         if let Some(id) = self.modules.find(&module_path) {
             return Ok(Lookup::Found(id));
         }
@@ -1198,6 +1239,16 @@ pub(crate) struct CacheUse<'a> {
     /// `cheby test` (D-1250): it checks only what its warm build needs
     /// ([`crate::warm_keys`]); `None` for every other command.
     pub build: Option<crate::warm_keys::WarmBuild<'a>>,
+    /// Whether the modules of dependencies have records (D-1896): not with
+    /// the hidden `CHEBY_DEP_CACHE=off` (D-1898).
+    pub dependencies: bool,
+}
+
+impl CacheUse<'_> {
+    /// Whether the modules of `package` have records in this command.
+    pub(crate) fn covers(&self, package: PackageId) -> bool {
+        package == PackageId::LOCAL || (self.dependencies && package.has_records())
+    }
 }
 
 /// The inputs every module's pipeline step reads, shared by the tasks.
@@ -1286,8 +1337,8 @@ impl Shared {
 struct FrontCx<'a> {
     cache: &'a crate::Cache,
     use_: CacheUse<'a>,
-    /// The package's name.
-    package: &'a str,
+    /// What tells each package with records apart in front keys.
+    packages: &'a [String],
     /// Per module id: its source hashes (D-963).
     hashes: &'a [Option<crate::SourceHashes>],
     /// Per module id: its source file's length in bytes, for replayed
@@ -1298,6 +1349,20 @@ struct FrontCx<'a> {
     unparsed: &'a [bool],
     /// Which pass of [`run_inner`] this is.
     pass: Pass,
+}
+
+impl FrontCx<'_> {
+    /// What front keys hold of `package`: the local package's name, and a
+    /// dependency's name or URL with its exact version (D-1896).
+    fn package_key(&self, package: PackageId) -> Result<String, Ice> {
+        package
+            .as_u32()
+            .checked_sub(PackageId::LOCAL.as_u32())
+            .and_then(|at| usize::try_from(at).ok())
+            .and_then(|at| self.packages.get(at))
+            .cloned()
+            .ok_or_else(|| Ice::new("a front key of a package without records"))
+    }
 }
 
 /// The two passes of a build with a cache ([`run_inner`]).
@@ -1394,7 +1459,7 @@ impl BuildInputs<'_> {
         }
         // Other std modules are checked from source, as D-450 says.
         let cx = match self.cache {
-            Some(cx) if info.package == PackageId::LOCAL && cx.pass == Pass::Warm => cx,
+            Some(cx) if cx.use_.covers(info.package) && cx.pass == Pass::Warm => cx,
             _ => return self.check_source(id, deps, published),
         };
         let key = self.front_key(cx, id)?;
@@ -1800,7 +1865,7 @@ impl BuildInputs<'_> {
         } else {
             get(self.imports, id)?
         };
-        if info.package == PackageId::LOCAL
+        if info.package.has_records()
             && let Ok(mut checked) = self.counted.lock()
         {
             checked.push(info.path.to_string());
@@ -1827,10 +1892,10 @@ impl BuildInputs<'_> {
                 known: self.known,
                 items: self.std_items,
             },
-            package_targets: if info.package == PackageId::LOCAL {
-                self.local_targets
-            } else {
+            package_targets: if info.package == PackageId::STD {
                 Targets::ALL
+            } else {
+                self.local_targets
             },
         };
         let (resolved, mut early) = resolve_module(&input)?;
@@ -1848,6 +1913,14 @@ impl BuildInputs<'_> {
         };
         let (iface, diags) = build_interface(&types)?;
         early.extend(diags);
+        // A dependency's tests are no part of its user's build (D-1894).
+        if !matches!(info.package, PackageId::LOCAL | PackageId::STD) {
+            let tests = test_ranges(tree);
+            early.retain(|d| {
+                d.primary_span()
+                    .is_none_or(|span| !tests.iter().any(|t| t.contains_range(span.range)))
+            });
+        }
         // D-954: a debug toolchain decodes every interface it encodes and
         // compares it with the original. A module with an error in its
         // declarations is never cached (D-964), so it is not checked
@@ -1867,7 +1940,7 @@ impl BuildInputs<'_> {
         {
             Tests::All
         } else {
-            Tests::SkipStd
+            Tests::SkipOthers
         };
         // D-1380: a recording check gives the same THIR and diagnostics,
         // and survives an `Ice` in one body or one pass (F §2.3, layers 1
@@ -1898,8 +1971,8 @@ impl BuildInputs<'_> {
             hidden_reads(self.modules, id, log.modules(), get(self.targets, id)?, &[]);
         // The summaries read the interfaces again without recording: the
         // reads are taken above.
-        let summaries = if info.package == PackageId::LOCAL
-            && (self.mode == Mode::Check || self.cache.is_some())
+        let summaries = if (info.package == PackageId::LOCAL && self.mode == Mode::Check)
+            || self.cache.is_some_and(|cx| cx.use_.covers(info.package))
         {
             let quiet = TypesInput {
                 deps: DepView::new(self.set, &deps),
@@ -2090,7 +2163,7 @@ impl BuildInputs<'_> {
             }
         }
         let key = FrontKey {
-            package: cx.package.to_owned(),
+            package: cx.package_key(self.modules.try_get(id)?.package)?,
             targets: self.local_targets,
             module: self.modules.try_get(id)?.path.to_string(),
             source: source.sip128,
@@ -2675,6 +2748,20 @@ pub(crate) fn run_cached(
         .native
         .clone()
         .map(|table| (package.root.clone(), package.manifest.name.clone(), table));
+    let dependency_native: Vec<_> = package
+        .dependencies
+        .packages
+        .iter()
+        .filter_map(|d| {
+            let table = d.manifest.native.clone()?;
+            Some((
+                d.root.clone(),
+                d.manifest.name.clone(),
+                table,
+                d.shown.clone(),
+            ))
+        })
+        .collect();
     let mut front = match run_inner(
         package,
         mode,
@@ -2705,12 +2792,19 @@ pub(crate) fn run_cached(
     // D-941: the commands that run or build code compile the package's C
     // and load its library once the package checks; `cheby check` does
     // neither (D-532).
-    if mode != Mode::Check
-        && front.complete
-        && !diagnostics.iter().any(Diagnostic::is_error)
-        && let Some((root, name, table)) = native
-    {
-        front.native = crate::native::prepare(&root, &name, &table, cache.map(|use_| use_.cache))?;
+    if mode != Mode::Check && front.complete && !diagnostics.iter().any(Diagnostic::is_error) {
+        let cache = cache.map(|use_| use_.cache);
+        let mut shown = Vec::with_capacity(dependency_native.len());
+        for (root, name, table, shown_name) in dependency_native {
+            let prepared = crate::native::prepare(&root, &name, &table, cache)?;
+            front.dependency_native.push(prepared);
+            shown.push(shown_name);
+        }
+        if let Some((root, name, table)) = native {
+            front.native = crate::native::prepare(&root, &name, &table, cache)?;
+        }
+        let names = shown.iter().chain(std::iter::once(&front.package_name));
+        crate::native::check_packages(names.map(String::as_str).zip(front.all_native()))?;
     }
     Ok(Some(front))
 }
@@ -2892,6 +2986,19 @@ fn run_inner(
     let mut syntax: Vec<Option<Vec<Diagnostic>>> = vec![None];
     let mut unparsed: Vec<bool> = vec![false];
     let package_name = package.manifest.name.clone();
+    let names = crate::dependencies::PackageNames::new(&package_name, &package.dependencies);
+    // A dependency's exact version is in the locations its code holds, and
+    // not in its modules' paths, which hold the major (D-1896).
+    let packages: Vec<String> = std::iter::once(package_name.clone())
+        .chain(
+            package
+                .dependencies
+                .packages
+                .iter()
+                .map(|d| d.shown.clone()),
+        )
+        .collect();
+    let package_kind = package.manifest.kind;
     let local_targets = package.manifest.targets;
     let const_eval_time_limit = package.manifest.const_eval_time_limit;
     let const_eval_memory_limit = package.manifest.const_eval_memory_limit;
@@ -2908,6 +3015,31 @@ fn run_inner(
         unparsed.push(!module.parsed);
         syntax.push(module.parsed.then_some(module.syntax_diagnostics));
         source_hashes.push(Some(module.hashes));
+    }
+    let mut dependency_limits = BTreeMap::new();
+    let mut dependency_files = BTreeMap::new();
+    for (at, dependency) in package.dependencies.packages.into_iter().enumerate() {
+        let id =
+            crate::dependencies::dependency_id(at).ok_or_else(|| Ice::new("too many packages"))?;
+        dependency_files.extend(dependency.files);
+        dependency_limits.insert(
+            id,
+            (
+                dependency.manifest.const_eval_time_limit,
+                dependency.manifest.const_eval_memory_limit,
+            ),
+        );
+        for module in dependency.modules {
+            modules.add(ModuleInfo {
+                path: module.path,
+                package: id,
+                file: Some(module.source.file),
+            })?;
+            trees.push(module.source.syntax);
+            unparsed.push(!module.parsed);
+            syntax.push(module.parsed.then_some(module.syntax_diagnostics));
+            source_hashes.push(Some(module.hashes));
+        }
     }
     let package_index = cache.and_then(|c| c.index).map(|(found, _)| found);
 
@@ -2943,7 +3075,7 @@ fn run_inner(
             collect_imports(tree, &globals.names)
         };
         let mut lookup = DriverLookup {
-            package: &package_name,
+            names: &names,
             modules: &mut modules,
             sources,
             trees: &mut trees,
@@ -2978,7 +3110,12 @@ fn run_inner(
                 let Lookup::Found(module) = lookup.lookup(info.package, &segments)? else {
                     return Err(Stop::Restart);
                 };
-                if lookup.modules.try_get(module)?.path.to_string() != *path {
+                // A dependency's module has another path than its import:
+                // the front key holds that path and the interface's hash.
+                let target = lookup.modules.try_get(module)?;
+                if matches!(target.package, PackageId::LOCAL | PackageId::STD)
+                    && target.path.to_string() != *path
+                {
                     return Err(Stop::Restart);
                 }
                 found.push(ImportTarget::Module(module));
@@ -2990,11 +3127,10 @@ fn run_inner(
         // A package module depends on every shipped home module of a
         // prelude type (D-447).
         let mut homes = Vec::new();
-        if info.package == PackageId::LOCAL {
+        if info.package != PackageId::STD {
             for (_, segment) in builtin::HOMES {
                 if shipped(segment)
-                    && let Lookup::Found(home) =
-                        lookup.lookup(PackageId::LOCAL, &["std", segment])?
+                    && let Lookup::Found(home) = lookup.lookup(info.package, &["std", segment])?
                     && !homes.contains(&home)
                 {
                     homes.push(home);
@@ -3164,6 +3300,7 @@ fn run_inner(
                     targets: local_targets,
                 },
                 package: &package_name,
+                dependency_limits: &dependency_limits,
             },
         )?,
         _ => None,
@@ -3191,7 +3328,7 @@ fn run_inner(
         cache.map(|use_| FrontCx {
             cache: use_.cache,
             use_,
-            package: &package_name,
+            packages: &packages,
             hashes: &source_hashes,
             text_lens: &text_lens,
             unparsed: &unparsed,
@@ -3238,7 +3375,7 @@ fn run_inner(
     let is_local = |id: ModuleId| {
         modules
             .get(id)
-            .is_some_and(|info| info.package == PackageId::LOCAL)
+            .is_some_and(|info| info.package.has_records())
     };
     let mut checked: Vec<Option<Checked>> = (0..len).map(|_| None).collect();
     let mut module_natives: Vec<Vec<(Box<str>, NativeBinding)>> =
@@ -3615,8 +3752,12 @@ fn run_inner(
         natives,
         package_targets: local_targets,
         package_name,
+        names,
+        package_kind,
         const_eval_time_limit,
         const_eval_memory_limit,
+        dependency_limits,
+        dependency_files,
         fiber_stack,
         main_stack,
         imports,
@@ -3625,6 +3766,7 @@ fn run_inner(
         source_hashes,
         complete: true,
         native: crate::native::PackageNative::default(),
+        dependency_native: Vec::new(),
         records,
         cache_store: cache.map(|use_| (use_.cache.store.share(), use_.cache.reads)),
         warm_f2,
@@ -3887,7 +4029,7 @@ fn must_check(
     if let (Mode::Build, Some(_), Some(misses)) = (mode, cache, misses) {
         return Ok(modules
             .iter()
-            .map(|(id, info)| info.package != PackageId::LOCAL || misses.checks(id))
+            .map(|(id, info)| !info.package.has_records() || misses.checks(id))
             .collect());
     }
     let Some(use_) = cache.filter(|_| mode == Mode::Check) else {
@@ -3927,7 +4069,7 @@ fn must_check(
         let id = ModuleId::from_u32(node);
         if modules
             .get(id)
-            .is_some_and(|info| info.package == PackageId::LOCAL)
+            .is_some_and(|info| info.package.has_records())
             && let Some(slot) = out.get_mut(index(id)?)
         {
             *slot = true;
@@ -4011,14 +4153,14 @@ fn finish_cache(
     }
     for &id in built {
         let info = modules.try_get(id)?;
-        if info.package == PackageId::LOCAL {
+        if info.package.has_records() {
             let hit = hits.get(index(id)?).copied().unwrap_or(false);
             use_.cache.log.record("front", &info.path.to_string(), hit);
         }
     }
     let mut parsed = Vec::new();
     for (id, info) in modules.iter() {
-        if info.package != PackageId::LOCAL {
+        if !info.package.has_records() {
             continue;
         }
         let at = index(id)?;

@@ -106,6 +106,29 @@ impl ConstLimits {
     }
 }
 
+/// The limits of every package of a build with records (D-1869, D-1896).
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct PackageLimits<'a> {
+    /// The local package's, and std's.
+    pub own: ConstLimits,
+    /// Each dependency's time and memory limits.
+    pub dependencies: &'a BTreeMap<PackageId, (Duration, u64)>,
+}
+
+impl PackageLimits<'_> {
+    /// The limits of the constants of `package`.
+    fn of(&self, package: PackageId) -> ConstLimits {
+        match self.dependencies.get(&package) {
+            Some(&(time_limit, memory_limit)) => ConstLimits {
+                time_limit,
+                memory_limit,
+                ..self.own
+            },
+            None => self.own,
+        }
+    }
+}
+
 /// The settings of constant evaluation for a command whose MIR options
 /// are `mir` (D-978, D-958): the `plain` kind, the debug profile, and the
 /// command's `CHEBY_RC`, unwind edges, poisoning, stack check and target.
@@ -337,10 +360,19 @@ pub(crate) fn keys_after_check(
         let deps: Vec<(&str, Hash128)> = deps.iter().map(|(p, h)| (p.as_str(), *h)).collect();
         let module = front.modules.try_get(info.def.module)?;
         let module_path = module.path.to_string();
+        // A dependency's constants have their own package's limits (D-1869).
+        let limits = match front.dependency_limits(info.def.module) {
+            Some((time_limit, memory_limit)) => ConstLimits {
+                time_limit,
+                memory_limit,
+                ..*limits
+            },
+            None => *limits,
+        };
         keys.push(const_key(
             build,
             settings,
-            limits,
+            &limits,
             module.path.package(),
             &module_path,
             &info.name,
@@ -1338,7 +1370,7 @@ pub(crate) enum ConstRoots<'a> {
 pub(crate) fn misses_before_check_from(
     view: &crate::warm_keys::WarmView<'_>,
     settings: &Settings,
-    limits: &ConstLimits,
+    limits: &PackageLimits<'_>,
     roots: ConstRoots<'_>,
 ) -> BTreeSet<ModuleId> {
     let records = Records::new(view.modules, view.vouched);
@@ -1375,7 +1407,7 @@ pub(super) fn reached_from_main(
 fn misses_among(
     view: &crate::warm_keys::WarmView<'_>,
     settings: &Settings,
-    limits: &ConstLimits,
+    limits: &PackageLimits<'_>,
     only: Option<&BTreeSet<String>>,
 ) -> BTreeSet<ModuleId> {
     let store = ConstStore::of_cache(view.cache.cache);
@@ -1385,6 +1417,11 @@ fn misses_among(
     for entry in view.vouched.iter().flatten() {
         let module = entry.path.as_str();
         let package = module.split("::").next().unwrap_or(module);
+        let in_package = crate::parse_module_path(module)
+            .and_then(|path| view.modules.find(&path))
+            .and_then(|id| view.modules.get(id))
+            .map_or(PackageId::LOCAL, |info| info.package);
+        let limits = limits.of(in_package);
         for s in &entry.record.references {
             if s.kind != MentionerKind::Constant {
                 continue;
@@ -1397,7 +1434,7 @@ fn misses_among(
             let hit = walked.as_ref().and_then(|walked| {
                 let deps: Vec<(&str, Hash128)> =
                     walked.deps.iter().map(|(p, h)| (p.as_str(), *h)).collect();
-                let key = const_key(build, settings, limits, package, module, &s.item, &deps);
+                let key = const_key(build, settings, &limits, package, module, &s.item, &deps);
                 store.find(&path, &key)
             });
             let reads = walked.map_or_default(|w| w.reads);
@@ -1421,7 +1458,7 @@ fn misses_among(
         if !is_const {
             return None;
         }
-        let key = const_key(build, settings, limits, "std", module, name, &[]);
+        let key = const_key(build, settings, &limits.own, "std", module, name, &[]);
         Some(store.find(path, &key))
     };
     let image_hash = |path: &str| -> Option<Hash128> {

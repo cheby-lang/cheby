@@ -214,7 +214,7 @@ fn placed_json(placed: store::Placed) -> json::Value {
 }
 
 /// Encodes a saved order with its lines.
-priv fn stored_order_json(stored: store::StoredOrder) -> json::Value {
+priv fn stored_order_json(saved: store::StoredOrder) -> json::Value {
   let line_json = fn(line: store::StoredLine) {
     json::Object([
       ("product_id", json::Int(line.product_id)),
@@ -224,13 +224,13 @@ priv fn stored_order_json(stored: store::StoredOrder) -> json::Value {
     ])
   }
   json::Object([
-    ("id", json::Int(stored.id)),
-    ("email", json::String(stored.email)),
-    ("lines", json::array(stored.lines, line_json)),
-    ("subtotal_cents", json::Int(stored.subtotal_cents)),
-    ("discount_cents", json::Int(stored.discount_cents)),
-    ("shipping_cents", json::Int(stored.shipping_cents)),
-    ("total_cents", json::Int(stored.total_cents)),
+    ("id", json::Int(saved.id)),
+    ("email", json::String(saved.email)),
+    ("lines", json::array(saved.lines, line_json)),
+    ("subtotal_cents", json::Int(saved.subtotal_cents)),
+    ("discount_cents", json::Int(saved.discount_cents)),
+    ("shipping_cents", json::Int(saved.shipping_cents)),
+    ("total_cents", json::Int(saved.total_cents)),
   ])
 }
 

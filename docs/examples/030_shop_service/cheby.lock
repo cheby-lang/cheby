@@ -1,0 +1,12 @@
+# Written by `cheby update`. Do not edit it.
+
+version = 1
+
+[[package]]
+url = "github.com/example/cheby-sql"
+major = "1"
+version = "1.4.0"
+source = "https://github.com/example/cheby-sql"
+commit = "7a9c1b06554d139f1662564524ba68e2353878ac"
+checksum = "sha256:d3dd27ba324bf329b2cfa2c0a668e3ce269e9a0ef617c036e8e313bb5af6c98a"
+required = ["tag:v1.4.0"]

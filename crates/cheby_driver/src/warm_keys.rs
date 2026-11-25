@@ -169,6 +169,8 @@ pub(crate) struct FrontState<'a> {
     pub limits: crate::cache::consts::ConstLimits,
     /// The package's name: its root module's path.
     pub package: &'a str,
+    /// The `[const-eval]` limits of each dependency (D-1869).
+    pub dependency_limits: &'a std::collections::BTreeMap<PackageId, (std::time::Duration, u64)>,
 }
 
 /// The misses of a warm `cheby run` or `cheby test` before its check
@@ -193,7 +195,7 @@ pub(crate) fn misses_before_check(
         .modules
         .iter()
         .map(|(id, info)| {
-            if info.package != PackageId::LOCAL {
+            if !use_.covers(info.package) {
                 return None;
             }
             let hash = state
@@ -216,7 +218,11 @@ pub(crate) fn misses_before_check(
         globals: state.globals,
         set: state.set,
     };
-    keys_before_check(&view, &build, &state.limits, state.package).map(Some)
+    let limits = crate::cache::consts::PackageLimits {
+        own: state.limits,
+        dependencies: state.dependency_limits,
+    };
+    keys_before_check(&view, &build, &limits, state.package).map(Some)
 }
 
 /// D-1250 (refines D-1132): which package modules a warm build checks,
@@ -253,7 +259,7 @@ pub(crate) fn misses_before_check(
 pub(crate) fn keys_before_check(
     view: &WarmView<'_>,
     build: &WarmBuild<'_>,
-    limits: &crate::cache::consts::ConstLimits,
+    limits: &crate::cache::consts::PackageLimits<'_>,
     package: &str,
 ) -> Result<BuildMisses, Ice> {
     let mut misses = BuildMisses::default();
@@ -269,7 +275,7 @@ pub(crate) fn keys_before_check(
             && view
                 .modules
                 .get(module)
-                .is_some_and(|info| info.package == PackageId::LOCAL)
+                .is_some_and(|info| info.package.has_records())
         {
             misses.code.insert(module);
             continue;
@@ -281,7 +287,7 @@ pub(crate) fn keys_before_check(
             if view
                 .modules
                 .get(module)
-                .is_some_and(|info| info.package == PackageId::LOCAL)
+                .is_some_and(|info| info.package.has_records())
             {
                 misses.code.insert(module);
             }
@@ -322,7 +328,7 @@ pub(crate) fn keys_before_check(
         if view
             .modules
             .get(module)
-            .is_some_and(|info| info.package == PackageId::LOCAL)
+            .is_some_and(|info| info.package.has_records())
         {
             misses.constant_modules.insert(module);
         }

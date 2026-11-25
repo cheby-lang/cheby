@@ -281,7 +281,10 @@ fn moved_files<'s>(snapshot: &'s Snapshot, old: &Path) -> Vec<(PathBuf, ModuleVi
             FileLocation::Package(path) if path.starts_with(old) && path != old => {
                 Some((path.clone(), view))
             }
-            FileLocation::Package(_) | FileLocation::Std(_) | FileLocation::Synthetic => None,
+            FileLocation::Package(_)
+            | FileLocation::Std(_)
+            | FileLocation::Dependency(_)
+            | FileLocation::Synthetic => None,
         })
         .collect();
     found.sort_by(|a, b| a.0.cmp(&b.0));

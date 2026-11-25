@@ -133,7 +133,9 @@ impl<'s, 'd> Places<'s, 'd> {
                 let text = self.snapshot.source(*id)?.text();
                 let uri = match self.snapshot.location(*id)? {
                     FileLocation::Package(path) if *path == self.doc.path => self.doc.uri.clone(),
-                    FileLocation::Package(path) => path_to_uri(path).ok()?,
+                    FileLocation::Package(path) | FileLocation::Dependency(path) => {
+                        path_to_uri(path).ok()?
+                    }
                     FileLocation::Std(display) => self.std_uri(display)?,
                     FileLocation::Synthetic => return None,
                 };

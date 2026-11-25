@@ -1,0 +1,12 @@
+200 {"products":[{"id":1,"name":"Green tea","price_cents":450,"in_stock":true},{"id":2,"name":"Teapot","price_cents":3200,"in_stock":true},{"id":3,"name":"Mug","price_cents":1195,"in_stock":true},{"id":4,"name":"Honey","price_cents":875,"in_stock":false}]}
+200 {"id":4,"name":"Honey","price_cents":875,"in_stock":false}
+201 {"id":1,"subtotal_cents":4550,"discount_cents":455,"shipping_cents":495,"total_cents":4590}
+422 {"error":"the order has invalid fields","fields":[{"field":"email","problem":"must be an email address"},{"field":"items[0].quantity","problem":"must be at least 1"}]}
+409 {"error":"not enough in stock","product_id":2,"requested":4,"available":2}
+200 {"id":1,"email":"ada@example.com","lines":[{"product_id":1,"name":"Green tea","quantity":3,"unit_cents":450},{"product_id":2,"name":"Teapot","quantity":1,"unit_cents":3200}],"subtotal_cents":4550,"discount_cents":455,"shipping_cents":495,"total_cents":4590}
+404 {"error":"no such order"}
+404 {"error":"no such product"}
+405 {"error":"method not allowed"}
+422 {"error":"no such discount code","discount":"NOPE"}
+400 {"error":"the body is not a valid order"}
+200 {"id":2,"name":"Teapot","price_cents":3200,"in_stock":true}

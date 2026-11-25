@@ -299,7 +299,7 @@ impl<'a> Locator<'a> {
     /// Where `file` is on disk.
     pub(crate) fn path(&self, file: FileId) -> Option<PathBuf> {
         match self.snapshot.location(file)? {
-            FileLocation::Package(path) => Some(path.clone()),
+            FileLocation::Package(path) | FileLocation::Dependency(path) => Some(path.clone()),
             FileLocation::Std(display) => Some(self.std_dir?.join(display)),
             FileLocation::Synthetic => None,
         }
@@ -326,7 +326,10 @@ impl<'a> Locator<'a> {
         let lines = self.lines.entry(file).or_insert_with(|| {
             let open = match snapshot.location(file) {
                 Some(FileLocation::Package(path)) => snapshot.version_of(path).is_some(),
-                Some(FileLocation::Std(_) | FileLocation::Synthetic) | None => false,
+                Some(
+                    FileLocation::Std(_) | FileLocation::Dependency(_) | FileLocation::Synthetic,
+                )
+                | None => false,
             };
             LspLines::new(text, if open { Bom::Counted } else { Bom::Hidden })
         });

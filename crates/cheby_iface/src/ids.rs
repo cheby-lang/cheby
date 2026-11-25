@@ -44,6 +44,14 @@ impl PackageId {
     pub const STD: Self = Self::from_u32(0);
     /// The package being built.
     pub const LOCAL: Self = Self::from_u32(1);
+
+    /// Whether its modules have cache records of their own, the package
+    /// being built and its dependencies (D-1896): not std, whose records are
+    /// one set per toolchain (D-980).
+    #[must_use]
+    pub fn has_records(self) -> bool {
+        self != Self::STD
+    }
 }
 
 impl ModuleId {

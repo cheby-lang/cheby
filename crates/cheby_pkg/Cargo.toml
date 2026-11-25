@@ -8,7 +8,13 @@ repository.workspace = true
 publish = false
 
 [dependencies]
+cheby_diag.workspace = true
 cheby_package.workspace = true
+toml.workspace = true
+
+# SHA-256 (D-1878); `ring` is not built on Windows until M6 (D-1011).
+[target.'cfg(not(windows))'.dependencies]
+ring.workspace = true
 
 [lints]
 workspace = true

@@ -238,7 +238,9 @@ libraries = ["sqlite3"]
 - There are no build scripts, no prebuilt archives and no source languages other than C. Each package's C sources are compiled in that package, dependencies included (D-940).
 - A C source includes `cheby.h` to build and inspect Cheby values ([§12.5.1](#1251-native-abi)) (D-945).
 
-The package's native code is part of the program wherever the program runs. An executable links the package's compiled C sources and its `libraries`. `cheby run`, `cheby test` and the REPL run code in the `cheby` process, so they load the same compiled sources and `libraries` as a shared library, and the symbols it defines count for the rules of [§12.5](#125-foreign-functions) as they do in an executable (D-941). A REPL `:reload` that finds a changed C source loads its new code, and code compiled before keeps calling the old ([§13.5.3](13-tooling.md#1353-commands)) (D-712, D-941).
+Two packages of a build must not define one C name with external linkage, which is a tool error (D-1890).
+
+The native code of a package and of its dependencies is part of the program wherever the program runs (D-1888). An executable links the package's compiled C sources and its `libraries`. `cheby run`, `cheby test` and the REPL run code in the `cheby` process, so they load the same compiled sources and `libraries` as a shared library, and the symbols it defines count for the rules of [§12.5](#125-foreign-functions) as they do in an executable (D-941). A REPL `:reload` that finds a changed C source loads its new code, and code compiled before keeps calling the old ([§13.5.3](13-tooling.md#1353-commands)) (D-712, D-941).
 
 _Note:_ the reference implementation compiles each C source once, with the package root as the working directory, the environment variable `SOURCE_DATE_EPOCH` set to `0`, and fixed flags, so the object holds no path of the machine (D-942):
 

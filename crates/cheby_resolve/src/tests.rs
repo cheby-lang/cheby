@@ -1727,7 +1727,9 @@ fn examples_resolve_with_only_unshipped_modules() {
             let (_, errors) = parse(ModuleId::from_u32(u32::try_from(n).unwrap()), text);
             errors.iter().any(Diagnostic::is_error)
         });
-        if has_syntax_errors || phase_a.iter().any(Diagnostic::is_error) {
+        // Dependencies are loaded by the driver (D-446).
+        let skipped = has_syntax_errors || !manifest.dependencies.is_empty();
+        if skipped || phase_a.iter().any(Diagnostic::is_error) {
             continue;
         }
         let local: Vec<(&str, &str)> = texts

@@ -74,6 +74,7 @@ mod backend;
 mod borrowing;
 pub mod cache;
 mod code_cache;
+pub mod dependencies;
 mod frontend;
 mod load_set;
 mod native;
@@ -88,8 +89,8 @@ mod warm_keys;
 
 pub use aot::{BuildOptions, BuildOutcome, build_cached, build_cached_with, build_target};
 pub use cheby_mir::Profile;
-pub use cheby_package::Target;
 pub use cheby_package::{EXTENSION, is_valid_name, module_file, suggest_name};
+pub use cheby_package::{Kind, Target};
 pub use test::{
     ModuleTests, PreparedTests, TestCounts, TestOptions, TestOutcome, TestProgram, TestReport,
     TestResult, prepare_test, prepare_test_cached, test_std, test_std_in,
@@ -319,6 +320,8 @@ pub struct Package {
     pub manifest: Manifest,
     /// The modules, sorted by file path.
     pub modules: Vec<Module>,
+    /// The packages it depends on, once [`dependencies`] loaded them.
+    pub dependencies: dependencies::Dependencies,
 }
 
 /// One module of the package.
@@ -708,6 +711,7 @@ fn front_end_family(
                 index_key,
                 lazy,
                 build,
+                dependencies: dependencies::are_cached(),
             });
         match front_end_once(root, mode, target, out, use_)? {
             Attempt::Done(result) => return Ok(result),
@@ -769,6 +773,15 @@ fn front_end_once(
         }
         package.manifest.targets = Targets::only(target);
     }
+    package.dependencies = dependencies::load(
+        root,
+        &package.manifest,
+        package.manifest.targets,
+        &mut out.sources,
+        &mut out.diagnostics,
+        &|path, hash| dependencies::are_cached() && skip(path, hash),
+    )?;
+    let dependency_files = package.dependencies.file_set();
     // Only phase-A errors stop the front end (D-452); a phase-A warning
     // denied by `--deny-warnings` does not, so the later phases still
     // report theirs, and the command fails after them (D-621).
@@ -777,7 +790,12 @@ fn front_end_once(
         // modules the index let go unparsed, does not run: start again,
         // parsing every module, so the output is a cold check's (D-268,
         // D-965; D-1133). Only the error path pays.
-        if vouched.is_some() && package.modules.iter().any(|module| !module.parsed) {
+        let dependencies = package.dependencies.packages.iter();
+        let mut modules = package
+            .modules
+            .iter()
+            .chain(dependencies.flat_map(|d| &d.modules));
+        if vouched.is_some() && modules.any(|module| !module.parsed) {
             return Ok(Attempt::Again);
         }
         return Ok(Attempt::Done(None));
@@ -788,6 +806,8 @@ fn front_end_once(
     else {
         return Ok(Attempt::Again);
     };
+    // A dependency's warnings are not its user's (D-1868).
+    dependencies::drop_warnings(&dependency_files, &mut out.diagnostics);
     if !front.complete {
         return Ok(Attempt::Done(None));
     }
@@ -1009,6 +1029,14 @@ fn prepare_run_once(
     let path = match &options.module_path {
         Some(text) => parse_module_path(text)
             .ok_or_else(|| Error::new(format!("`{text}` is not a module path")))?,
+        // D-1855: only a program has a default entry point.
+        None if front.package_kind == Kind::Library => {
+            return Err(Error::new(format!(
+                "package `{package}` is a library, so `cheby run` needs the path of a module \
+                 with `main`"
+            ))
+            .into());
+        }
         None => ModulePath::root(&package),
     };
     let module = front
@@ -1263,6 +1291,7 @@ fn load_package_skipping(
         root: root.to_path_buf(),
         manifest,
         modules,
+        dependencies: dependencies::Dependencies::default(),
     }))
 }
 

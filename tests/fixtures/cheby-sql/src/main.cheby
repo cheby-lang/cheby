@@ -1,0 +1,291 @@
+//! SQL databases, through SQLite.
+//!
+//! A URL is `sqlite:` and the path of a database file, as in
+//! `sqlite:shop.db`, or `sqlite::memory:` for a database of its own in each
+//! connection.
+
+import sql::decode
+import std::fiber
+import std::int as integer
+import std::list
+import std::result
+import std::string
+
+/// A set of open connections. It closes when the last reference to it and to
+/// its connections goes away.
+@external(native, "cheby_sql_pool_close")
+pub type Pool
+
+/// A connection, on loan from a pool. It goes back when the last reference to
+/// it goes away, and a transaction that nothing committed is rolled back
+/// then, also when its fiber panics or is cancelled.
+@external(native, "cheby_sql_lease_close")
+pub type Connection
+
+/// Why the database failed.
+pub type Error {
+  Error(String),
+}
+
+/// A parameter of a statement.
+pub type Param {
+  Param(Option<Result<Int, String>>),
+}
+
+/// Opens `size` connections to the database at `url`.
+pub fn connect(url: String, size: Int) -> Result<Pool, Error> {
+  case string::split_once(url, "sqlite:") {
+    Some(("", path)) => {
+      let pool = pool_open(path, size)
+      case pool_problem(pool) {
+        "" => Ok(pool)
+        problem => Err(Error(problem))
+      }
+    }
+    _ => Err(Error("a database URL starts with `sqlite:`"))
+  }
+}
+
+/// Lends `body` a connection. `wrap` turns a failure to get one into the
+/// caller's error type.
+pub fn with_connection<T, E>(
+  pool: Pool,
+  wrap: fn(Error) -> E,
+  body: fn(Connection) -> Result<T, E>,
+) -> Result<T, E> {
+  let connection = lease(pool)
+  case lease_is_open(connection) {
+    True => body(connection)
+    False => Err(wrap(Error("no connection was free in time")))
+  }
+}
+
+/// Lends `body` a connection inside a transaction that may write from its
+/// start, so nobody else writes meanwhile. It is committed when `body`
+/// returns `Ok`, and rolled back otherwise.
+pub fn transaction<T, E>(
+  pool: Pool,
+  wrap: fn(Error) -> E,
+  body: fn(Connection) -> Result<T, E>,
+) -> Result<T, E> {
+  use connection <- with_connection(pool, wrap)
+  use _ <- result::try(result::map_error(script(connection, "BEGIN IMMEDIATE"), wrap))
+  case body(connection) {
+    Ok(value) => {
+      use _ <- result::try(result::map_error(script(connection, "COMMIT"), wrap))
+      Ok(value)
+    }
+    Err(error) => {
+      let _ = script(connection, "ROLLBACK")
+      Err(error)
+    }
+  }
+}
+
+/// Every row of a query.
+pub fn query<T>(
+  connection: Connection,
+  statement: String,
+  params: List<Param>,
+  decoder: decode::Decoder<T>,
+) -> Result<List<T>, Error> {
+  use rows <- result::try(run(connection, statement, params))
+  case rows {
+    [] => Ok([])
+    [names, ..found] => {
+      let columns = list::map(names, name_of)
+      use row <- list::try_map(found)
+      let cells = list::map(row, decode::Cell)
+      result::map_error(decode::run(decoder, decode::Row { names: columns, cells }), Error)
+    }
+  }
+}
+
+/// The first row of a query, or `None`.
+pub fn query_one<T>(
+  connection: Connection,
+  statement: String,
+  params: List<Param>,
+  decoder: decode::Decoder<T>,
+) -> Result<Option<T>, Error> {
+  use rows <- result::try(query(connection, statement, params, decoder))
+  Ok(list::first(rows))
+}
+
+/// Runs a statement, and returns how many rows it changed.
+pub fn execute(
+  connection: Connection,
+  statement: String,
+  params: List<Param>,
+) -> Result<Int, Error> {
+  use _ <- result::try(run(connection, statement, params))
+  Ok(changes(connection))
+}
+
+/// Runs every statement of `statements`, which takes no parameters.
+pub fn script(connection: Connection, statements: String) -> Result<Nil, Error> {
+  case run_script(connection, statements) {
+    Ok(_) => Ok(Nil)
+    Err(problem) => Err(Error(problem))
+  }
+}
+
+/// An integer parameter.
+pub fn int(value: Int) -> Param {
+  Param(Some(Ok(value)))
+}
+
+/// A list of integers, which the statement reads with `json_each`.
+pub fn ints(values: List<Int>) -> Param {
+  let items = values
+    |> list::map(_, integer::show)
+    |> string::join(_, ",")
+  Param(Some(Err("[{items}]")))
+}
+
+/// A text parameter.
+pub fn text(value: String) -> Param {
+  Param(Some(Err(value)))
+}
+
+/// SQL's `NULL`.
+pub fn null() -> Param {
+  Param(None)
+}
+
+priv fn run(
+  connection: Connection,
+  statement: String,
+  params: List<Param>,
+) -> Result<List<List<Option<Result<Int, String>>>>, Error> {
+  let cells = list::map(params, fn(param) {
+    let Param(cell) = param
+    cell
+  })
+  result::map_error(run_query(connection, statement, cells), Error)
+}
+
+priv fn name_of(cell: Option<Result<Int, String>>) -> String {
+  case cell {
+    Some(Err(name)) => name
+    _ => ""
+  }
+}
+
+@external(native, "cheby_sql_pool_open")
+@blocking
+priv fn pool_open(path: String, size: Int) -> Pool
+
+@external(native, "cheby_sql_pool_problem")
+priv fn pool_problem(pool: Pool) -> String
+
+@external(native, "cheby_sql_lease")
+@blocking
+priv fn lease(pool: Pool) -> Connection
+
+@external(native, "cheby_sql_lease_is_open")
+priv fn lease_is_open(connection: Connection) -> Bool
+
+@external(native, "cheby_sql_query")
+@blocking
+priv fn run_query(
+  connection: Connection,
+  statement: String,
+  params: List<Option<Result<Int, String>>>,
+) -> Result<List<List<Option<Result<Int, String>>>>, String>
+
+@external(native, "cheby_sql_changes")
+priv fn changes(connection: Connection) -> Int
+
+@external(native, "cheby_sql_script")
+@blocking
+priv fn run_script(connection: Connection, text: String) -> Result<Int, String>
+
+priv fn number() -> decode::Decoder<Int> {
+  use n <- decode::column("n", decode::int())
+  decode::success(n)
+}
+
+priv fn counted(pool: Pool) -> Result<Option<Int>, Error> {
+  use connection <- with_connection(pool, fn(e) { e })
+  query_one(connection, r"SELECT COUNT(*) AS n FROM t", [], number())
+}
+
+priv fn table() -> Pool {
+  let assert Ok(pool) = connect("sqlite::memory:", 1)
+  let made = {
+    use connection <- with_connection(pool, fn(e) { e })
+    script(
+      connection,
+      r"CREATE TABLE t (n INTEGER PRIMARY KEY, s TEXT); INSERT INTO t VALUES (1, 'a'), (2, NULL);",
+    )
+  }
+  assert made == Ok(Nil)
+  pool
+}
+
+test "rows are decoded by their columns' names" {
+  let pool = table()
+  let rows = {
+    use connection <- with_connection(pool, fn(e) { e })
+    let decoder = {
+      use s <- decode::column("s", decode::nullable(decode::text()))
+      use n <- decode::column("n", decode::int())
+      decode::success((n, s))
+    }
+    query(connection, r"SELECT n, s FROM t ORDER BY n", [], decoder)
+  }
+  assert rows == Ok([(1, Some("a")), (2, None)])
+}
+
+test "parameters are bound by their numbers" {
+  let pool = table()
+  let found = {
+    use connection <- with_connection(pool, fn(e) { e })
+    use _ <- result::try(execute(connection, r"UPDATE t SET s = $2 WHERE n = $1", [
+      int(2),
+      text("$1'"),
+    ]))
+    query(
+      connection,
+      r"SELECT n FROM t WHERE n IN (SELECT value FROM json_each($1)) AND s = $2",
+      [ints([2, 3]), text("$1'")],
+      number(),
+    )
+  }
+  assert found == Ok([2])
+}
+
+test "an error rolls a transaction back, and the connection is given back" {
+  let pool = table()
+  let outcome = {
+    use connection <- transaction(pool, fn(e) { e })
+    use _ <- result::try(execute(connection, r"DELETE FROM t", []))
+    Err(Error("no"))
+  }
+  let expected: Result<Nil, Error> = Err(Error("no"))
+  assert outcome == expected
+  assert counted(pool) == Ok(Some(2))
+}
+
+test "a panic rolls a transaction back, and the connection is given back" {
+  let pool = table()
+  let outcome = fiber::scope(fn(_) {
+    use connection <- transaction::<Int, Error>(pool, fn(e) { e })
+    use _ <- result::try(execute(connection, r"DELETE FROM t", []))
+    panic as "stop"
+  })
+  assert result::is_error(outcome)
+  assert counted(pool) == Ok(Some(2))
+}
+
+test "errors are SQLite's" {
+  let pool = table()
+  let outcome = {
+    use connection <- with_connection(pool, fn(e) { e })
+    execute(connection, r"INSERT INTO t VALUES (1, 'again')", [])
+  }
+  assert outcome == Err(Error("UNIQUE constraint failed: t.n"))
+  assert connect("postgres://shop", 1)
+    |> result::is_error
+}

@@ -1,0 +1,10 @@
+name = "sql"
+version = "1.4.0"
+description = "SQL databases through SQLite, a fixture for example 030"
+licences = ["MIT", "Apache-2.0"]
+kind = "library"
+targets = ["native"]
+
+[native]
+sources = ["src/sqlite_ffi.c"]
+libraries = ["sqlite3"]

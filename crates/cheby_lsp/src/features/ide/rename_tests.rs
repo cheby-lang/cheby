@@ -544,6 +544,47 @@ fn every_name_of_a_std_document_is_refused() {
     );
 }
 
+/// A refusal names the dependency without its major (D-1390, D-1884).
+#[test]
+fn a_refusal_names_the_dependency() {
+    let text = "import geo\nimport geo::shape\n\nfn main() {\n  assert geo::area(1) == 3\n  assert shape::side() == 1\n}\n";
+    let temp = Temp::package("rename_dependency", &[("main.cheby", text)]);
+    let files = [
+        (
+            "cheby.toml",
+            "name = \"app\"\nversion = \"0.1.0\"\n\n[dependencies]\ngeo = { path = \"geometry\" }\n",
+        ),
+        (
+            "geometry/cheby.toml",
+            "name = \"geometry\"\nversion = \"0.1.0\"\nkind = \"library\"\n",
+        ),
+        (
+            "geometry/src/main.cheby",
+            "//! G.\n\n/// The area.\npub fn area(side: Int) -> Int {\n  side * 3\n}\n",
+        ),
+        (
+            "geometry/src/shape.cheby",
+            "//! S.\n\n/// A side.\npub fn side() -> Int {\n  1\n}\n",
+        ),
+    ];
+    for (path, text) in files {
+        let path = temp.0.join(path);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(path, text).unwrap();
+    }
+    let analyzed = analyze(&temp.0, &[]);
+    let main = analyzed.snapshot.file_of(&temp.src("main.cheby")).unwrap();
+    for (name, shown) in [("area", "geometry::area"), ("side", "shape::side")] {
+        let at = TextSize::try_from(text.find(name).unwrap()).unwrap();
+        assert_eq!(
+            prepare(&analyzed, main, at),
+            Err(Refusal(format!(
+                "`{shown}` is in `geometry`, which cannot be edited here"
+            )))
+        );
+    }
+}
+
 /// X §3.3: the new name must be one identifier of the old name's case.
 #[test]
 fn new_names_are_checked() {

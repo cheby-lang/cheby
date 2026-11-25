@@ -71,7 +71,7 @@ use crate::{TypesInput, consts, exhaust, has_error, targets, warnings};
 /// (C14).
 ///
 /// This is a user build: the `test` blocks of standard-library modules are
-/// skipped ([`Tests::SkipStd`]).
+/// skipped ([`Tests::SkipOthers`]).
 ///
 /// # Errors
 ///
@@ -80,7 +80,7 @@ pub fn check_bodies(
     input: &TypesInput<'_>,
     own: &ModuleInterface,
 ) -> Result<(thir::Module, Vec<Diagnostic>), Ice> {
-    check_bodies_with(input, own, Tests::SkipStd)
+    check_bodies_with(input, own, Tests::SkipOthers)
 }
 
 /// Which `test` blocks [`check_bodies_with`] checks.
@@ -88,15 +88,23 @@ pub fn check_bodies(
 pub enum Tests {
     /// Every module's tests: testing the standard library itself (G4).
     All,
-    /// A user build: the tests of standard-library modules are neither
-    /// checked nor in the THIR, because only testing std runs them. The
-    /// module's other passes see no tests either (D-479).
-    SkipStd,
+    /// A user build: the tests of standard-library modules and of
+    /// dependencies are neither checked nor in the THIR, because only a
+    /// build of the package itself runs them. The module's other passes
+    /// see no tests either (D-479, D-1894).
+    SkipOthers,
     /// A REPL statements entry (D-605): every test, as with
     /// [`Tests::All`], but the module's test is the wrapper the REPL puts
     /// around the entry's statements, so its body is checked as a block
     /// that ends with them, with no expected type and no E0073 (D-1535).
     ReplEntry,
+}
+
+impl Tests {
+    /// Whether the tests of a module of `package` are left out.
+    pub(crate) fn skipped_in(self, package: PackageId) -> bool {
+        self == Self::SkipOthers && package != PackageId::LOCAL
+    }
 }
 
 /// [`check_bodies`], with the `test` blocks chosen by `tests`.
@@ -139,7 +147,7 @@ fn check_bodies_inner(
     tests: Tests,
     record: bool,
 ) -> Result<(thir::Module, Vec<Diagnostic>, ModuleFacts), Ice> {
-    let skip_tests = tests == Tests::SkipStd && input.package == PackageId::STD;
+    let skip_tests = tests.skipped_in(input.package);
     let mut module = thir::Module {
         module: input.module,
         fns: Vec::new(),

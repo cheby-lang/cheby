@@ -1,0 +1,38 @@
+//! Makes the database that the service uses, from `schema.sql`:
+//!
+//! ```text
+//! DATABASE_URL=sqlite:shop.db cheby run shop_service::setup
+//! ```
+//!
+//! It is a program of its own, with a `main` that runs by its module path
+//! (D-137). The whole file runs in one transaction, so a database is made
+//! completely or not at all.
+
+import sql
+import std::env
+import std::io
+import std::option
+import std::result
+
+fn main() -> Result<Nil, SetupError> {
+  use url <- result::try(option::to_result(env::get("DATABASE_URL"), MissingDatabaseUrl))
+  use schema <- result::try(result::map_error(io::read_file("schema.sql"), SchemaUnreadable))
+  use pool <- result::try(result::map_error(sql::connect(url, 1), DatabaseFailed))
+  use connection <- sql::transaction(pool, DatabaseFailed)
+  result::map_error(sql::script(connection, schema), DatabaseFailed)
+}
+
+type SetupError {
+  MissingDatabaseUrl,
+  SchemaUnreadable(io::Error),
+  DatabaseFailed(sql::Error),
+}
+
+/// Makes `SetupError` satisfy `Show`, as `AppError` does in `main`.
+fn show(error: SetupError) -> String {
+  case error {
+    MissingDatabaseUrl => "set DATABASE_URL to the database to make"
+    SchemaUnreadable(reason) => "cannot read schema.sql: {reason}"
+    DatabaseFailed(reason) => "the database failed: {reason:?}"
+  }
+}

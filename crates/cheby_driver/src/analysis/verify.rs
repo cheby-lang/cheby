@@ -346,6 +346,21 @@ fn new_std_module(snapshot: &Snapshot) -> Option<PathBuf> {
     })
 }
 
+/// The dependencies of the package at `root`, as its Q run loaded them.
+fn dependencies_of(
+    kind: &Kind,
+    root: &Path,
+    manifest: &Manifest,
+    sources: &mut SourceMap,
+    diagnostics: &mut Vec<Diagnostic>,
+) -> crate::dependencies::Dependencies {
+    if !matches!(kind, Kind::Package) {
+        return crate::dependencies::Dependencies::default();
+    }
+    let tool = &mut Vec::new();
+    crate::dependencies::load_tolerant(root, manifest, sources, diagnostics, tool)
+}
+
 /// The path of `file` when it is an input of `verify`'s run: a file of the
 /// package (`FileLocation::Package`), and in a std checkout one that names
 /// a module of it. A file under `std/` that names none is no module of
@@ -355,7 +370,7 @@ fn input_path(snapshot: &Snapshot, file: FileId) -> Option<&PathBuf> {
         FileLocation::Package(path) => (!snapshot.is_std_checkout()
             || checkout::checkout_module(snapshot.root(), path).is_some())
         .then_some(path),
-        FileLocation::Std(_) | FileLocation::Synthetic => None,
+        FileLocation::Std(_) | FileLocation::Dependency(_) | FileLocation::Synthetic => None,
     }
 }
 
@@ -700,6 +715,7 @@ fn build(
     match kind {
         Kind::Package | Kind::Single => Ok(Built {
             package: Some(Package {
+                dependencies: dependencies_of(&kind, root, &manifest, sources, diagnostics),
                 root: root.to_path_buf(),
                 manifest,
                 modules,

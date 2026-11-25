@@ -490,6 +490,23 @@ Logged in [`../decisions/LOG.md`](../decisions/LOG.md#2026-10-04-implementation-
 | D-1788    | A matched `bytes::get` is a bounds test and a load in generated code                                |
 | D-1789    | String `==` tests the lengths first; the JSON escape scans read eight bytes at a time               |
 | D-1790    | The global allocator calls `mi_malloc` for word-aligned requests, through `libmimalloc-sys`         |
+| D-1851    | The manifest's `kind`: `program`, the default, or `library`                                         |
+| D-1852    | `cheby build` in a library compiles every module and links nothing                                  |
+| D-1854    | Only a library can be a dependency                                                                  |
+| D-1856    | Path dependencies come before git dependencies, the lockfile and fetching                           |
+| D-1857    | A path dependency is identified by its name and major, in symbols too                               |
+| D-1860    | An override in the root manifest gives a local directory a git identity; comes with git             |
+| D-1876    | `git` on `PATH` fetches; nothing of a repository is checked out or run                              |
+| D-1878    | SHA-256 checksums through `ring`, verified by every command; not on Windows until M6                |
+| D-1881    | Only `add`, `update` and `fetch` use the network                                                    |
+| D-1889    | Example 030's dependency is a fixture over the system's SQLite, with a fixed commit                 |
+| D-1892    | An example that serves has a session, its trial `@session`, and stays `skip-run`                    |
+| D-1893    | Example 030 is an example of M4                                                                     |
+| D-1896    | Dependencies' modules have the local package's records; keys hold the exact version and limits      |
+| D-1897    | Borrowing of dependencies is inferred over the modules a program loads, as the local package's      |
+| D-1898    | `dependency_cache` compares warm with cold after each edit; hidden `CHEBY_DEP_CACHE=off`            |
+| D-1899    | A library's build reads and writes `cheby run`'s code records; every module is checked              |
+| D-1900    | The dev profile optimizes every crate at level 1; the LSP harness waits after a refused move        |
 
 ## Open questions
 

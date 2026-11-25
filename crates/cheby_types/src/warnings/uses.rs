@@ -6,7 +6,7 @@
 use cheby_diag::{Span, TextRange};
 use cheby_iface::{
     DefId, DefIndex, DefKind, Generics, Ice, IfaceItem, ItemSig, ModuleId, ModuleInterface, Name,
-    Namespace, PackageId, Ty, TypeDefKind,
+    Namespace, Ty, TypeDefKind,
 };
 use cheby_resolve::Res;
 use cheby_syntax::NodeId;
@@ -80,7 +80,7 @@ impl PathUse {
 /// that count them are not given. The tests of a std module do not count,
 /// since user builds skip them.
 pub(super) fn thir_is_complete(input: &TypesInput<'_>, thir: &thir::Module) -> bool {
-    first_dropped(input, thir, Tests::SkipStd).is_none()
+    first_dropped(input, thir, Tests::SkipOthers).is_none()
 }
 
 /// The first body of the module, in item order, that is not in THIR: one
@@ -100,7 +100,7 @@ pub(super) fn first_dropped(
         .chain(thir.tests.iter().map(|t| t.def.index))
         .collect();
     checked.sort_unstable();
-    let skip_tests = tests == Tests::SkipStd && input.package == PackageId::STD;
+    let skip_tests = tests.skipped_in(input.package);
     input
         .resolved
         .bodies

@@ -149,6 +149,7 @@ fn module_of<'a>(analyzed: &'a Analyzed, path: &Path) -> Option<&'a ModuleIndex>
             .files()
             .find_map(|(file, _)| match snapshot.location(file)? {
                 FileLocation::Std(display) => path.ends_with(display).then_some(file),
+                FileLocation::Dependency(dependency) => (dependency == path).then_some(file),
                 FileLocation::Package(_) | FileLocation::Synthetic => None,
             })
     })?;

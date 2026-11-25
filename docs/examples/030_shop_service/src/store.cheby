@@ -6,8 +6,8 @@
 //! and so on, which the database keeps apart from the query, and that
 //! rules out SQL injection.
 //!
-//! Placing an order runs in one transaction. The products are read with
-//! `FOR UPDATE`, which locks their rows until the transaction ends, so
+//! Placing an order runs in one transaction, which `sql::transaction`
+//! starts with `BEGIN IMMEDIATE`: nobody else writes until it ends, so
 //! two orders for the last teapot cannot both find it in stock. If any
 //! step returns an `Err`, or the fiber panics, `sql::transaction` rolls
 //! everything back, so an order is never saved without its lines or its
@@ -82,7 +82,7 @@ fn find_product(pool: sql::Pool, id: Int) -> Result<Option<Product>, StoreError>
 fn place_order(pool: sql::Pool, new_order: order::NewOrder) -> Result<Placed, StoreError> {
   use connection <- sql::transaction(pool, Database)
   let ids = list::map(new_order.items, fn(line: order::Line) { line.product_id })
-  use products <- result::try(lock_products(connection, ids))
+  use products <- result::try(load_products(connection, ids))
   use codes <- result::try(load_codes(connection, new_order.discount))
   let priced = checkout::quote(new_order.items, new_order.discount, products, codes)
   use quote <- result::try(result::map_error(priced, Rejected))
@@ -114,18 +114,17 @@ fn find_order(pool: sql::Pool, id: Int) -> Result<Option<StoredOrder>, StoreErro
   }
 }
 
-/// Reads the products with the given ids, keyed by id, and locks them
-/// until the transaction ends. Ids with no product are simply missing
-/// from the map, and `checkout::quote` reports them.
-priv fn lock_products(
+/// Reads the products with the given ids, keyed by id. The transaction
+/// keeps them as they are until it ends. Ids with no product are simply
+/// missing from the map, and `checkout::quote` reports them.
+priv fn load_products(
   connection: sql::Connection,
   ids: List<Int>,
 ) -> Result<Map<Int, Product>, StoreError> {
   let query = r"
     SELECT id, name, price_cents, stock
     FROM products
-    WHERE id = ANY($1)
-    FOR UPDATE"
+    WHERE id IN (SELECT value FROM json_each($1))"
   use rows <- result::try(db(sql::query(connection, query, [sql::ints(ids)], product_row())))
   Ok(list::fold(rows, map::new(), fn(found, product: Product) {
     map::insert(found, product.id, product)

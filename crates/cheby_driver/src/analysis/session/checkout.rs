@@ -129,6 +129,7 @@ pub(crate) fn checkout_root(
     let file = source.file;
     Ok((
         Package {
+            dependencies: crate::dependencies::Dependencies::default(),
             root: root.to_path_buf(),
             manifest,
             modules: vec![Module {

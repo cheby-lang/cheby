@@ -49,6 +49,20 @@ impl Drop for Dir {
     }
 }
 
+/// A library that two packages name comes after both (D-1888).
+#[test]
+fn native_libraries_in_link_order() {
+    let of = |names: &[&str]| -> Vec<String> { names.iter().map(|n| (*n).to_owned()).collect() };
+    let (app, png, zip) = (of(&["z"]), of(&["png", "z"]), of(&["zip", "z", "m"]));
+    let order = |packages: &[&Vec<String>]| {
+        crate::aot::link_order(packages.iter().map(|p| p.as_slice())).join(" ")
+    };
+    assert_eq!(order(&[&app, &png]), "png z");
+    assert_eq!(order(&[&app, &png, &zip]), "png zip z m");
+    assert_eq!(order(&[&png, &app]), "png z");
+    assert_eq!(order(&[&of(&["z", "png", "z"])]), "png z");
+}
+
 /// A package with `src/app.c`, which includes `src/ffi.h` and `cheby.h`,
 /// with `factor` as the header's constant.
 fn package(name: &str, factor: u32) -> Dir {

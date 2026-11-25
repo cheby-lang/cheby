@@ -376,6 +376,17 @@ impl Session {
             sources.sort(diagnostics);
             render_diagnostics(diagnostics, sources, options.colors, false)
         };
+        let mut package = package;
+        if let (Some(root), Some(package)) = (&root, &mut package) {
+            package.dependencies = crate::dependencies::load(
+                root,
+                &package.manifest,
+                Targets::only(Target::Native),
+                &mut sources,
+                &mut diagnostics,
+                &|_, _| false,
+            )?;
+        }
         let Some(mut package) = package.filter(|_| !diagnostics.iter().any(Diagnostic::is_error))
         else {
             return Ok(Start::Failed(render(&mut diagnostics, &sources)));
@@ -383,12 +394,15 @@ impl Session {
         let (std_module, synthetic) = std_module(&package, &mut sources, &mut diagnostics)?;
         let ast = synthetic_import(&std_module)?;
         package.modules.push(std_module);
+        let dependency_files = package.dependencies.file_set();
         let front = frontend::run(
             package,
             frontend::Mode::Build,
             &mut sources,
             &mut diagnostics,
         )?;
+        // A dependency's warnings are not its user's (D-1868).
+        crate::dependencies::drop_warnings(&dependency_files, &mut diagnostics);
         let synthetic_span = Span::new(synthetic, TextRange::empty(0));
         diagnostics.retain(|d| d.primary_span().is_none_or(|s| s.file != synthetic));
         if diagnostics.iter().any(Diagnostic::is_error) {
@@ -1596,8 +1610,9 @@ impl Session {
         else {
             return Ok(false);
         };
-        self.native_generation = self.jit.add_library_generation(native.libraries());
         self.front.native = native;
+        let libraries = self.front.native_libraries();
+        self.native_generation = self.jit.add_library_generation(libraries);
         Ok(true)
     }
 
@@ -2712,6 +2727,10 @@ impl Session {
             // (D-536).
             time_limit: self.front.const_eval_time_limit,
             memory_limit: self.front.const_eval_memory_limit,
+            overrides: infos
+                .iter()
+                .filter_map(|info| Some((info.def, self.front.dependency_limits(info.def.module)?)))
+                .collect(),
             targets: self.front.package_targets,
         };
         // K5a, D-1190: the entry's constants evaluate in
@@ -3183,6 +3202,7 @@ fn no_package(
 ) -> Result<Package, Error> {
     let manifest = synthetic_manifest("repl", sources, diagnostics)?;
     Ok(Package {
+        dependencies: crate::dependencies::Dependencies::default(),
         root: dir.to_path_buf(),
         manifest,
         modules: Vec::new(),
@@ -3270,13 +3290,11 @@ struct SessionLookup<'a> {
 }
 
 impl ModuleLookup for SessionLookup<'_> {
-    fn lookup(&mut self, _from: PackageId, path: &[&str]) -> Result<Lookup, Ice> {
+    fn lookup(&mut self, from: PackageId, path: &[&str]) -> Result<Lookup, Ice> {
         let Some((&first, rest)) = path.split_first() else {
             return Err(Ice::new("an import with an empty path"));
         };
-        let module_path = rest
-            .iter()
-            .fold(ModulePath::root(first), |p, segment| p.child(segment));
+        let module_path = frontend::module_path(first, rest);
         if first == self.package {
             if rest == ["main"] {
                 return Ok(Lookup::RootByMainSegment);
@@ -3307,6 +3325,11 @@ impl ModuleLookup for SessionLookup<'_> {
                 package: PackageId::LOCAL,
                 closest,
             });
+        }
+        // Only a dependency's key is left.
+        let (names, modules) = (&self.front.names, &self.front.modules);
+        if let Some(found) = frontend::lookup_package(names, modules, from, first, rest) {
+            return Ok(found);
         }
         if first != "std" {
             return Ok(Lookup::NoPackage);

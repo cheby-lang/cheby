@@ -618,9 +618,11 @@ impl Session {
             }),
         };
         let mut diags = phase.clone();
+        let dependency_files = package.dependencies.file_set();
         let ran = catch_unwind(AssertUnwindSafe(|| {
             run_analysis(package, &mut sources, &mut diags, extras)
         }));
+        crate::dependencies::drop_warnings(&dependency_files, &mut diags);
         let front = match ran {
             Ok(Ok(front)) => Ok(front),
             Ok(Err(error)) => Err(error.message().to_owned()),
@@ -1124,8 +1126,17 @@ fn load_strict(
             syntax_diagnostics: own,
         });
     }
+    // The live run reports a dependency that cannot be read.
+    let dependencies = crate::dependencies::load_tolerant(
+        root,
+        &manifest,
+        &mut sources,
+        &mut diagnostics,
+        &mut Vec::new(),
+    );
     Ok(StrictLoad {
         package: Package {
+            dependencies,
             root: root.to_path_buf(),
             manifest,
             modules,

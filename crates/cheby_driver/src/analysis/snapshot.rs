@@ -46,6 +46,9 @@ pub enum FileLocation {
     Package(PathBuf),
     /// A std file by its display path, such as `std/list.cheby`.
     Std(String),
+    /// A file of a dependency, by its absolute path (D-1874). No edit
+    /// changes it.
+    Dependency(PathBuf),
     /// A file with no place on disk.
     Synthetic,
 }
@@ -234,7 +237,10 @@ impl Snapshot {
                 && let (Some(slot), Some(source)) = (locations.get_mut(n), sources.file(file))
                 && !matches!(slot, FileLocation::Package(_))
             {
-                *slot = FileLocation::Std(source.path().to_owned());
+                *slot = front.dependency_files.get(&file).map_or_else(
+                    || FileLocation::Std(source.path().to_owned()),
+                    |path| FileLocation::Dependency(path.clone()),
+                );
             }
         }
         let mut importers = vec![Vec::new(); front.modules.len()];
@@ -806,7 +812,9 @@ impl<'s> ModuleView<'s> {
             .and_then(|file| self.snapshot.location(file))
             .is_some_and(|location| match location {
                 FileLocation::Package(path) => self.snapshot.status.broken.contains(path),
-                FileLocation::Std(_) | FileLocation::Synthetic => false,
+                FileLocation::Std(_) | FileLocation::Dependency(_) | FileLocation::Synthetic => {
+                    false
+                }
             })
     }
 

@@ -91,6 +91,9 @@ pub enum BuildOutcome {
     /// Diagnostics with an error (E0053 included), or a denied warning:
     /// nothing was linked.
     CompileFailed(CheckOutput),
+    /// A library without a module path: every module compiled, nothing
+    /// linked (D-1852). The warnings were printed already.
+    Compiled(CheckOutput),
     /// The executable is in place; `output` holds the warnings, printed
     /// before the link.
     Linked {
@@ -160,6 +163,18 @@ pub fn build_cached_with(
     cache: &Cache,
     before_link: &mut dyn FnMut(&CheckOutput),
 ) -> Result<BuildOutcome, Error> {
+    // A library links nothing, so it needs no archive (D-1852).
+    if options.module_path.is_none()
+        && let Some(name) = library_name(root)
+    {
+        if options.output.is_some() {
+            return Err(Error::new(format!(
+                "package `{name}` is a library, so `cheby build` writes a file for `-o` only with the \
+                 path of a module with `main`"
+            )));
+        }
+        return build_library(root, options, cache, before_link);
+    }
     // The runtime archive first, before any work it would waste (D-929,
     // D-930); Windows has no executables yet (D-935), whatever it holds.
     let archive = if cfg!(windows) {
@@ -197,6 +212,57 @@ pub fn build_cached_with(
         output,
         executable: built.executable,
     })
+}
+
+/// The name of the package at `root` if it is a library (D-1851). A manifest
+/// that cannot be used gives `None`: the build reports its diagnostics.
+fn library_name(root: &Path) -> Option<String> {
+    let mut sources = cheby_diag::SourceMap::new();
+    match Manifest::load(root, &mut sources, &mut Vec::new()) {
+        Ok(Some(manifest)) if manifest.kind == cheby_package::Kind::Library => Some(manifest.name),
+        _ => None,
+    }
+}
+
+/// `cheby build` in a library (D-1852): checks and compiles every module of
+/// the package and evaluates its constants, and links nothing.
+fn build_library(
+    root: &Path,
+    options: &BuildOptions,
+    cache: &Cache,
+    before_link: &mut dyn FnMut(&CheckOutput),
+) -> Result<BuildOutcome, Error> {
+    let mut out = CheckOutput {
+        deny_warnings: options.deny_warnings,
+        ..CheckOutput::default()
+    };
+    // Every module is checked: the build has no `main` to start from.
+    let front = crate::front_end_family(
+        root,
+        frontend::Mode::Build,
+        crate::cache::index::CommandFamily::Build,
+        None,
+        &mut out,
+        Some(cache),
+        None,
+    )?;
+    out.sources.sort(&mut out.diagnostics);
+    let Some((front, _)) = front.filter(|_| !out.has_errors()) else {
+        return Ok(BuildOutcome::CompileFailed(out));
+    };
+    for (roots, profile) in [
+        (backend::Roots::Library, options.profile),
+        // Constants are evaluated on debug code in both profiles (D-1767).
+        (backend::Roots::Constants, crate::Profile::Debug),
+    ] {
+        let built = backend::build_reporting(&front, &out.sources, roots, false, false, profile)?;
+        if let Err(diagnostics) = built {
+            crate::report_back_end(&mut out, diagnostics);
+            return Ok(BuildOutcome::CompileFailed(out));
+        }
+    }
+    before_link(&out);
+    Ok(BuildOutcome::Compiled(out))
 }
 
 /// What [`build_objects`] produced.
@@ -318,7 +384,7 @@ fn build_once(
     // lookup is logged as `cheby run`'s are. A record that imports a symbol
     // D-943's build resolver cannot find is lowered after all, so E0053 is
     // decided on its MIR. D-1285.
-    let build_resolver = BuildResolver::new(front.native.library.as_deref());
+    let build_resolver = BuildResolver::new(front.native_libraries());
     let found = |symbol: &str| build_resolver.resolves(symbol);
     let reading = backend::Reading {
         code: true,
@@ -357,7 +423,7 @@ fn build_once(
     let (missing, stubs): (Vec<String>, Vec<String>) = unresolved_symbols(
         &compiled.records,
         &compiled.entries,
-        front.native.library.as_deref(),
+        &front.native_libraries(),
     )
     .into_iter()
     .partition(|symbol| reached.contains(symbol));
@@ -416,8 +482,8 @@ fn build_once(
         output: out,
         built: Built {
             objects,
-            c_objects: front.native.objects.clone(),
-            libraries: front.native.libraries.clone(),
+            c_objects: front.all_native().flat_map(|n| n.objects.clone()).collect(),
+            libraries: link_libraries(&front),
             executable,
             record_hashes,
         },
@@ -634,20 +700,21 @@ fn store_fresh(front: &frontend::Frontend, compiled: &Compiled<'_>) {
 /// exported names, then the package's shared library, then the archive's
 /// system libraries ([`cheby_link::native_libs::undefined`]), each answer
 /// remembered.
-struct BuildResolver<'a> {
+struct BuildResolver {
     runtime: BTreeSet<&'static str>,
-    package: Option<&'a cheby_jit::NativeLibrary>,
+    /// The packages' shared libraries, in build order.
+    packages: Vec<std::sync::Arc<cheby_jit::NativeLibrary>>,
     known: std::sync::Mutex<std::collections::BTreeMap<String, bool>>,
 }
 
-impl<'a> BuildResolver<'a> {
-    fn new(package: Option<&'a cheby_jit::NativeLibrary>) -> Self {
+impl BuildResolver {
+    fn new(packages: Vec<std::sync::Arc<cheby_jit::NativeLibrary>>) -> Self {
         Self {
             runtime: cheby_runtime::symbols()
                 .iter()
                 .map(|(name, _)| *name)
                 .collect(),
-            package,
+            packages,
             known: std::sync::Mutex::new(std::collections::BTreeMap::new()),
         }
     }
@@ -656,8 +723,9 @@ impl<'a> BuildResolver<'a> {
     fn resolves(&self, symbol: &str) -> bool {
         if self.runtime.contains(symbol)
             || self
-                .package
-                .is_some_and(|library| library.lookup(symbol).is_some())
+                .packages
+                .iter()
+                .any(|library| library.lookup(symbol).is_some())
         {
             return true;
         }
@@ -671,6 +739,31 @@ impl<'a> BuildResolver<'a> {
         known.insert(symbol.to_owned(), found);
         found
     }
+}
+
+/// The system libraries of every package, each once (D-1888), a package's
+/// before those of the packages it depends on, as a linker wants them.
+fn link_libraries(front: &frontend::Frontend) -> Vec<String> {
+    let packages: Vec<&[String]> = front
+        .all_native()
+        .map(|native| native.libraries.as_slice())
+        .collect();
+    link_order(packages.into_iter().rev())
+}
+
+/// The libraries of `packages` in order, a repeated one only where it is
+/// last: a static archive answers only what is linked before it.
+pub(crate) fn link_order<'a>(
+    packages: impl DoubleEndedIterator<Item = &'a [String]>,
+) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    for library in packages.flatten().rev() {
+        if !out.contains(library) {
+            out.push(library.clone());
+        }
+    }
+    out.reverse();
+    out
 }
 
 /// What the program image takes from the package and the build.
@@ -803,7 +896,7 @@ fn entries_record(
 fn unresolved_symbols(
     records: &[CodeRecord],
     entries: &CodeRecord,
-    package: Option<&cheby_jit::NativeLibrary>,
+    packages: &[std::sync::Arc<cheby_jit::NativeLibrary>],
 ) -> Vec<String> {
     let runtime = cheby_runtime::symbols();
     let mut foreign: BTreeSet<&str> = BTreeSet::new();
@@ -812,7 +905,9 @@ fn unresolved_symbols(
             if symbol.linkage == SymbolLinkage::Import
                 && !symbol.name.starts_with(mangle::PREFIX)
                 && !runtime.iter().any(|(name, _)| *name == symbol.name)
-                && package.is_none_or(|library| library.lookup(&symbol.name).is_none())
+                && packages
+                    .iter()
+                    .all(|library| library.lookup(&symbol.name).is_none())
             {
                 foreign.insert(&symbol.name);
             }

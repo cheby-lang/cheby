@@ -1,5 +1,5 @@
 //! A small shop as a JSON web service: products, discount codes and
-//! orders, stored in a SQL database.
+//! orders, stored in a SQLite database.
 //!
 //! ```text
 //! GET  /products      the catalogue
@@ -8,7 +8,9 @@
 //! GET  /orders/:id    one order, with its lines
 //! ```
 //!
-//! A session against the products in `schema.sql`:
+//! `cheby run shop_service::setup` makes the database that
+//! `DATABASE_URL` names, such as `sqlite:shop.db`, from `schema.sql`.
+//! A session against its products:
 //!
 //! ```text
 //! POST /orders {"email":"ada@example.com","items":[{"product_id":1,"quantity":3},{"product_id":2,"quantity":1}],"discount":"spring10"}
@@ -30,12 +32,13 @@
 //! - `checkout` prices an order: stock, discount codes, shipping.
 //! - `store` runs the SQL, with each order in one transaction.
 //! - `routes` matches requests to handlers and errors to responses.
+//! - `setup` is a program of its own that makes the database.
 //!
 //! The first two never touch the database or the network, so their
 //! tests cover all the shop's rules.
 //!
-//! The standard-library spec is still being written (D-204), and `sql`
-//! is a third-party package, so this example assumes the APIs below.
+//! `sql` is a third-party package, fetched from git (§13.4). The
+//! example uses these parts of it and of `std::http`.
 //!
 //! `std::http`:
 //!
@@ -56,7 +59,7 @@
 //!
 //! - `sql::connect(url, size)` opens a `sql::Pool` of `size` connections.
 //!   A pool is a handle that fibers share, and it closes when the last
-//!   reference goes away (D-101).
+//!   reference goes away (D-101). A URL is `sqlite:` and a path.
 //! - `sql::with_connection(pool, wrap, body)` lends `body` a
 //!   `sql::Connection` and gives it back afterwards. `sql::transaction`
 //!   does the same inside a transaction, which it commits if `body`
@@ -65,7 +68,9 @@
 //! - `sql::query(connection, text, params, decoder)` returns every row,
 //!   `sql::query_one` the first row or `None`, and `sql::execute` runs a
 //!   statement and returns the number of rows changed. Parameters are
-//!   built with `sql::int`, `sql::ints`, `sql::text` and so on.
+//!   built with `sql::int`, `sql::ints`, `sql::text` and so on, and
+//!   `sql::ints` is the JSON array that `json_each` reads.
+//!   `sql::script` runs several statements without parameters.
 //! - `sql::decode` reads rows the way `std::json::decode` reads objects:
 //!   `decode::column(name, decoder)`, `int`, `text`, `nullable`,
 //!   `success` and `failure`.
@@ -124,14 +129,14 @@ fn show(error: AppError) -> String {
 }
 
 test "the port defaults to 8080" {
-  assert read_settings(Some("postgres://shop"), None) == Ok(("postgres://shop", 8_080))
-  assert read_settings(Some("postgres://shop"), Some("3000")) == Ok(("postgres://shop", 3_000))
+  assert read_settings(Some("sqlite:shop.db"), None) == Ok(("sqlite:shop.db", 8_080))
+  assert read_settings(Some("sqlite:shop.db"), Some("3000")) == Ok(("sqlite:shop.db", 3_000))
 }
 
 test "bad settings are refused" {
   assert read_settings(None, Some("3000")) == Err(MissingDatabaseUrl)
-  assert read_settings(Some("postgres://shop"), Some("0")) == Err(BadPort("0"))
-  assert read_settings(Some("postgres://shop"), Some("web")) == Err(BadPort("web"))
+  assert read_settings(Some("sqlite:shop.db"), Some("0")) == Err(BadPort("0"))
+  assert read_settings(Some("sqlite:shop.db"), Some("web")) == Err(BadPort("web"))
 }
 
 test "errors show as messages" {

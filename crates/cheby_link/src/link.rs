@@ -233,7 +233,8 @@ pub fn command(
 /// The file name of an object in the temporary directory: its module
 /// path's, which no build path enters.
 fn object_file(module: &str) -> String {
-    format!("{module}.o")
+    // A git package's module path holds its URL (D-1881). No URL holds `%`.
+    format!("{}.o", module.replace('/', "%"))
 }
 
 /// The file name of the package's C object at `index` of `sources` in the
