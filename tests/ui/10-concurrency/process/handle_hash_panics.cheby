@@ -1,0 +1,16 @@
+// @mode: run-fail
+// @decisions: D-1919, D-233
+//! Hashing a `Reader`, here as an element of a set, panics when it reaches the handle, as
+//! `==` does (§3.13, §9.5).
+
+import std::io
+import std::process
+import std::set
+
+fn main() -> Result<Nil, io::Error> {
+  use child <- process::with_child(process::command("cat", []))
+  io::println("hashing")
+  let readers = set::from_list([process::stdout(child)])
+  io::println("never printed: {readers:?}")
+  Ok(Nil)
+}

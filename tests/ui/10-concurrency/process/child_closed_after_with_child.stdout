@@ -1,0 +1,5 @@
+wait: Err(True)
+kill: Err(True)
+read_line: Err(True)
+write: Err(True)
+caught: the body fails

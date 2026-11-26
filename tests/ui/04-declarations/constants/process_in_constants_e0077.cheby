@@ -1,0 +1,38 @@
+// @mode: check-fail
+// @decisions: D-1919, D-533
+//! Every runner of `std::process` reaches the kernel that starts a child, so a constant whose
+//! computation calls one is E0077, and the note names that kernel (§4.5).
+
+import std::io
+import std::process
+
+fn ran() -> Int {
+  case process::run(process::command("true", [])) {
+    Ok(_) => 1
+    Err(_) => 0
+  }
+}
+
+const by_run: Int = ran()
+
+fn captured() -> Int {
+  case process::output(process::command("printf", ["x"])) {
+    Ok(_) => 2
+    Err(_) => 0
+  }
+}
+
+const by_output: Int = captured()
+
+fn started() -> Int {
+  case process::with_child(process::command("cat", []), fn(_) { Ok(3) }) {
+    Ok(n) => n
+    Err(_) => 0
+  }
+}
+
+const by_with_child: Int = started()
+
+fn main() {
+  io::println("{by_run} {by_output} {by_with_child}")
+}

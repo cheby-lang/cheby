@@ -1,0 +1,5 @@
+cat echoed ["one", "two", "three"]
+read_bytes with limit 0: Some(bytes::from_list([0x61]))
+23 bytes: copied through io::copy
+a write after the end, a broken pipe: Err(True)
+reading a discarded stream, invalid input: Err(True)

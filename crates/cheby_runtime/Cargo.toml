@@ -22,7 +22,7 @@ getrandom.workspace = true
 httparse.workspace = true
 libc.workspace = true
 memchr.workspace = true
-mio = { workspace = true, features = ["net"] }
+mio = { workspace = true, features = ["net", "os-ext"] }
 parking_lot.workspace = true
 ryu.workspace = true
 siphasher.workspace = true

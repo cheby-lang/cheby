@@ -1,0 +1,40 @@
+// @mode: run-pass
+// @decisions: D-1912, D-1913, D-1914
+//! A child lives inside `with_child`. When the body returns, the child is killed, waited for and
+//! reaped, and every later operation on it or its pipes is closed. When the body unwinds, here by
+//! a panic that a scope catches, the child is killed at once (§10.9, ADR-0086).
+
+import std::fiber
+import std::io
+import std::process
+import std::result
+
+fn main() -> Result<Nil, io::Error> {
+  let spec = process::command("cat", [])
+  use kept <- result::try(process::with_child(spec, fn(child) { Ok(child) }))
+  let waited = process::wait(kept)
+    |> result::map_error(_, io::is_closed)
+  io::println("wait: {waited:?}")
+  let signalled = process::kill(kept)
+    |> result::map_error(_, io::is_closed)
+  io::println("kill: {signalled:?}")
+  let read = process::read_line(process::stdout(kept))
+    |> result::map_error(_, io::is_closed)
+  io::println("read_line: {read:?}")
+  let written = process::write(process::stdin(kept), "late")
+    |> result::map_error(_, io::is_closed)
+  io::println("write: {written:?}")
+  let sleeper = process::command("sleep", ["600"])
+    |> process::with_stdout(_, process::inherited())
+  let outcome = fiber::scope(fn(_) {
+    process::with_child::<Nil>(sleeper, fn(_) { panic as "the body fails" })
+  })
+  case outcome {
+    Ok(_) => io::println("no panic")
+    Err(failure) => {
+      let text = fiber::message(failure)
+      io::println("caught: {text}")
+    }
+  }
+  Ok(Nil)
+}

@@ -1,0 +1,47 @@
+error[E0068]: the constant `child` has a type that contains the external type `process::Child`
+ --> tests/ui/04-declarations/constants/process_handles.cheby:9:18
+  |
+9 | pub const child: Option<process::Child> = None
+  |                  ^^^^^^^^^^^^^^^^^^^^^^ this type contains `process::Child`
+  |
+  = note: a constant's value is computed at compile time and embedded in the program, which cannot hold values of external types
+  = help: create the value at run time, in a function
+
+error[E0068]: the constant `readers` has a type that contains the external type `process::Reader`
+  --> tests/ui/04-declarations/constants/process_handles.cheby:11:20
+   |
+11 | pub const readers: List<process::Reader> = []
+   |                    ^^^^^^^^^^^^^^^^^^^^^ this type contains `process::Reader`
+   |
+   = note: a constant's value is computed at compile time and embedded in the program, which cannot hold values of external types
+   = help: create the value at run time, in a function
+
+error[E0068]: the constant `writer` has a type that contains the external type `process::Writer`
+  --> tests/ui/04-declarations/constants/process_handles.cheby:13:19
+   |
+13 | pub const writer: Option<process::Writer> = None
+   |                   ^^^^^^^^^^^^^^^^^^^^^^^ this type contains `process::Writer`
+   |
+   = note: a constant's value is computed at compile time and embedded in the program, which cannot hold values of external types
+   = help: create the value at run time, in a function
+
+error[E0068]: the constant `spec` has a type that contains the external type `file::File`
+  --> tests/ui/04-declarations/constants/process_handles.cheby:15:17
+   |
+15 | pub const spec: Option<process::Command> = None
+   |                 ^^^^^^^^^^^^^^^^^^^^^^^^ this type contains `file::File`
+   |
+   = note: `process::Stream` has a field of type `file::File`
+   = note: a constant's value is computed at compile time and embedded in the program, which cannot hold values of external types
+   = help: create the value at run time, in a function
+
+error[E0068]: the constant `stream` has a type that contains the external type `file::File`
+  --> tests/ui/04-declarations/constants/process_handles.cheby:17:19
+   |
+17 | pub const stream: Option<process::Stream> = None
+   |                   ^^^^^^^^^^^^^^^^^^^^^^^ this type contains `file::File`
+   |
+   = note: `process::Stream` has a field of type `file::File`
+   = note: a constant's value is computed at compile time and embedded in the program, which cannot hold values of external types
+   = help: create the value at run time, in a function
+

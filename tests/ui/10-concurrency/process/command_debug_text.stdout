@@ -1,0 +1,2 @@
+Command { program: "curl", args: ["--silent", "https://example.com"], dir: Some("/tmp"), clear_env: False, env: [SetVar("TOKEN", <redacted>)], input: DefaultInput, out: None, errors: DefaultErrors }
+the value is hidden: True

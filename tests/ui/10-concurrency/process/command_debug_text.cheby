@@ -1,0 +1,18 @@
+// @mode: run-pass
+// @decisions: D-1908, D-1901
+//! The debug text of a `Command` shows the program and the arguments, and `<redacted>` for each
+//! value given to `with_env`, which it keeps as a `secret::Secret<String>` (§3.13).
+
+import std::io
+import std::process
+import std::string
+
+fn main() {
+  let spec = process::command("curl", ["--silent", "https://example.com"])
+    |> process::with_env(_, "TOKEN", "hunter2")
+    |> process::with_dir(_, "/tmp")
+  let text = "{spec:?}"
+  io::println(text)
+  let hidden = !string::contains(text, "hunter2")
+  io::println("the value is hidden: {hidden}")
+}

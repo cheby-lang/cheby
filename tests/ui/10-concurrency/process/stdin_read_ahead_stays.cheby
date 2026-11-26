@@ -1,0 +1,23 @@
+// @mode: run-pass
+// @decisions: D-1921, D-823
+//! A child that inherits standard input gets back the bytes that the program's reader read ahead
+//! only where the descriptor can seek. The harness feeds a pipe, so the two lines that the first
+//! `read_line` read ahead stay with the program, and `cat` reads the end at once (§10.9).
+
+import std::bytes
+import std::io
+import std::process
+import std::result
+
+fn main() -> Result<Nil, io::Error> {
+  use first <- result::try(io::read_line())
+  io::println("the program read {first:?}")
+  let spec = process::command("cat", [])
+    |> process::with_stdin(_, process::inherited())
+  use captured <- result::try(process::output(spec))
+  let count = bytes::length(captured.stdout)
+  io::println("the child read {count} bytes")
+  use second <- result::try(io::read_line())
+  io::println("the program read {second:?}")
+  Ok(Nil)
+}

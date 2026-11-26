@@ -1,0 +1,3 @@
+a wait under a timeout: Err(TimedOut)
+terminate: Signaled(15)
+kill: (Signaled(9), Signaled(9), Nil)

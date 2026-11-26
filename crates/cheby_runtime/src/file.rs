@@ -356,6 +356,80 @@ impl FileState {
 /// The turn of a handle, held for one operation.
 type TurnGuardOf<'a> = crate::sched::turn::TurnGuard<'a>;
 
+/// What a `File` given to a child as one of its streams stands for
+/// (D-1909, `process.rs`).
+#[cfg(unix)]
+#[derive(Debug)]
+pub(crate) enum ChildStream {
+    /// A standard stream's handle: that stream of the program, 0 to 2
+    /// (D-1071).
+    Std(i32),
+    /// A file on disk, whose descriptor the start's job copies
+    /// ([`Disk::child_descriptor`]).
+    Disk(Arc<Disk>),
+}
+
+#[cfg(unix)]
+impl FileState {
+    /// What this handle stands for as a child's stream (D-1909).
+    ///
+    /// # Errors
+    ///
+    /// Kind 12 when the handle was closed.
+    pub(crate) fn child_stream(&self) -> Result<ChildStream, FileError> {
+        if self.is_closed() {
+            return Err(FileError::closed());
+        }
+        Ok(match &self.target {
+            Target::Disk(disk) => ChildStream::Disk(Arc::clone(disk)),
+            Target::Std { stream, .. } => ChildStream::Std(match stream {
+                StdStream::Stdin => 0,
+                StdStream::Stdout => 1,
+                StdStream::Stderr => 2,
+            }),
+        })
+    }
+}
+
+#[cfg(unix)]
+impl Disk {
+    /// A copy of the descriptor, for a child's stream (D-1909), made on
+    /// the blocking pool under the buffer's lock, which waits for a refill
+    /// still running. For a child's standard input (`input`), the
+    /// descriptor first moves back over the bytes the handle read ahead,
+    /// which are dropped, so the child reads them. The copy shares the
+    /// file's position with the handle, as in a shell.
+    ///
+    /// # Errors
+    ///
+    /// Kind 12 once the handle was closed; kind 13 for a handle opened for
+    /// the other direction (D-1924), or when bytes are buffered and the
+    /// file cannot seek; the copy's failure.
+    pub(crate) fn child_descriptor(&self, input: bool) -> Result<fs::File, FileError> {
+        use std::io::{Seek, SeekFrom};
+        let mut inner = self.inner.lock();
+        let Inner { file, buffer, .. } = &mut *inner;
+        let Some(file) = file.as_ref() else {
+            return Err(FileError::closed());
+        };
+        // D-1924: a handle that reads only, given as standard output or
+        // error, or one that writes only, given as standard input.
+        if input != self.reads {
+            return Err(FileError::invalid_input());
+        }
+        let buffered = buffer.buffered_len();
+        if input && buffered > 0 {
+            let back = i64::try_from(buffered).map_err(|_| FileError::invalid_input())?;
+            let mut seeker = file;
+            seeker
+                .seek(SeekFrom::Current(back.saturating_neg()))
+                .map_err(|_| FileError::invalid_input())?;
+            buffer.discard();
+        }
+        file.try_clone().map_err(|error| FileError::of_io(&error))
+    }
+}
+
 impl HandlePayload for FileState {
     fn finalize(self: Box<Self>, _: &mut dyn FnMut(Word)) {
         // Dropping the state drops the handle's reference to its `Disk`:
@@ -810,29 +884,47 @@ pub fn set_temp_root(root: Option<PathBuf>) {
     *TEMP_ROOT.lock() = root;
 }
 
-/// The directory a scratch directory is created under now.
-fn temp_parent() -> PathBuf {
+/// The directory a scratch directory is created under now, and a child's
+/// captured output under `cheby test` (D-1918, `process.rs`).
+pub(crate) fn temp_parent() -> PathBuf {
     TEMP_ROOT.lock().clone().unwrap_or_else(std::env::temp_dir)
 }
 
 /// How often a random name is tried before the creation gives up.
 const NAME_TRIES: u32 = 64;
 
-/// Creates a new directory `<prefix><16 lower-case hex digits>` under
-/// `parent`, with mode 0700 on Unix, retrying on a name that exists
-/// (D-1205).
-fn new_scratch_dir(parent: &Path, prefix: &str) -> io::Result<PathBuf> {
+/// Makes something new at `<prefix><16 lower-case hex digits>` under
+/// `parent` with `make`, retrying on a name that exists (D-1205): a
+/// scratch directory here, a child's capture file in `process.rs`
+/// (D-1918). The path and what `make` made.
+///
+/// # Errors
+///
+/// `make`'s error other than `AlreadyExists`, or that one after every
+/// try.
+pub(crate) fn new_random_name<T>(
+    parent: &Path,
+    prefix: &str,
+    mut make: impl FnMut(&Path) -> io::Result<T>,
+) -> io::Result<(PathBuf, T)> {
     let mut last = io::Error::from(io::ErrorKind::AlreadyExists);
     for _ in 0..NAME_TRIES {
         let bits = getrandom::u64().map_err(|error| io::Error::other(error.to_string()))?;
         let path = parent.join(format!("{prefix}{bits:016x}"));
-        match new_dir(&path, true) {
-            Ok(()) => return Ok(path),
+        match make(&path) {
+            Ok(value) => return Ok((path, value)),
             Err(error) if error.kind() == io::ErrorKind::AlreadyExists => last = error,
             Err(error) => return Err(error),
         }
     }
     Err(last)
+}
+
+/// Creates a new directory `<prefix><16 lower-case hex digits>` under
+/// `parent`, with mode 0700 on Unix, retrying on a name that exists
+/// (D-1205).
+fn new_scratch_dir(parent: &Path, prefix: &str) -> io::Result<PathBuf> {
+    new_random_name(parent, prefix, |path| new_dir(path, true)).map(|(path, ())| path)
 }
 
 /// Creates the directory `path`, with mode 0700 when `private` and the

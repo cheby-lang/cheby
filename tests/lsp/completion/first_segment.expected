@@ -153,8 +153,8 @@
   "absent": [
     "Compare"
   ],
-  "count": 122,
-  "isIncomplete": false,
+  "count": 123,
+  "isIncomplete": true,
   "items": [
     {
       "detail": "pub interface Compare {\n  fn compare(Self, Self) -> Order\n}",

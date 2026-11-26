@@ -1,0 +1,107 @@
+//! Runs small Unix programs the way a build script does: a step that writes to the terminal, a
+//! step whose output is captured, a helper that answers line by line, and a step that fails.
+//!
+//! Every child is `sh`, `printf` or `cat`, whose output is the same on Linux and macOS. The
+//! helper is a shell loop that answers each line as soon as it reads it, so the program writes one
+//! line and reads one answer at a time, and neither pipe fills.
+
+import std::bytes
+import std::io
+import std::list
+import std::process
+import std::result
+import std::string
+
+/// What a status means, for the report.
+fn describe(status: process::Status) -> String {
+  case status {
+    process::Exited(0) => "ok"
+    process::Exited(code) => "exit status {code}"
+    process::Signaled(number) => "ended by signal {number}"
+  }
+}
+
+test "describe tells an exit from a signal" {
+  assert describe(process::Exited(0)) == "ok"
+  assert describe(process::Exited(2)) == "exit status 2"
+  assert describe(process::Signaled(9)) == "ended by signal 9"
+}
+
+/// Writes each of `names` to the helper and reads its answer, one line at a time.
+fn ask(
+  writer: process::Writer,
+  reader: process::Reader,
+  names: List<String>,
+  answers: List<String>,
+) -> Result<List<String>, io::Error> {
+  case names {
+    [] => Ok(list::reverse(answers))
+    [name, ..rest] => {
+      use _ <- result::try(process::write_line(writer, name))
+      use answer <- result::try(process::read_line(reader))
+      case answer {
+        Some(line) => ask(writer, reader, rest, [line, ..answers])
+        None => Ok(list::reverse(answers))
+      }
+    }
+  }
+}
+
+/// Starts the helper, greets each of `names` through it, then closes its input, so that the loop
+/// reads its end, and waits for it.
+fn greet(names: List<String>) -> Result<(List<String>, process::Status), io::Error> {
+  let script = "while read -r name; do printf 'hello, %s\\n' \"$name\"; done"
+  use child <- process::with_child(process::command("sh", ["-c", script]))
+  use answers <- result::try(ask(process::stdin(child), process::stdout(child), names, []))
+  use _ <- result::try(process::close(process::stdin(child)))
+  use status <- result::try(process::wait(child))
+  Ok((answers, status))
+}
+
+test "greet answers every name and ends cleanly" {
+  assert greet(["Ada", "Grace"]) == Ok((["hello, Ada", "hello, Grace"], process::Exited(0)))
+}
+
+/// The lines of `data`, without empty ones.
+fn lines_of(data: bytes::Bytes) -> List<String> {
+  string::from_bytes_lossy(data)
+  |> string::lines
+  |> list::filter(_, fn(line) { !string::is_empty(line) })
+}
+
+fn main() -> Result<Nil, io::Error> {
+  io::println("1. a step that writes to the terminal")
+  let build = process::command("printf", ["   building %s for %s\n", "cheby", "native"])
+  use built <- result::try(process::run(build))
+  let built_text = describe(built)
+  io::println("   {built_text}")
+
+  io::println("2. a step whose output is captured")
+  let script = "printf 'b.txt\\na.txt\\nc.txt\\n'; printf 'one file skipped\\n' >&2"
+  use listed <- result::try(process::output(process::command("sh", ["-c", script])))
+  let names = list::sort(lines_of(listed.stdout))
+  let count = list::length(names)
+  let joined = string::join(names, ", ")
+  io::println("   {count} files: {joined}")
+  let warnings = lines_of(listed.stderr)
+  io::println("   warnings: {warnings:?}")
+
+  io::println("3. a helper that answers line by line")
+  use (answers, helper) <- result::try(greet(["Ada", "Grace", "Linus"]))
+  list::each(answers, fn(answer) { io::println("   {answer}") })
+  let helper_text = describe(helper)
+  io::println("   the helper: {helper_text}")
+
+  io::println("4. a step that reads its input and fails")
+  let check = process::command("sh", ["-c", "cat; exit 3"])
+    |> process::with_input(_, bytes::from_string("   checking the input\n"))
+  use checked <- result::try(process::run(check))
+  case process::is_success(checked) {
+    True => io::println("   passed")
+    False => {
+      let checked_text = describe(checked)
+      io::println("   failed: {checked_text}")
+    }
+  }
+  Ok(Nil)
+}

@@ -63,7 +63,7 @@ The [overview](docs/spec/01-overview.md) lists what Cheby has, what it deliberat
 | [`docs/decisions/LOG.md`](docs/decisions/LOG.md)  | The decision log (`D-NNN`), cited throughout the spec   |
 | [`docs/adr/`](docs/adr/)                          | Architecture decision records for the major choices     |
 | [`docs/plan/`](docs/plan/README.md)               | Implementation plan, milestones M0-M6                   |
-| [`docs/examples/`](docs/examples/)                | 34 example programs with goldens, the conformance suite |
+| [`docs/examples/`](docs/examples/)                | 35 example programs with goldens, the conformance suite |
 | [`docs/diagnostics/`](docs/diagnostics/README.md) | Explanations of diagnostic codes, for `cheby explain`   |
 | [`crates/`](crates/)                              | The compiler, runtime and tools, one Cargo workspace    |
 | [`std/`](std/)                                    | The standard library's Cheby sources                    |

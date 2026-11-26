@@ -1,0 +1,16 @@
+// @mode: run-fail
+// @decisions: D-1919, D-233
+//! `==` on a `Child` warns at compile time and panics at run time when it reaches the handle,
+//! since a handle has no structural equality (§3.13, §9.5). The body unwinds, so the child is
+//! killed.
+
+import std::io
+import std::process
+
+fn main() -> Result<Nil, io::Error> {
+  use child <- process::with_child(process::command("cat", []))
+  io::println("comparing")
+  let same = child == child
+  io::println("never printed: {same}")
+  Ok(Nil)
+}

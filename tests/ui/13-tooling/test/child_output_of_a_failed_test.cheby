@@ -1,0 +1,24 @@
+// @mode: run-fail
+// @exit: 1
+// @command: test
+// @decisions: D-1922, D-1918
+//! Under `cheby test`, when a body unwinds while its child runs, the child is killed and left to
+//! the reaper, and its inherited output joins the test's capture when the test ends, after the
+//! test's other output (§13.6). The child says on a pipe that it has printed, so the order is
+//! fixed.
+
+import std::io
+import std::process
+
+test "a body that fails while its child runs" {
+  io::println("the test prints first")
+  let script = "printf 'the child prints\n'; printf 'ready\n' >&2; exec sleep 600"
+  let spec = process::command("sh", ["-c", script])
+    |> process::with_stdout(_, process::inherited())
+    |> process::with_stderr(_, process::piped())
+  let _ = process::with_child::<Nil>(spec, fn(child) {
+    let assert Ok(Some("ready")) = process::read_line(process::stderr(child))
+    io::println("the test prints second")
+    panic as "the body fails"
+  })
+}

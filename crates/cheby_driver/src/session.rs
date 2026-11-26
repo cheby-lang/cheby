@@ -517,7 +517,8 @@ impl Session {
         }
     }
 
-    /// Ends the session (§13.5.4, D-712): tears down the detached fibers of
+    /// Ends the session (§13.5.4, D-712): kills every child process still
+    /// open (D-1917), tears down the detached fibers of
     /// the current group and of every stuck group, then shuts the runtime
     /// down, which joins its threads and releases the JIT's code token
     /// (D-708). Session values are never dropped (D-458), so they all
@@ -532,6 +533,10 @@ impl Session {
             let _ = cache.finish(false);
         }
         let runtime = self.runtime.take()?;
+        // D-1917: the session's children still open are killed, waiting
+        // for none, before its fibers are torn down; other runtimes of the
+        // process keep theirs.
+        cheby_runtime::process::kill_children_of(&runtime);
         for group in std::iter::once(&self.group).chain(&self.stuck) {
             if runtime.teardown(group).halted {
                 break;

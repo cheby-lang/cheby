@@ -1,0 +1,36 @@
+warning[W0011]: `==` on a type that contains a handle
+  --> tests/ui/13-tooling/warnings/process_handle_equality.cheby:13:3
+   |
+13 |   a == b
+   |   ^^^^^^ `Job` contains the external type `Child`
+   |
+   = note: `==` and `!=` panic when they reach a handle value at run time
+   = help: compare the parts that can be compared
+
+warning[W0011]: `==` on a type that contains a handle
+  --> tests/ui/13-tooling/warnings/process_handle_equality.cheby:17:3
+   |
+17 |   a == b
+   |   ^^^^^^ `Option<process::Writer>` contains the external type `Writer`
+   |
+   = note: `==` and `!=` panic when they reach a handle value at run time
+   = help: compare the parts that can be compared
+
+warning[W0011]: `!=` on a type that contains a handle
+  --> tests/ui/13-tooling/warnings/process_handle_equality.cheby:21:3
+   |
+21 |   a != b
+   |   ^^^^^^ `List<process::Reader>` contains the external type `Reader`
+   |
+   = note: `==` and `!=` panic when they reach a handle value at run time
+   = help: compare the parts that can be compared
+
+warning[W0011]: `==` on a type that contains a handle
+  --> tests/ui/13-tooling/warnings/process_handle_equality.cheby:25:3
+   |
+25 |   a == b
+   |   ^^^^^^ `process::Command` contains the external type `File`
+   |
+   = note: `==` and `!=` panic when they reach a handle value at run time
+   = help: compare the parts that can be compared
+

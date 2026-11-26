@@ -4,15 +4,19 @@
 //! `File` is 45 and `std::net`'s `Listener` and `Connection` are 46 and 47
 //! (D-982), handles with a payload as 40 to 43 are, whose finalizers close
 //! their files (`file.rs`) and sockets (`net.rs`). `std::context`'s
-//! `Context` is 48 (D-1566, D-1583).
+//! `Context` is 48 (D-1566, D-1583). `std::process`'s `Child`, `Reader`
+//! and `Writer` are 49 to 51 (D-1919), handles with a payload whose
+//! finalizers kill a child still running and close its pipes
+//! (`process.rs`).
 //!
 //! They are handles: `==` and hashing stop on them with the catchable
 //! panic of a function value, and their debug text is `<Sender>`,
-//! `<Receiver>`, `<Fiber>`, `<Scope>`, `<Selector>` or `<Context>`, exactly
+//! `<Receiver>`, `<Fiber>`, `<Scope>`, `<Selector>`, `<Context>`, `<Child>`,
+//! `<Reader>` or `<Writer>`, exactly
 //! as for a value of an external type (D-233, D-590), through the kinds'
 //! `handle` flag ([`CustomKind::handle`]).
 //!
-//! (D-750) The objects of kinds 40 to 43 and 45 to 47 are 24 bytes:
+//! (D-750) The objects of kinds 40 to 43, 45 to 47 and 49 to 51 are 24 bytes:
 //! the header, a pointer to the boxed Rust payload ([`HandlePayload`]), and
 //! a pointer to the payload's vtable. The payload is shared by every copy
 //! of the value (copies share the object), so it is `Send + Sync`. When the
@@ -70,8 +74,8 @@ use crate::object::{self, scan_and_layout, word_to_ptr};
 use crate::panic::fatal;
 
 /// The Rust state behind a `Sender`, `Receiver`, `Fiber` or `Scope` handle
-/// (kinds 40 to 43), or a `File`, `Listener` or `Connection` (45 to 47),
-/// owned by
+/// (kinds 40 to 43), a `File`, `Listener` or `Connection` (45 to 47), or
+/// a `Child`, `Reader` or `Writer` (49 to 51), owned by
 /// the handle object and shared by every copy
 /// of the value.
 pub(crate) trait HandlePayload: Send + Sync + 'static {
@@ -87,7 +91,7 @@ pub(crate) trait HandlePayload: Send + Sync + 'static {
     fn finalize(self: Box<Self>, release: &mut dyn FnMut(Word));
 }
 
-/// The handle kinds with a payload: 40 to 43 and 45 to 47.
+/// The handle kinds with a payload: 40 to 43, 45 to 47 and 49 to 51.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum HandleKind {
     /// A channel's sending handle, `std::channel.Sender` (40).
@@ -104,6 +108,24 @@ pub(crate) enum HandleKind {
     Listener,
     /// A TCP connection, `std::net.Connection` (47, D-982).
     Connection,
+    /// A child process, `std::process.Child` (49, D-1919).
+    #[cfg_attr(
+        all(not(unix), not(test)),
+        expect(dead_code, reason = "children start on Unix only until M6 (D-1919)")
+    )]
+    Child,
+    /// The reading end of a child's pipe, `std::process.Reader` (50).
+    #[cfg_attr(
+        all(not(unix), not(test)),
+        expect(dead_code, reason = "children start on Unix only until M6 (D-1919)")
+    )]
+    Reader,
+    /// The writing end of a child's pipe, `std::process.Writer` (51).
+    #[cfg_attr(
+        all(not(unix), not(test)),
+        expect(dead_code, reason = "children start on Unix only until M6 (D-1919)")
+    )]
+    Writer,
 }
 
 impl HandleKind {
@@ -117,6 +139,9 @@ impl HandleKind {
             Self::File => ids::FILE,
             Self::Listener => ids::LISTENER,
             Self::Connection => ids::CONNECTION,
+            Self::Child => ids::CHILD,
+            Self::Reader => ids::READER,
+            Self::Writer => ids::WRITER,
         }
     }
 }
@@ -479,6 +504,9 @@ static SCOPE_KIND: CustomKind = handle_kind("Scope");
 static FILE_KIND: CustomKind = handle_kind("File");
 static LISTENER_KIND: CustomKind = handle_kind("Listener");
 static CONNECTION_KIND: CustomKind = handle_kind("Connection");
+static CHILD_KIND: CustomKind = handle_kind("Child");
+static READER_KIND: CustomKind = handle_kind("Reader");
+static WRITER_KIND: CustomKind = handle_kind("Writer");
 
 /// The selector node kind.
 static SELECTOR_KIND: CustomKind = CustomKind {
@@ -506,7 +534,7 @@ static CONTEXT_KIND: CustomKind = CustomKind {
     shape: layout::KindShape::Opaque,
 };
 
-/// Registers the nine kinds once per process. The layout table's builtin
+/// Registers the twelve kinds once per process. The layout table's builtin
 /// initialization calls it, so they are known before any object exists.
 pub(crate) fn register() {
     static ONCE: Once = Once::new();
@@ -521,6 +549,9 @@ pub(crate) fn register() {
             (ids::LISTENER, &LISTENER_KIND),
             (ids::CONNECTION, &CONNECTION_KIND),
             (ids::CONTEXT, &CONTEXT_KIND),
+            (ids::CHILD, &CHILD_KIND),
+            (ids::READER, &READER_KIND),
+            (ids::WRITER, &WRITER_KIND),
         ] {
             if let Err(error) = layout::register_builtin(id, LayoutInfo::custom(kind)) {
                 fatal(format_args!("cannot register handle layout {id}: {error}"));
@@ -614,7 +645,7 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn the_kinds_are_registered_at_40_to_48() {
+    fn the_kinds_are_registered_at_40_to_51() {
         // Any builtin lookup registers them.
         assert!(layout::get(ids::STRING).is_some());
         for (id, name) in [
@@ -627,6 +658,9 @@ pub(crate) mod tests {
             (ids::LISTENER, "Listener"),
             (ids::CONNECTION, "Connection"),
             (ids::CONTEXT, "Context"),
+            (ids::CHILD, "Child"),
+            (ids::READER, "Reader"),
+            (ids::WRITER, "Writer"),
         ] {
             let info = layout::get(id).unwrap();
             assert_eq!(&*info.type_name, name);
@@ -877,10 +911,14 @@ pub(crate) mod tests {
             // A captured context, the ninth kind (D-1583).
             words.push(captured(0, None));
             words.push(captured(0, Some(1)));
+            // `std::process`'s handles, after `Context` (D-1919).
+            for kind in [HandleKind::Child, HandleKind::Reader, HandleKind::Writer] {
+                words.push(counted(kind, &finalized, Vec::new()));
+            }
             let expected = if cfg!(debug_assertions) {
-                [1, 2, 1, 1, 1, 1, 1, 1, 2]
+                [1, 2, 1, 1, 1, 1, 1, 1, 2, 1, 1, 1]
             } else {
-                [0; 9]
+                [0; 12]
             };
             assert_eq!(domain.live_kinds(), expected);
             let line = alloc::leaked_kinds_line(domain.live_kinds(), domain.live_objects());
@@ -889,7 +927,8 @@ pub(crate) mod tests {
                     line.as_deref(),
                     Some(
                         "note: leaked 1 <Sender>, 2 <Receiver>, 1 <Fiber>, 1 <Scope>, \
-                         1 <Selector>, 1 <File>, 1 <Listener>, 1 <Connection>, 2 <Context>"
+                         1 <Selector>, 1 <File>, 1 <Listener>, 1 <Connection>, 2 <Context>, \
+                         1 <Child>, 1 <Reader>, 1 <Writer>"
                     )
                 );
             } else {
@@ -898,7 +937,7 @@ pub(crate) mod tests {
             release(words);
             let other = string("other");
             if cfg!(debug_assertions) {
-                assert_eq!(domain.live_kinds(), [0, 1, 0, 0, 0, 0, 0, 0, 0]);
+                assert_eq!(domain.live_kinds(), [0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]);
                 assert_eq!(
                     alloc::leaked_kinds_line(domain.live_kinds(), domain.live_objects()).as_deref(),
                     Some("note: leaked 1 <Receiver>, and 1 object of other kinds")
@@ -906,7 +945,7 @@ pub(crate) mod tests {
             }
             release([receiver, other]);
         });
-        assert_eq!(domain.live_kinds(), [0; 9]);
+        assert_eq!(domain.live_kinds(), [0; 12]);
         assert_eq!(domain.live_objects(), 0);
         assert_eq!(alloc::leaked_kinds_line(domain.live_kinds(), 0), None);
     }

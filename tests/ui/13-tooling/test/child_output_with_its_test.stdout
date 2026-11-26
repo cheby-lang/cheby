@@ -1,0 +1,8 @@
+the test prints first
+the child prints
+the test prints last
+test ui_test "a child writes to its inherited standard output" ... ok
+the second test prints
+test ui_test "another test prints" ... ok
+
+test result: ok. 2 passed; 0 failed; 0 filtered out

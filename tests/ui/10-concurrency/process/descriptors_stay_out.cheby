@@ -1,0 +1,21 @@
+// @mode: run-pass
+// @decisions: D-1916, D-1923
+//! A child gets descriptors 0 to 2 and no others, also while the program holds a file open and
+//! when the process that started `cheby` passed it descriptors without close-on-exec, as cargo's
+//! job server does (§10.9). The shell tries to write to each of 3 to 9 and exits with the first
+//! that is open.
+
+import std::file
+import std::filepath
+import std::io
+import std::process
+import std::result
+
+fn main() -> Result<Nil, io::Error> {
+  use dir <- file::with_temp_dir()
+  use held <- file::with_create(filepath::join(dir, "held.txt"))
+  let probe = "for fd in 3 4 5 6 7 8 9; do (printf x >&$fd) 2>/dev/null && exit $fd; done; exit 0"
+  use captured <- result::try(process::output(process::command("sh", ["-c", probe])))
+  io::println("{captured.status:?}")
+  file::write(held, "still open")
+}

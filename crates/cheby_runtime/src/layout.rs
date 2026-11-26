@@ -706,7 +706,7 @@ fn builtins() -> &'static [Option<LayoutInfo>] {
         set(layout::NONE, builtin_ctor("Option", "None", 1, 0));
         set(layout::OK, builtin_ctor("Result", "Ok", 0, 1));
         set(layout::ERR, builtin_ctor("Result", "Err", 1, 1));
-        // The handle kinds 40 to 48 (D-703, D-1583) are registered with the
+        // The handle kinds 40 to 51 (D-703, D-1583, D-1919) are registered with the
         // builtins, so the first lookup of any builtin layout makes them
         // known too; the code that builds them registers them as well
         // before it allocates one. Registering takes the registration
@@ -1015,7 +1015,7 @@ pub static EXTERNAL_HANDLE: CustomKind = CustomKind {
 impl LayoutInfo {
     /// Whether values of this layout are handles: values of an external
     /// type ([`register_external`]) or of one of std's handle kinds 40 to
-    /// 44 (D-647, D-703). `==` and hashing stop on them and debug text
+    /// 51 (D-647, D-703, D-982, D-1583, D-1919). `==` and hashing stop on them and debug text
     /// prints `<`[`LayoutInfo::type_name`]`>` (D-233).
     #[must_use]
     pub fn is_external(&self) -> bool {

@@ -825,6 +825,8 @@ pub(crate) fn fatal(message: fmt::Arguments<'_>) -> ! {
     // The process aborts next whether the message could be written; it
     // goes to the real stream, never to a capture nobody would replay.
     let _ = io::write_last_words(&format!("fatal runtime error: {message}\n"));
+    // D-1917: the program's open children end with it.
+    crate::process::kill_open_children();
     std::process::abort()
 }
 

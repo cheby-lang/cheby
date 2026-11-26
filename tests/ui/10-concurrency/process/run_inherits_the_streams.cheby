@@ -1,0 +1,20 @@
+// @mode: run-pass
+// @decisions: D-1916, D-1909, D-1911
+//! Under `cheby run` a child of `process::run` inherits the real streams, and standard output is
+//! flushed before it starts, so what the program printed before comes first, although standard
+//! output buffers it (§10.9).
+
+import std::io
+import std::process
+import std::result
+
+fn main() -> Result<Nil, io::Error> {
+  io::print("the program writes first, ")
+  io::println("into its buffer")
+  use first <- result::try(process::run(process::command("printf", ["the child writes second\n"])))
+  io::println("the program again, after {first:?}")
+  let failing = process::command("sh", ["-c", "printf 'to standard error\n' >&2; exit 3"])
+  use second <- result::try(process::run(failing))
+  io::println("then {second:?}")
+  Ok(Nil)
+}

@@ -1,0 +1,19 @@
+// @mode: check-fail
+// @decisions: D-1919, D-139
+//! No constant may hold a `Child`, a `Reader` or a `Writer`, not even inside another type. A
+//! `Command` and a `Stream` hold a `file::File` through `process::to_file`, so no constant may
+//! hold them either (§4.5).
+
+import std::process
+
+pub const child: Option<process::Child> = None
+
+pub const readers: List<process::Reader> = []
+
+pub const writer: Option<process::Writer> = None
+
+pub const spec: Option<process::Command> = None
+
+pub const stream: Option<process::Stream> = None
+
+pub const status: process::Status = process::Exited(0)

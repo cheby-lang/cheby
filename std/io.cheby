@@ -38,6 +38,7 @@ type Kind {
   IsADirectory,
   NotADirectory,
   DirectoryNotEmpty,
+  BrokenPipe,
   Other,
 }
 
@@ -45,7 +46,7 @@ type Kind {
 /// denied, `3` invalid UTF-8, `4` already exists, `5` is a directory, `6`
 /// not a directory, `7` directory not empty, `8` connection refused, `9`
 /// connection reset, `10` address in use, `11` host not found, `12`
-/// closed, `13` invalid input, anything else another kind with the
+/// closed, `13` invalid input, `14` broken pipe, anything else another kind with the
 /// operating system's message. A kind with a predicate drops the message,
 /// so its text is the same on every platform (D-345, D-981).
 fn from_os(code: Int, message: String) -> Error {
@@ -63,6 +64,7 @@ fn from_os(code: Int, message: String) -> Error {
     11 => Error { kind: HostNotFound, message: "" }
     12 => Error { kind: Closed, message: "" }
     13 => Error { kind: InvalidInput, message: "" }
+    14 => Error { kind: BrokenPipe, message: "" }
     _ => Error { kind: Other, message }
   }
 }
@@ -92,6 +94,7 @@ fn hash(error: Error) -> (Int, String) {
     HostNotFound => (11, "")
     Closed => (12, "")
     InvalidInput => (13, "")
+    BrokenPipe => (14, "")
     Other => (0, error.message)
   }
 }
@@ -357,6 +360,27 @@ pub fn is_invalid_input(error: Error) -> Bool {
   }
 }
 
+/// Tells whether `error` means that a write went to a pipe whose reading end is closed: a child
+/// that closed its standard input or exited (D-1915).
+pub fn is_broken_pipe(error: Error) -> Bool {
+  case error.kind {
+    BrokenPipe => True
+    _ => False
+  }
+}
+
+test "the broken pipe kind has its predicate and fixed text" {
+  let error = from_os(14, "the system's own words")
+  assert show(error) == "broken pipe"
+  assert "{error:?}" == "broken pipe"
+  assert error == from_os(14, "other words")
+  assert error != from_os(0, "the system's own words")
+  assert is_broken_pipe(error)
+  assert !is_closed(error)
+  assert !is_connection_reset(error)
+  assert !is_broken_pipe(from_os(9, ""))
+}
+
 test "the network kinds have their predicates and fixed texts" {
   let kinds = [
     (8, "connection refused"),
@@ -407,6 +431,7 @@ pub fn show(error: Error) -> String {
     HostNotFound => "host not found"
     Closed => "closed"
     InvalidInput => "invalid input"
+    BrokenPipe => "broken pipe"
     Other => error.message
   }
 }

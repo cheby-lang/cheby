@@ -40,7 +40,7 @@ pub(super) enum View<'a> {
         value: Word,
     },
     /// A handle, with its layout: a value of an external type (§12.5.3),
-    /// or of one of std's handle kinds 40 to 48 (D-647, D-703, D-1583), which
+    /// or of one of std's handle kinds 40 to 51 (D-647, D-703, D-1583, D-1919), which
     /// share that path ([`LayoutInfo::is_external`], D-233).
     External(&'static LayoutInfo),
     /// A type descriptor or a nominal descriptor, read into its parts.

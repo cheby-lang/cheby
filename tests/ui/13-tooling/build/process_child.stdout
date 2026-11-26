@@ -1,0 +1,4 @@
+the executable starts a child
+the child writes
+Exited(0)
+captured, Exited(0)
