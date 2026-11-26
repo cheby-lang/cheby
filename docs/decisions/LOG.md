@@ -3310,3 +3310,16 @@ Open:
 - `cheby check --fix` has no dry run that only lists what it would change (D-1945).
 
 Spec: §13.1, §13.6, and the new §13.8.1 and §13.8.2. No new diagnostic code. Tree-sitter: no grammar change.
+
+## 2026-11-26: API lookup as text
+
+Goal: let people and agents read the signature and the doc comment of anything a package can import, from the terminal.
+
+- **D-1947 `cheby doc <path>` looks an API up**: `cheby doc` takes an optional path. With one, it writes to standard output what the path names, as text, and without one it stays the HTML generator of D-078. It looks in every shipped module of std and, inside a package, in the package's modules and in those of the dependencies that the manifest names, each under the path an import in the package writes, so a dependency's module starts with its key (D-238). A module of the package shows every item, its private ones too. A module of std or of a dependency shows what the package may name, and a type's constructors and fields only where the package may see them. The path is read by the first rule that finds something: a module, where a std module may drop `std::`, gives its doc comment and each item's declaration without a body with the first sentence of its doc comment; an item gives its declaration and its whole doc comment, then its `@deprecated` message and its targets when they are not all; another language's name for a std function gives the function it means by the table of D-1658, after a line that says so; a path that has modules below it lists them; a name that items of any module have gives the one item in full or the several in short; and a text that item names contain, ignoring case, gives those. A constructor that has its type's name is left to the type. A path that names nothing is a tool error. A package that cannot be read costs a note, and std is still searched, as it is outside any package. With `--format json` (D-1944) a module is `{"type":"module","path":…,"origin":…,"doc":…}` and an item `{"type":"item","module":…,"name":…,"kind":…,"signature":…,"doc":…,"deprecated":…,"targets":[…]}`. Std comes from the index the language server reads (D-1372), the package and its dependencies from one run of the language server's analysis, which goes on past a file with syntax errors (D-1347), signatures from the printer of hover, and doc comments from the trees (D-1385), a dependency's from its file read again. Nothing is compiled or run. Why: an agent has no Cheby in its training and guessed std names, and the only way to check one was to search the 54 files of `std/`, while the signatures and doc comments were already computed for hover and completion. The user chose `cheby doc <path>` over a new command, the package and its dependencies with std over std alone, a search by name after the paths over exact paths only, and for a module the signatures with first sentences over whole doc comments or signatures alone. Extends D-078.
+
+Open:
+
+- `cheby doc <path>` does not list the interfaces a type satisfies, which the HTML pages will (D-078), nor the doc comments of fields and variants.
+- A search finds names only. Finding the functions that take or return a type, which the std index can answer for completion, has no query form (D-1947).
+
+Spec: §13.1 and §13.10. No new diagnostic code. Tree-sitter: no grammar change.

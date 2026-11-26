@@ -452,6 +452,18 @@ impl Snapshot {
         (Arc::clone(&self.front.globals), self.targets)
     }
 
+    /// The key of the package's `[dependencies]` that names the package
+    /// whose module paths start with `identity` (D-238): what a module of
+    /// the package writes first in an import of it. `None` for a package
+    /// that only a dependency depends on.
+    pub(crate) fn dependency_key(&self, identity: &str) -> Option<&str> {
+        self.front
+            .names
+            .root_keys()
+            .find(|&(_, named)| named == identity)
+            .map(|(key, _)| key)
+    }
+
     /// Every module of the run, by id and by path.
     #[must_use]
     pub const fn table(&self) -> &ModuleTable {

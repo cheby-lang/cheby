@@ -80,7 +80,7 @@ Code in the spec, the ADRs, the examples, `std/` and the tests must be valid Che
 - Imports look like `import std::io`, and strings interpolate with `"{name}"`.
 - Put `test "…" { assert … }` blocks next to the code they test.
 
-When unsure, find a similar construct in `docs/examples/` or `std/` and check the relevant spec chapter. `cargo run -p cheby_cli -- check` in a package directory confirms that the code checks. `check --fix` applies the fixes the compiler is sure of, and `--format json` gives the diagnostics, and the results of `cheby test`, as one JSON object per line (D-1944, D-1945, D-1946).
+When unsure, find a similar construct in `docs/examples/` or `std/` and check the relevant spec chapter. `cargo run -p cheby_cli -- doc list::map` prints the signature and the doc comment of a std function, `doc std::list` a module's items, and `doc std` the modules (D-1947). `cargo run -p cheby_cli -- check` in a package directory confirms that the code checks. `check --fix` applies the fixes the compiler is sure of, and `--format json` gives the diagnostics, and the results of `cheby test`, as one JSON object per line (D-1944, D-1945, D-1946).
 
 ## Examples
 

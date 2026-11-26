@@ -512,6 +512,7 @@ Logged in [`../decisions/LOG.md`](../decisions/LOG.md#2026-10-04-implementation-
 | D-1944    | `--format json`: diagnostics and tool errors as JSON Lines on standard error, every command         |
 | D-1945    | Helps marked as sure fixes at the source; `cheby check --fix` applies them, four rounds             |
 | D-1946    | `cheby test --format json` results on standard output; `--report-failures-only`                     |
+| D-1947    | `cheby doc <path>`: signatures and doc comments of std, the package and its dependencies            |
 
 ## Open questions
 

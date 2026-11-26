@@ -250,6 +250,7 @@ dependencies = [
 name = "cheby_doc"
 version = "0.0.0"
 dependencies = [
+ "cheby_diag",
  "cheby_driver",
 ]
 

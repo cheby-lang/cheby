@@ -14,7 +14,7 @@ Cheby ships as one `cheby` binary that contains the compiler, runtime, REPL, tes
 | `cheby test`                               | run `test` blocks ([§13.6](#136-tests))                            | D-055, D-541        |
 | `cheby fmt`                                | format source files ([§13.7](#137-formatter))                      | D-079, D-1031       |
 | `cheby lsp`                                | language server over stdio ([§13.11](#1311-language-server))       | D-031               |
-| `cheby doc`                                | generate HTML documentation ([§13.10](#1310-documentation))        | D-078               |
+| `cheby doc [path]`                         | look an API up, or generate HTML ([§13.10](#1310-documentation))   | D-078, D-1947       |
 | `cheby add`, `cheby update`, `cheby fetch` | manage dependencies ([§13.4](#134-dependencies-and-lockfile))      | D-044, D-097        |
 | `cheby explain <code>`                     | explain a diagnostic code ([§13.8](#138-diagnostics-and-warnings)) | D-420               |
 
@@ -479,12 +479,35 @@ Hash-based collections (`Map`, `Set`) may appear in constants, even though the h
 
 ## 13.10 Documentation
 
-`cheby doc` generates HTML documentation for a package from its `pub` items and their `///` and `//!` doc comments (D-078):
+`cheby doc`, without an argument, generates HTML documentation for a package from its `pub` items and their `///` and `//!` doc comments (D-078):
 
 - Doc comments are Markdown.
 - The pages show each item's signature, the variants and fields of `exposed` types, and the interfaces each type satisfies structurally ([chapter 8](08-interfaces.md)).
 - Code blocks in doc comments are highlighted as Cheby.
 - Code examples in doc comments are compiled and run as tests by `cheby test`, so they cannot go stale (D-197).
+
+`cheby doc <path>` looks an API up and writes it to standard output as text (D-1947). It looks in the standard library and, inside a package, in the modules of the package and of the dependencies that its manifest names, each under the path that an import in the package writes for it. A module of the package shows every item. A module of the standard library or of a dependency shows the items that the package may name, and the constructors and fields of a type only when the package may see them ([§4.3](04-declarations.md#43-type-declarations)).
+
+The path is read by the first of these rules that finds something:
+
+1. A module, such as `std::list`. A standard-library module may be written without `std::`, as `list`. The output is the module's doc comment, then each function, type, alias, constant and interface of the module, with its declaration without a body and the first sentence of its doc comment.
+2. An item, such as `list::map` or `std::option::Some`. The output is its declaration without a body and its whole doc comment, then the message of its `@deprecated`, and its targets when it does not exist on every target. A name that another language uses for a standard-library function, such as `list::reduce`, gives the function it means, after a line that says so.
+3. A path with modules below it, such as `std`: those modules, each with the first sentence of its doc comment.
+4. A name that items of any module have, such as `parse` or `Option`: one item is written as in rule 2, and several as in rule 1, each under its path.
+5. A text that item names contain, ignoring case: those items, as in rule 4.
+
+A path that names nothing is an error without a code ([§13.8](#138-diagnostics-and-warnings)). When the package cannot be read, the command says so in a note on standard error and looks in the standard library alone. Outside a package it looks there too. With `--format json` ([§13.8.1](#1381-json-output)) the output is JSON, one object per line: a module is `{"type":"module","path":…,"origin":…,"doc":…}`, with the origin `"package"`, `"dependency"` or `"std"`, and an item is `{"type":"item","module":…,"name":…,"kind":…,"signature":…,"doc":…,"deprecated":…,"targets":[…]}`, with its whole doc comment, and with `doc` and `deprecated` left out when it has none. The kind is `"fn"`, `"type"`, `"alias"`, `"const"`, `"interface"`, `"interface_fn"` or `"constructor"`.
+
+_Example:_
+
+```
+$ cheby doc list::map
+std::list::map
+
+pub fn map<T, U>(xs: List<T>, f: fn(T) -> U) -> List<U>
+
+  Returns the results of calling `f` on each element, in order.
+```
 
 ## 13.11 Language server
 

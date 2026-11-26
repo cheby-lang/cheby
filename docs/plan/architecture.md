@@ -30,7 +30,7 @@ cheby/
     cheby_repl/           REPL session
     cheby_fmt/            formatter (M5)
     cheby_lsp/            language server: diagnostics, navigation, completion, constant values (M5)
-    cheby_doc/            documentation generator (M5)
+    cheby_doc/            `cheby doc <path>`, the text lookup (D-1947); documentation generator (M5)
     cheby_pkg/            dependency resolution and fetching (M5)
     cheby_cli/            the `cheby` binary, whose build script computes the build ID (M3)
   runtime-js/             JS runtime, ES modules (M4)

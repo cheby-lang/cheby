@@ -216,8 +216,12 @@ enum Command {
         #[arg(long, hide = true)]
         stdio: bool,
     },
-    /// Generate HTML documentation (§13.10)
-    Doc,
+    /// Look an API up as text; without a path, generate HTML documentation (§13.10)
+    Doc {
+        /// A module, such as `std::list`, an item, such as `list::map`, or a name to search
+        /// for, in std, the package and its dependencies (D-1947)
+        path: Option<String>,
+    },
     /// Add a git dependency to the manifest and lockfile (§13.4)
     Add {
         /// Git URL, such as `https://github.com/example/cheby-json`
@@ -353,6 +357,7 @@ fn run_command() -> ExitCode {
             | Command::Repl { .. }
             | Command::Test { .. }
             | Command::Lsp { .. }
+            | Command::Doc { path: Some(_) }
             | Command::Backend(_)
     );
     if builds && let Err(e) = cheby_driver::configure_jobs(cli.jobs) {
@@ -437,7 +442,8 @@ fn run_command() -> ExitCode {
             // Without its own path the server runs no child jobs.
             child: std::env::current_exe().ok(),
         }),
-        Command::Doc => out.not_yet("doc", "M5"),
+        Command::Doc { path: None } => out.not_yet("doc", "M5"),
+        Command::Doc { path: Some(path) } => doc(out, &path),
         Command::Add {
             url,
             tag,
@@ -804,6 +810,40 @@ fn test(
         Ok(report) if report.success() => ExitCode::SUCCESS,
         Ok(_) => ExitCode::FAILURE,
         Err(e) => out.error(e.message()),
+    }
+}
+
+/// `cheby doc <path>` (§13.10, D-1947): looks `query` up in std and, inside
+/// a package, in the package and its dependencies, and prints what it names
+/// to standard output, as text or, with `--format json`, as JSON lines. A
+/// package that cannot be read costs a note, and std still answers. A query
+/// that names nothing is a tool error.
+fn doc(out: Out, query: &str) -> ExitCode {
+    let root = std::env::current_dir()
+        .ok()
+        .and_then(|cwd| cheby_driver::find_package_root(&cwd));
+    let (index, unread) = match cheby_driver::analysis::api_index(root.as_deref()) {
+        Ok(found) => found,
+        Err(e) => return out.error(e.message()),
+    };
+    if let Some(why) = unread {
+        out.note(&format!(
+            "note: the package was not read, so only the standard library is searched: {why}\n"
+        ));
+    }
+    let Some(found) = cheby_doc::lookup(&index, query) else {
+        let code = out.error(&format!("nothing is named `{query}`"));
+        out.help("`cheby doc std` lists the modules of the standard library");
+        return code;
+    };
+    let text = match out.format {
+        Format::Text => cheby_doc::render_text(&found),
+        Format::Json => cheby_doc::render_json(&found),
+    };
+    if std::io::stdout().lock().write_all(text.as_bytes()).is_ok() {
+        ExitCode::SUCCESS
+    } else {
+        ExitCode::FAILURE
     }
 }
 
