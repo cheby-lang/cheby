@@ -1,0 +1,8 @@
+error[E0003]: unexpected character `?`
+ --> tests/ui/02-lexical-structure/habits/question_postfix.cheby:8:27
+  |
+8 |   let n = int::parse(text)?
+  |                           ^
+  |
+  = help: Cheby has no `?` operator; unwrap a `Result` with `use x <- result::try(…)`
+

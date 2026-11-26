@@ -765,9 +765,9 @@ fn helps_with_edits(text: &str) -> usize {
 #[test]
 fn single_quotes_get_a_fix_to_double_quotes() {
     // D-1688: the opening quote's help turns both quotes into `"`, and the
-    // closing quote's help has no edit of its own.
+    // closing quote gets no error of its own (D-1933).
     let text = "fn f() {\n  let s = 'it is'\n  s\n}\n";
-    assert_eq!(all_codes(text), ["E0003", "E0003", "E0013"]);
+    assert_eq!(all_codes(text), ["E0003", "E0013"]);
     assert_eq!(helps_with_edits(text), 1);
     let fixed = apply_help(text, 0);
     assert_eq!(fixed, "fn f() {\n  let s = \"it is\"\n  s\n}\n");

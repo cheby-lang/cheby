@@ -1,0 +1,9 @@
+// @mode: parse-fail
+// @decisions: D-1930, D-1933
+//! A JavaScript template literal gets the help that strings use double
+//! quotes, and its closing backtick adds no error.
+
+fn main() {
+  let s = `a`
+  assert s == "a"
+}

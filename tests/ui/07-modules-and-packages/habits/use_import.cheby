@@ -1,0 +1,10 @@
+// @mode: parse-fail
+// @decisions: D-1930, D-1931
+//! Rust's `use std::io` at the top level gets the help to write `import`,
+//! with an edit.
+
+use std::io
+
+fn main() {
+  io::println("a")
+}

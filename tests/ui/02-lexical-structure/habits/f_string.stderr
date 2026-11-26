@@ -1,0 +1,8 @@
+error[E0013]: expected `,` or `)`, found string
+  --> tests/ui/02-lexical-structure/habits/f_string.cheby:10:16
+   |
+10 |   io::println(f"{n}")
+   |                ^
+   |
+   = help: Cheby strings interpolate without a prefix; remove the `f`
+

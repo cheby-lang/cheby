@@ -1,0 +1,11 @@
+// @mode: parse-fail
+// @decisions: D-1930
+//! `class` gets the help to use `type`.
+
+class Point {
+  x: Int
+}
+
+fn main() {
+  assert 1 == 1
+}

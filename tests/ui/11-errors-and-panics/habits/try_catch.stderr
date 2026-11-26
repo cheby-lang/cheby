@@ -1,0 +1,8 @@
+error[E0013]: expected a line break or `}`, found `{`
+ --> tests/ui/11-errors-and-panics/habits/try_catch.cheby:6:7
+  |
+6 |   try {
+  |       ^
+  |
+  = help: Cheby has no `try`; a failure is an `Err` value, handled with `case` or `use x <- result::try(…)`
+

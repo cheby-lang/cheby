@@ -1,0 +1,17 @@
+// @mode: check-fail
+// @decisions: D-1938
+//! A method call on a type of this module gets the call of its function.
+
+type Point {
+  x: Int,
+  y: Int,
+}
+
+fn norm(p: Point) -> Int {
+  p.x + p.y
+}
+
+fn main() {
+  let p = Point { x: 1, y: 2 }
+  assert p.norm() == 3
+}

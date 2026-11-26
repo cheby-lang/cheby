@@ -1,0 +1,15 @@
+// @mode: parse-fail
+// @decisions: D-1932
+//! `x: Int = 1` in an argument of a call broken over lines is no
+//! binding, and gets no help.
+
+fn twice(n: Int) -> Int {
+  n * 2
+}
+
+fn main() {
+  let n = twice(
+    n: Int = 1,
+  )
+  assert n == 2
+}

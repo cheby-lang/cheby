@@ -1,0 +1,128 @@
+error[E0042]: cannot find value `true` in this scope
+ --> tests/ui/05-expressions/habits/literal_words.cheby:9:11
+  |
+9 |   let a = true
+  |           ^^^^ not found
+  |
+  = help: `Bool`'s constructors are `True` and `False`; write `True`
+
+error[E0042]: cannot find value `false` in this scope
+  --> tests/ui/05-expressions/habits/literal_words.cheby:10:11
+   |
+10 |   let b = false
+   |           ^^^^^ not found
+   |
+   = help: `Bool`'s constructors are `True` and `False`; write `False`
+
+warning[W0002]: unused binding `c`
+  --> tests/ui/05-expressions/habits/literal_words.cheby:11:7
+   |
+11 |   let c = null
+   |       ^ never used
+   |
+   = help: if this is intentional, start the name with an underscore: `_c`
+
+error[E0042]: cannot find value `null` in this scope
+  --> tests/ui/05-expressions/habits/literal_words.cheby:11:11
+   |
+11 |   let c = null
+   |           ^^^^ not found
+   |
+   = help: the absent case of `Option` is `None`
+
+warning[W0002]: unused binding `d`
+  --> tests/ui/05-expressions/habits/literal_words.cheby:12:7
+   |
+12 |   let d = nil
+   |       ^ never used
+   |
+   = help: if this is intentional, start the name with an underscore: `_d`
+
+error[E0042]: cannot find value `nil` in this scope
+  --> tests/ui/05-expressions/habits/literal_words.cheby:12:11
+   |
+12 |   let d = nil
+   |           ^^^ not found
+   |
+   = help: the absent case of `Option` is `None`, and the value that carries no information is `Nil`
+
+warning[W0002]: unused binding `e`
+  --> tests/ui/05-expressions/habits/literal_words.cheby:13:7
+   |
+13 |   let e = undefined
+   |       ^ never used
+   |
+   = help: if this is intentional, start the name with an underscore: `_e`
+
+error[E0042]: cannot find value `undefined` in this scope
+  --> tests/ui/05-expressions/habits/literal_words.cheby:13:11
+   |
+13 |   let e = undefined
+   |           ^^^^^^^^^ not found
+   |
+   = help: the absent case of `Option` is `None`
+
+warning[W0002]: unused binding `f`
+  --> tests/ui/05-expressions/habits/literal_words.cheby:14:7
+   |
+14 |   let f = none
+   |       ^ never used
+   |
+   = help: if this is intentional, start the name with an underscore: `_f`
+
+error[E0042]: cannot find value `none` in this scope
+  --> tests/ui/05-expressions/habits/literal_words.cheby:14:11
+   |
+14 |   let f = none
+   |           ^^^^ not found
+   |
+   = help: the absent case of `Option` is `None`
+
+warning[W0002]: unused binding `g`
+  --> tests/ui/05-expressions/habits/literal_words.cheby:15:7
+   |
+15 |   let g = some(1)
+   |       ^ never used
+   |
+   = help: if this is intentional, start the name with an underscore: `_g`
+
+error[E0042]: cannot find value `some` in this scope
+  --> tests/ui/05-expressions/habits/literal_words.cheby:15:11
+   |
+15 |   let g = some(1)
+   |           ^^^^ not found
+   |
+   = help: the present case of `Option` is `Some`
+
+warning[W0002]: unused binding `h`
+  --> tests/ui/05-expressions/habits/literal_words.cheby:16:7
+   |
+16 |   let h = ok(1)
+   |       ^ never used
+   |
+   = help: if this is intentional, start the name with an underscore: `_h`
+
+error[E0042]: cannot find value `ok` in this scope
+  --> tests/ui/05-expressions/habits/literal_words.cheby:16:11
+   |
+16 |   let h = ok(1)
+   |           ^^ not found
+   |
+   = help: the success case of `Result` is `Ok`
+
+warning[W0002]: unused binding `i`
+  --> tests/ui/05-expressions/habits/literal_words.cheby:17:7
+   |
+17 |   let i = err(1)
+   |       ^ never used
+   |
+   = help: if this is intentional, start the name with an underscore: `_i`
+
+error[E0042]: cannot find value `err` in this scope
+  --> tests/ui/05-expressions/habits/literal_words.cheby:17:11
+   |
+17 |   let i = err(1)
+   |           ^^^ not found
+   |
+   = help: the failure case of `Result` is `Err`
+

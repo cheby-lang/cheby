@@ -219,6 +219,7 @@ fn let_stmt(p: &mut Parser<'_>) {
     }
     if p.expect(EQ) {
         expr(p);
+        super::exprs::closure_arrow(p);
         if p.at(AS_KW) {
             message(p);
         }

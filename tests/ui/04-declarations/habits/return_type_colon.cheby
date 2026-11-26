@@ -1,0 +1,12 @@
+// @mode: parse-fail
+// @decisions: D-1932, D-1931
+//! A return type written after `:`, as in TypeScript, gets the help to write
+//! `->`, with an edit.
+
+fn twice(n: Int): Int {
+  n * 2
+}
+
+fn main() {
+  assert twice(1) == 2
+}

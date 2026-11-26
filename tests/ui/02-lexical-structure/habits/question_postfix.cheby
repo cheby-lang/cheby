@@ -1,0 +1,14 @@
+// @mode: parse-fail
+// @decisions: D-1930
+//! Rust's postfix `?` gets the help to unwrap a `Result` with `use`.
+
+import std::int
+
+fn twice(text: String) -> Result<Int, Nil> {
+  let n = int::parse(text)?
+  Ok(n * 2)
+}
+
+fn main() {
+  assert twice("2") == Ok(4)
+}

@@ -210,6 +210,13 @@ pub fn resolve_import_targets(
                         span,
                         closest,
                     );
+                } else if segments == ["std"] {
+                    // `import std::{io, list}` imports items of a module
+                    // `std`, which does not exist (D-1936).
+                    diag = diag.with_help(
+                        "`std` is a package, not a module; import each module on its own \
+                         line, such as `import std::io`",
+                    );
                 }
                 diags.push(diag);
                 ImportTarget::Failed

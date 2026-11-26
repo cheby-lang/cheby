@@ -1,0 +1,9 @@
+// @mode: parse-fail
+// @decisions: D-1930, D-1931
+//! `===` and `!==` get the help to write `==` and `!=`, with an edit.
+
+fn main() {
+  let same = 1 === 1
+  let other = 1 !== 2
+  assert same && other
+}

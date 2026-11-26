@@ -1,0 +1,12 @@
+// @mode: check-fail
+// @decisions: D-1938, D-1937
+//! A method of another language's name gets the std function that name
+//! means, and the import it needs: `s.len()` gets `string::length`, and
+//! Rust's `o.unwrap()` gets `option::expect`.
+
+fn main() {
+  let s = "abc"
+  assert s.len() == 3
+  let o = Some(1)
+  assert o.unwrap() == 1
+}

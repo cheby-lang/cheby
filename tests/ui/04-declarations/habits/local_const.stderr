@@ -1,0 +1,16 @@
+error[E0015]: unclosed `{`
+ --> tests/ui/04-declarations/habits/local_const.cheby:7:3
+  |
+6 | fn main() {
+  |           - this `{` is never closed
+7 |   const limit = 3
+  |   ^^^^^ expected `}`
+  |
+  = help: a `const` belongs at the top level; inside a body write `let`
+
+error[E0013]: expected an item, found `assert`
+ --> tests/ui/04-declarations/habits/local_const.cheby:8:3
+  |
+8 |   assert limit == 3
+  |   ^^^^^^
+

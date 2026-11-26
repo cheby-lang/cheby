@@ -1,0 +1,8 @@
+// @mode: parse-fail
+// @decisions: D-1930, D-1931
+//! `var` gets the help to write `let`, with an edit, and `var` stays a name.
+
+fn main() {
+  var count = 1
+  assert count == 1
+}

@@ -1,0 +1,15 @@
+// @mode: check-fail
+// @decisions: D-1938
+//! A call of a field whose name is close to a field of the type, as
+//! `h.handlr(1)` for the field `handler`, is more likely a typo than a
+//! method, and gets no method help. A name close to no field keeps it.
+
+type Handlers {
+  handler: fn(Int) -> Int,
+}
+
+fn main() {
+  let h = Handlers { handler: fn(x) { x } }
+  assert h.handlr(1) == 1
+  assert h.area() == 1
+}

@@ -1,0 +1,10 @@
+// @mode: parse-fail
+// @decisions: D-1930, D-1932
+//! `--` at the end of a line, an E0014, gets the help that values are
+//! immutable.
+
+fn main() {
+  let count = 1
+  count--
+  assert count == 0
+}

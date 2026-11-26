@@ -485,19 +485,17 @@ fn f(a: int) -> string {
     let out = case.applied(&case.actions("else =>")[0]);
     assert!(out.contains("    _ => \"many\"\n"));
     assert_eq!(case.actions("else =>")[0].title, "Write `_`");
-    assert_eq!(case.actions("int)")[0].title, "Write `Int`");
-    assert!(
-        case.applied(&case.actions("int)")[0])
-            .contains("fn f(a: Int) -> string {")
-    );
-    assert_eq!(case.actions("string {")[0].title, "Write `String`");
+    // A type word is its help's fix, not a row here (D-1931).
+    assert_eq!(titles(&case.actions("int)")), Vec::<&str>::new());
+    assert_eq!(titles(&case.actions("string {")), Vec::<&str>::new());
     // D-1737: no row of E0013 is preferred.
-    for needle in ["y = a", "else =>", "int)", "string {"] {
+    for needle in ["y = a", "else =>"] {
         assert!(!case.actions(needle)[0].preferred, "{needle}");
     }
 }
 
-/// `true`, `false`, `null`, `nil` and `none` (P-4).
+/// `null`, `nil` and `none` (P-4). `true` and `false` are their help's fix,
+/// and have no row here (D-1931).
 #[test]
 fn literal_words_of_other_languages() {
     let text = "//! Words.
@@ -524,8 +522,6 @@ fn e() -> Option<Int> {
 ";
     let case = case("words", &[("main.cheby", text)]);
     for (needle, title, written) in [
-        ("true", "Write `True`", "  True\n"),
-        ("false", "Write `False`", "  False\n"),
         ("null", "Write `None`", "fn c() -> Option<Int> {\n  None\n"),
         ("nil", "Write `Nil`", "fn d() -> Nil {\n  Nil\n"),
         ("none", "Write `None`", "fn e() -> Option<Int> {\n  None\n"),
@@ -535,6 +531,13 @@ fn e() -> Option<Int> {
         assert_eq!(actions[0].title, title);
         assert!(actions[0].preferred);
         assert!(case.applied(&actions[0]).contains(written), "{needle}");
+    }
+    for needle in ["true", "false"] {
+        assert_eq!(
+            titles(&case.actions(&format!("{needle}\n"))),
+            Vec::<&str>::new(),
+            "{needle}"
+        );
     }
 }
 
@@ -761,35 +764,19 @@ fn a_comment_in_each_other_gap() {
     assert_eq!(actions[0].disabled.as_deref(), Some(DROPS_A_COMMENT));
 }
 
-/// A module that hides the prelude's `Nil`, `True` or `Int` gets no
-/// rewrite that writes it (D-1678): no `case` with `_ => Nil` for an `if`
-/// with no `else`, no `true` to `True`, no `int` to `Int`; a module that
-/// hides none gets each.
+/// A module that hides the prelude's `Nil` gets no rewrite that writes it
+/// (D-1678): no `case` with `_ => Nil` for an `if` with no `else`; a module
+/// that does not hide it gets one. `True` and `Int` are written by their
+/// helps' fixes, which `actions::offers_fix` checks (D-1931).
 #[test]
 fn no_rewrite_writes_a_hidden_prelude_name() {
-    let cases = [
-        (
-            "nil",
-            "fn f(flag: Bool) -> Unit {\n  if flag { Other }\n}\n",
-            "type Unit {\n  Nil,\n  Other,\n}\n",
-            "flag { Other }",
-            "Rewrite as `case`",
-        ),
-        (
-            "truth",
-            "fn g() -> Bool {\n  true\n}\n",
-            "type Truth {\n  True,\n}\n",
-            "true",
-            "Write `True`",
-        ),
-        (
-            "int",
-            "fn h(n: int) -> Bool {\n  False\n}\n",
-            "type Int {\n  I,\n}\n",
-            "int",
-            "Write `Int`",
-        ),
-    ];
+    let cases = [(
+        "nil",
+        "fn f(flag: Bool) -> Unit {\n  if flag { Other }\n}\n",
+        "type Unit {\n  Nil,\n  Other,\n}\n",
+        "flag { Other }",
+        "Rewrite as `case`",
+    )];
     for (name, body, hiding, needle, title) in cases {
         let plain = format!("//! Plain.\n\ntype Unit {{\n  Other,\n}}\n\n{body}");
         let case_plain = case(&format!("plain_{name}"), &[("main.cheby", &plain)]);

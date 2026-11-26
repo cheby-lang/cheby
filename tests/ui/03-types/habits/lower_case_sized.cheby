@@ -1,0 +1,12 @@
+// @mode: parse-fail
+// @decisions: D-1934, D-1931
+//! Rust's `i32` and `usize` get the help to write `I32` and `Int`, with an
+//! edit.
+
+fn first(n: i32) -> usize {
+  1
+}
+
+fn main() {
+  assert first(1) == 1
+}

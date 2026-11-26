@@ -10,11 +10,11 @@
       "range": {
         "end": {
           "character": 7,
-          "line": 14
+          "line": 15
         },
         "start": {
           "character": 6,
-          "line": 14
+          "line": 15
         }
       },
       "severity": 1,
@@ -23,7 +23,7 @@
   ]
 }
 
-== src/main.cheby:7:3 noAction Write `True`
+== src/main.cheby:8:3 noAction `Bool`'s constructors are `True` and `False`; write `True`
 {
   "actions": []
 }

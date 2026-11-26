@@ -1,0 +1,10 @@
+// @mode: parse-fail
+// @decisions: D-1930, D-1933
+//! Rust's closure `|x| x + 1` gets the help to write `fn(x) { … }`.
+
+import std::list
+
+fn main() {
+  let ys = list::map([1], |x| x + 1)
+  assert ys == [2]
+}

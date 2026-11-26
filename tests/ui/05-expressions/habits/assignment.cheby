@@ -1,0 +1,10 @@
+// @mode: parse-fail
+// @decisions: D-1930, D-1932
+//! An assignment to a bound name gets the help that values are immutable,
+//! with a new name to bind.
+
+fn main() {
+  let count = 1
+  count = 2
+  assert count == 2
+}

@@ -1,0 +1,8 @@
+error[E0003]: unexpected character `#`
+ --> tests/ui/02-lexical-structure/habits/hash_comment.cheby:7:3
+  |
+7 |   # it's the count, (one) "item"
+  |   ^
+  |
+  = help: comments start with `//`; write `//`
+

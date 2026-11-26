@@ -149,11 +149,21 @@ pub(super) fn fn_rest(p: &mut Parser<'_>) {
         p.expected("`(`");
         return;
     }
+    return_colon(p);
     if p.at(THIN_ARROW) {
         ret_type(p);
     }
     if p.at(L_BRACE) {
         block(p);
+    }
+}
+
+/// The help and edit of `:` written before a return type, as in
+/// `fn f(x: Int): Int`, for the error the caller reports there (D-1932).
+pub(super) fn return_colon(p: &mut Parser<'_>) {
+    if p.at(COLON) {
+        let to = if p.touches_previous() { " ->" } else { "->" };
+        p.suggest_at_current(crate::parser::habits::RETURN_TYPE_HELP, to);
     }
 }
 

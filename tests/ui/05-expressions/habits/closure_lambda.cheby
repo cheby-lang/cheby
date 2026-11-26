@@ -1,0 +1,11 @@
+// @mode: parse-fail
+// @decisions: D-1930, D-1933
+//! Python's `lambda x: x + 1` gets the closure help, and its `:` adds no
+//! error.
+
+import std::list
+
+fn main() {
+  let ys = list::map([1], lambda x: x + 1)
+  assert ys == [2]
+}

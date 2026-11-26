@@ -1,0 +1,8 @@
+error[E0042]: cannot find value `console` in this scope
+ --> tests/ui/05-expressions/habits/console_log.cheby:6:3
+  |
+6 |   console.log("a")
+  |   ^^^^^^^ not found
+  |
+  = help: Cheby has no `console`; call `io::println`, and interpolate values, as in `"{x}"`
+

@@ -1,0 +1,8 @@
+error[E0013]: expected a line break or `}`, found identifier
+ --> tests/ui/05-expressions/habits/unless_word.cheby:7:10
+  |
+7 |   unless x > 0 {
+  |          ^
+  |
+  = help: Cheby has no `unless`; use `case`
+

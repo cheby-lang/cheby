@@ -1,0 +1,10 @@
+// @mode: parse-fail
+// @decisions: D-1930
+//! Python's `elif` gets the help to use `case`.
+
+fn main() {
+  let x = 1
+  elif x > 0 {
+    assert True
+  }
+}

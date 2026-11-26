@@ -1,6 +1,8 @@
 //! Rewrites of habits from other languages (X §6.5, plan §1.11), the
-//! E0042 rows for `true`, `false`, `null`, `nil` and `none`, E0044's
-//! rename and E0058's method call (D-1668, D-1736).
+//! E0042 rows for `null`, `nil` and `none`, E0044's rename and E0058's
+//! method call (D-1668, D-1736). `true` and `false` as values and `int`,
+//! `string`, `bool` and `float` as types have no row here: their helps
+//! carry the edit, which `generic` offers as the fix (D-1931).
 //!
 //! Each rewrite is found from its diagnostic's code and primary span, and
 //! the tokens there, never from the message (D-1388). Tokens are read in
@@ -22,11 +24,8 @@
 //!   checked on resolve (D-1753).
 //! - E0013 after `let mut`: `mut` is removed.
 //! - E0013 at `else` before `=>` in a `case`: `_`.
-//! - E0013 at `int`, `string`, `bool` or `float` as a type: `Int`, `String`,
-//!   `Bool`, `Float`.
-//! - E0042 at `true`, `false`, `null`, `nil` or `none` as a value: `True`,
-//!   `False`, `None`, `Nil`, `None`. Neither this row nor the type row
-//!   writes a prelude name the module hides (D-1678).
+//! - E0042 at `null`, `nil` or `none` as a value: `None`, `Nil`, `None`. The
+//!   row writes no prelude name the module hides (D-1678).
 //! - E0044: the binding and its later uses are renamed to a name from
 //!   `scope::fresh`, with rename's writer and no `verify`, as a fix within
 //!   one file (D-1668, D-1684). The frame does not format its edits
@@ -670,9 +669,6 @@ fn grammar_habit(cx: &FixCx<'_>, tree: &SyntaxTree, at: TextRange) -> Option<Dra
     if token.kind() == K::ELSE_KW {
         return else_arm(token);
     }
-    if let Some(draft) = type_word(cx, token) {
-        return Some(draft);
-    }
     let word = before(token)?;
     let draft = |title: &str, edits: Vec<(TextRange, String)>, shape: Shape| Draft {
         title: title.to_owned(),
@@ -723,43 +719,13 @@ fn else_arm(token: SyntaxToken<'_>) -> Option<Draft> {
     })
 }
 
-/// `int`, `string`, `bool` or `float` written as a type, to its name,
-/// unless the module hides that prelude type (D-1678).
-fn type_word(cx: &FixCx<'_>, token: SyntaxToken<'_>) -> Option<Draft> {
-    let (name, def) = match token.text() {
-        "int" => ("Int", builtin::INT),
-        "string" => ("String", builtin::STRING),
-        "bool" => ("Bool", builtin::BOOL),
-        "float" => ("Float", builtin::FLOAT),
-        _ => return None,
-    };
-    if hides_prelude(&cx.analyzed.snapshot, cx.view, def, None) {
-        return None;
-    }
-    let path = token.parent().filter(|p| p.kind() == K::PATH)?;
-    let alone = path.tokens().filter(|t| !t.kind().is_trivia()).count() == 1;
-    (token.kind() == K::LOWER_IDENT
-        && alone
-        && path.parent().is_some_and(|p| p.kind() == K::PATH_TYPE))
-    .then(|| Draft {
-        title: format!("Write `{name}`"),
-        grammar: true,
-        preferred: false,
-        edits: vec![(token.text_range(), name.to_owned())],
-        shape: Shape::Any,
-        verified: false,
-    })
-}
-
-/// `true`, `false`, `null`, `nil` and `none` written as a value, at the
-/// E0042 at `at`, to the prelude's word (P-4), unless the module hides that
-/// constructor (D-1678).
+/// `null`, `nil` and `none` written as a value, at the E0042 at `at`, to
+/// the prelude's word (P-4), unless the module hides that constructor
+/// (D-1678). `true` and `false` are their help's fix (D-1931).
 fn literal_word(cx: &FixCx<'_>, tree: &SyntaxTree, at: TextRange) -> Option<Draft> {
     let token =
         token_at(tree, at).filter(|t| t.text_range() == at && t.kind() == K::LOWER_IDENT)?;
     let (word, def) = match token.text() {
-        "true" => ("True", builtin::TRUE),
-        "false" => ("False", builtin::FALSE),
         "null" | "none" => ("None", builtin::NONE),
         "nil" => ("Nil", builtin::NIL),
         _ => return None,

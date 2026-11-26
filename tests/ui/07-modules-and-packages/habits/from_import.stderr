@@ -1,0 +1,8 @@
+error[E0013]: expected an item, found identifier
+ --> tests/ui/07-modules-and-packages/habits/from_import.cheby:5:1
+  |
+5 | from std import io
+  | ^^^^
+  |
+  = help: Cheby imports a module with `import`, such as `import std::io`
+

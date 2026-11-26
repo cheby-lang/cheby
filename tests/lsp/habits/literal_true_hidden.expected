@@ -1,0 +1,50 @@
+== diagnostics
+{
+  "src/main.cheby": [
+    {
+      "code": "W0007",
+      "codeDescription": {
+        "href": "https://github.com/cheby-lang/cheby/blob/main/docs/diagnostics/W0007.md"
+      },
+      "message": "`True` hides the prelude constructor `True`\ndeclared here\nnote: in this module, `True` no longer means the prelude constructor, which stays reachable as `bool::True` after `import std::bool`\nhelp: if this is not intended, give the constructor another name",
+      "range": {
+        "end": {
+          "character": 6,
+          "line": 5
+        },
+        "start": {
+          "character": 2,
+          "line": 5
+        }
+      },
+      "severity": 2,
+      "source": "cheby"
+    },
+    {
+      "code": "E0042",
+      "codeDescription": {
+        "href": "https://github.com/cheby-lang/cheby/blob/main/docs/diagnostics/E0042.md"
+      },
+      "message": "cannot find value `true` in this scope\nnot found\nhelp: `Bool`'s constructors are `True` and `False`; write `True`",
+      "range": {
+        "end": {
+          "character": 6,
+          "line": 9
+        },
+        "start": {
+          "character": 2,
+          "line": 9
+        }
+      },
+      "severity": 1,
+      "source": "cheby"
+    }
+  ]
+}
+
+== src/main.cheby:10:3 noAction `Bool`'s constructors are `True` and `False`; write `True`
+{
+  "actions": [
+    "Explain E0042"
+  ]
+}

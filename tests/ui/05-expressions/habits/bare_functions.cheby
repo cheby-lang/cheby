@@ -1,0 +1,15 @@
+// @mode: check-fail
+// @decisions: D-1935
+//! Bare `println`, `print`, `eprintln`, `eprint`, `len`, `str` and
+//! `range`, where they are called, point to the std function to call.
+
+fn main() {
+  println("a")
+  print("b")
+  eprintln("c")
+  eprint("d")
+  let n = len([1])
+  let s = str(1)
+  let xs = range(0, 2)
+  assert n == 1
+}

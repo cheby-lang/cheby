@@ -1,0 +1,19 @@
+// @mode: check-fail
+// @decisions: D-1935, D-1931
+//! `true`, `false`, `null`, `nil`, `undefined`, `none`, `some`, `ok` and
+//! `err` point to the prelude's values. `null`, `nil` and `none` carry no
+//! edit, since the language server writes them and `nil` may mean `None`
+//! or `Nil`; the others do (D-1931).
+
+fn main() {
+  let a = true
+  let b = false
+  let c = null
+  let d = nil
+  let e = undefined
+  let f = none
+  let g = some(1)
+  let h = ok(1)
+  let i = err(1)
+  assert a == b
+}

@@ -1,5 +1,6 @@
-// @decisions: D-1353, D-1388, D-1393, D-1401, D-1736, D-425
-//! `true` written as a value becomes `True` (X §6.5, P-4).
+// @decisions: D-1353, D-1388, D-1393, D-1401, D-1736, D-1931, D-425
+//! `true` written as a value becomes `True` through its help's edit (X §6.5,
+//! P-4, D-1931).
 //! With a type error in another function.
 
 fn ready() -> Bool {
@@ -13,4 +14,4 @@ fn main() {
 fn answer() -> Int {
   "forty-two"
 }
-//> 6:3 action Write `True`
+//> 7:3 action `Bool`'s constructors are `True` and `False`; write `True`

@@ -1,0 +1,10 @@
+// @mode: parse-fail
+// @decisions: D-1930
+//! `switch` gets the help to use `case`.
+
+fn main() {
+  let x = 1
+  switch x {
+    1 => assert True
+  }
+}

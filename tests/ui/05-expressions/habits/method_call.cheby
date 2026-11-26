@@ -1,0 +1,11 @@
+// @mode: check-fail
+// @decisions: D-1938
+//! A call of a field that the type does not have, `xs.length()`, gets the
+//! call of the home module's function with the receiver first.
+
+import std::list
+
+fn main() {
+  let xs = [1, 2]
+  assert xs.length() == 2
+}

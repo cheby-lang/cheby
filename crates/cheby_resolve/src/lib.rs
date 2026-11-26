@@ -56,7 +56,7 @@ pub use items::runtime_export_reserved;
 pub use scope::{ModuleScope, ScopeEntry, ScopeSource};
 pub use std_names::{
     ItemHelp, MissingItem, StdItemName, StdItems, StdSuggestion, builtin_homes, public_names,
-    std_suggestion,
+    std_alias, std_suggestion,
 };
 
 cheby_iface::newtype_index! {

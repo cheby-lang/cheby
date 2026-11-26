@@ -1,0 +1,8 @@
+error[E0013]: expected an item, found identifier
+ --> tests/ui/04-declarations/habits/package_line.cheby:5:1
+  |
+5 | package main
+  | ^^^^^^^
+  |
+  = help: Cheby has no `package` line; each file is a module, so remove it
+

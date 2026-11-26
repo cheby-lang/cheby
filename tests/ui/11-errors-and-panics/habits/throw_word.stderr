@@ -1,0 +1,8 @@
+error[E0013]: expected a line break or `}`, found string
+ --> tests/ui/11-errors-and-panics/habits/throw_word.cheby:6:9
+  |
+6 |   throw "bad"
+  |         ^
+  |
+  = help: Cheby has no `throw`; return an `Err`, or stop with `panic as "message"`
+

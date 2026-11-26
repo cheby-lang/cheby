@@ -1,5 +1,6 @@
-// @decisions: D-1353, D-1388, D-1393, D-1401, D-1736
-//! A type written `int` becomes `Int` (X §6.5).
+// @decisions: D-1353, D-1388, D-1393, D-1401, D-1736, D-1931
+//! A type written `int` becomes `Int` through its help's edit (X §6.5,
+//! D-1931).
 //! With a grammar error in another function, so the fix keeps its raw
 //! edits (D-1735).
 
@@ -14,4 +15,4 @@ fn main() {
 fn broken() {
   let = 1
 }
-//> 6:13 action Write `Int`
+//> 7:13 action type names start with an upper-case letter; write `Int`

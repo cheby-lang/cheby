@@ -1,0 +1,9 @@
+// @mode: parse-fail
+// @decisions: D-1930, D-1932
+//! An assignment to a name that nothing binds, as Python and Go declare
+//! one, gets the help to bind it with `let`.
+
+fn main() {
+  total = 2
+  assert total == 2
+}

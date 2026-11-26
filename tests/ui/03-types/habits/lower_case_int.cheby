@@ -1,0 +1,12 @@
+// @mode: parse-fail
+// @decisions: D-1934, D-1931
+//! `int` as a type gets the help to write `Int`, with an edit, which the
+//! language server offers as the fix (D-1931).
+
+fn twice(n: int) -> Int {
+  n * 2
+}
+
+fn main() {
+  assert twice(1) == 2
+}

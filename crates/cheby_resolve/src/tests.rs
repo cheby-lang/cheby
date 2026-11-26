@@ -1232,6 +1232,77 @@ fn functions_on_one_target_resolve() {
     );
 }
 
+/// Names that other languages use get the Cheby form (D-1934, D-1935):
+/// literals, bare functions where they are called, and type names. The
+/// help writes a prelude name only where it means the prelude's item, and
+/// `null`, `nil` and `none` carry no edit, which the language server writes
+/// itself (D-1737, D-1931).
+#[test]
+fn foreign_names_get_helps() {
+    let b = build(&[(
+        "",
+        "fn main() {\n  let a = true\n  let b = null\n  let c = undefined\n  let d = some(1)\n  \
+         let e = len([1])\n  let f = len\n  println(\"x\")\n}\n\nfn g(x: Void) -> Vec<Int> {\n  []\n}\n\n\
+         fn h(m: HashMap<Int, Int>) -> Int {\n  1\n}\n",
+    )]);
+    let helps: Vec<(String, bool)> = b
+        .diags
+        .iter()
+        .flat_map(|d| {
+            d.helps
+                .iter()
+                .map(|h| (h.message.clone(), !h.edits.is_empty()))
+        })
+        .collect();
+    let expected = [
+        (
+            "`Bool`'s constructors are `True` and `False`; write `True`",
+            true,
+        ),
+        ("the absent case of `Option` is `None`", false),
+        ("the absent case of `Option` is `None`", true),
+        ("the present case of `Option` is `Some`", true),
+        (
+            "Cheby has no `len`; call `list::length(xs)` or `string::length(s)`",
+            false,
+        ),
+        ("`println` is in `std::io`; call `io::println`", false),
+        ("the type that carries no information is `Nil`", true),
+        ("Cheby's list type is `List`", true),
+        (
+            "Cheby's map type is `Map`: add `import std::map` and write `map::Map`",
+            false,
+        ),
+    ];
+    let expected: Vec<(String, bool)> = expected
+        .iter()
+        .map(|&(help, edit)| (help.to_owned(), edit))
+        .collect();
+    // `len` that is not called is a local's name, and gets no help.
+    assert_eq!(helps, expected, "{:?}", b.messages());
+}
+
+/// `import std::{io, list}` names a module `std`, which is a package
+/// (D-1936).
+#[test]
+fn importing_std_itself_names_its_modules() {
+    let b = build(&[("", "import std::{io, list}\n\nfn main() {\n  Nil\n}\n")]);
+    let helps: Vec<&str> = b
+        .diags
+        .iter()
+        .flat_map(|d| d.helps.iter().map(|h| h.message.as_str()))
+        .collect();
+    assert_eq!(
+        helps,
+        [
+            "`std` is a package, not a module; import each module on its own line, such as \
+             `import std::io`"
+        ],
+        "{:?}",
+        b.messages()
+    );
+}
+
 // ---- prelude (B6) -----------------------------------------------------------
 
 #[test]

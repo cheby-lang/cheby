@@ -1,0 +1,11 @@
+// @mode: parse-fail
+// @decisions: D-1930, D-1931
+//! Python's `f"…"` gets the help that every string interpolates, with an
+//! edit that removes the `f`.
+
+import std::io
+
+fn main() {
+  let n = 1
+  io::println(f"{n}")
+}

@@ -1,0 +1,8 @@
+error[E0013]: expected a line break after the item, found `.`
+ --> tests/ui/07-modules-and-packages/habits/dot_import_long.cheby:6:11
+  |
+6 | import std.json.decode
+  |           ^
+  |
+  = help: module paths use `::`, such as `import std::json::decode`
+

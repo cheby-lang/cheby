@@ -1,0 +1,8 @@
+error[E0013]: expected `=>`, found `..`
+ --> tests/ui/06-patterns/habits/range_pattern.cheby:7:6
+  |
+7 |     1..5 => True
+  |      ^^
+  |
+  = help: Cheby has no range patterns; match with a guard, such as `k when k >= 1 && k < 5 =>`
+

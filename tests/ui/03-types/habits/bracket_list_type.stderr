@@ -1,0 +1,8 @@
+error[E0013]: expected a type, found `[`
+ --> tests/ui/03-types/habits/bracket_list_type.cheby:6:26
+  |
+6 | fn all(xs: List<Int>) -> [Int] {
+  |                          ^
+  |
+  = help: a list type is written `List<T>`, such as `List<Int>`
+

@@ -1,0 +1,12 @@
+// @mode: check-fail
+// @decisions: D-1938
+//! A method that no function and no alias matches gets the module where
+//! the type's functions are.
+
+import std::string
+
+fn main() {
+  let s = "abc"
+  assert s.shout() == "ABC"
+  assert string::length(s) == 3
+}

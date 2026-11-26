@@ -1,0 +1,9 @@
+// @mode: parse-fail
+// @decisions: D-1930, D-1933
+//! Rust's closure without parameters, `|| 1`, gets the closure help, and the
+//! body after it adds no error.
+
+fn main() {
+  let one = || 1
+  assert one() == 1
+}

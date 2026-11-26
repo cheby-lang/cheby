@@ -1,0 +1,8 @@
+error[E0003]: unexpected character ```
+ --> tests/ui/02-lexical-structure/habits/backtick_string.cheby:7:11
+  |
+7 |   let s = `a`
+  |           ^
+  |
+  = help: strings use double quotes, such as "text"
+

@@ -21,6 +21,9 @@
 //! commit pinned in `tests/tree-sitter-cheby.rev`.
 
 mod grammar;
+mod habits;
+
+pub(crate) use habits::{CAST_HELP, is_cast_target};
 mod input;
 mod recovery;
 
@@ -57,6 +60,7 @@ fn parse_with_fuel(file: FileId, lexed: &Lexed, text: &str) -> (Vec<Event>, Vec<
     let mut errors = p.errors;
     errors.sort_by_key(|d| d.primary_span().map(|s| s.range.start()));
     explain_reserved_words(lexed, text, &mut errors);
+    habits::explain_habits(lexed, text, &mut errors);
     (p.events, errors, out_of_fuel)
 }
 
@@ -176,13 +180,13 @@ pub(crate) struct Parser<'a> {
 
 /// A help the grammar sets for the error its caller reports at a token
 /// (D-1657), with the edit that applies it, if it has one (D-1694).
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 struct PendingHelp {
     /// The raw index of the token.
     raw: usize,
-    help: &'static str,
+    help: String,
     /// The token's range and its replacement.
-    edit: Option<(TextRange, &'static str)>,
+    edit: Option<(TextRange, String)>,
 }
 
 /// The `{` and `}` tokens of the file matched like brackets, ignoring the
@@ -627,17 +631,19 @@ impl<'a> Parser<'a> {
             return;
         }
         self.last_error_raw = Some(current.raw);
-        let diag = match self.pending_help {
-            Some(pending) if pending.raw == current.raw => {
-                self.pending_help = None;
-                match pending.edit {
-                    Some((range, replacement)) => {
-                        diag.with_suggestion(pending.help, self.span(range), replacement)
-                    }
-                    None => diag.with_help(pending.help),
-                }
-            }
-            _ => diag,
+        let diag = match self
+            .pending_help
+            .take_if(|pending| pending.raw == current.raw)
+        {
+            Some(PendingHelp {
+                help,
+                edit: Some((range, replacement)),
+                ..
+            }) => diag.with_suggestion(help, self.span(range), replacement),
+            Some(PendingHelp {
+                help, edit: None, ..
+            }) => diag.with_help(help),
+            None => diag,
         };
         self.errors.push(diag);
     }
@@ -646,22 +652,32 @@ impl<'a> Parser<'a> {
     /// token, if one does: the grammar knows the habit behind a token that
     /// only its caller rejects, such as `<>` after a string pattern
     /// (D-1657).
-    pub(crate) fn help_at_current(&mut self, help: &'static str) {
+    pub(crate) fn help_at_current(&mut self, help: impl Into<String>) {
         self.pending_help = Some(PendingHelp {
             raw: self.input.current().raw,
-            help,
+            help: help.into(),
             edit: None,
         });
     }
 
     /// As [`Self::help_at_current`], with an edit that replaces the current
     /// token with `replacement` (D-1694).
-    pub(crate) fn suggest_at_current(&mut self, help: &'static str, replacement: &'static str) {
+    pub(crate) fn suggest_at_current(
+        &mut self,
+        help: impl Into<String>,
+        replacement: impl Into<String>,
+    ) {
         self.pending_help = Some(PendingHelp {
             raw: self.input.current().raw,
-            help,
-            edit: Some((self.input.current_range(), replacement)),
+            help: help.into(),
+            edit: Some((self.input.current_range(), replacement.into())),
         });
+    }
+
+    /// Whether the token before the current one ends where it starts, with
+    /// no space between.
+    pub(crate) fn touches_previous(&self) -> bool {
+        self.prev_end == self.input.current_range().start()
     }
 
     /// Whether an error was already reported at the current token.

@@ -1,0 +1,16 @@
+// @decisions: D-1678, D-1931
+//! A module whose own constructor is called `True` gets no fix that writes
+//! `True` for `true`, and the help keeps its line in the message.
+
+type Truth {
+  True,
+}
+
+fn ready() -> Truth {
+  true
+}
+
+fn main() {
+  assert ready() == True
+}
+//> 10:3 noAction `Bool`'s constructors are `True` and `False`; write `True`

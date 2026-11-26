@@ -1,0 +1,8 @@
+error[E0013]: expected an expression, found `&`
+ --> tests/ui/05-expressions/habits/reference.cheby:8:11
+  |
+8 |   let y = &x
+  |           ^
+  |
+  = help: Cheby has no references; write the value without `&`
+

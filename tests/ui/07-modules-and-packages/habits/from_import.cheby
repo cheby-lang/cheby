@@ -1,0 +1,9 @@
+// @mode: parse-fail
+// @decisions: D-1930
+//! Python's `from std import io` gets the help to write `import std::io`.
+
+from std import io
+
+fn main() {
+  io::println("a")
+}

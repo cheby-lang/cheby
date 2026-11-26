@@ -26,7 +26,8 @@
 //! A help offers nothing here, and keeps its line in the message
 //! (`server::publish`), when an edit lies in another file (D-1752), when
 //! it writes `pub` in a std checkout (E0022's two helps, D-1706), when it
-//! writes `Nil` in a module that hides the prelude's (E0030's, D-1678), or
+//! writes a prelude name that the module hides, `Nil` as E0030's can or
+//! `Int` and `True` as the habit helps can (D-1678, D-1931), or
 //! when it is D-1661's escape of a brace in a shape it does not fix, such
 //! as `"{"x"}"`, where the text it leaves has a grammar error (D-1742), as
 //! `actions::offers_fix` says.

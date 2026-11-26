@@ -1,0 +1,12 @@
+// @mode: parse-fail
+// @decisions: D-1932, D-1933
+//! A list type written `[Int]` gets the help to write `List<Int>`, and the
+//! rest of the type adds no error.
+
+fn all(xs: List<Int>) -> [Int] {
+  xs
+}
+
+fn main() {
+  assert all([1]) == [1]
+}

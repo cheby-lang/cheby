@@ -1,0 +1,8 @@
+// @mode: parse-fail
+// @decisions: D-1930, D-1931
+//! `or` between operands gets the help to write `||`, with an edit.
+
+fn main() {
+  let either = True or False
+  assert either
+}

@@ -1,0 +1,10 @@
+// @mode: parse-fail
+// @decisions: D-1930, D-1931
+//! A module path written with `.` gets the help to write `::`, with an edit
+//! when the path has one `.`.
+
+import std.io
+
+fn main() {
+  io::println("a")
+}

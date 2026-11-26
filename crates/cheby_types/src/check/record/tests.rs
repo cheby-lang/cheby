@@ -257,3 +257,82 @@ fn update_works_through_an_alias() {
         ]
     );
 }
+
+/// A field that is called, `x.name(…)`, gets E0058's help of a method
+/// call (D-1938): the call of a function `name` of the type's home module,
+/// with the receiver first, else that of the std function another
+/// language's name means, else where the type's functions are. A field
+/// that is not called gets none.
+#[test]
+fn a_called_field_names_the_function_to_call() {
+    let list = "//! List.\n\npub fn length<T>(xs: List<T>) -> Int {\n  0\n}\n\n\
+                pub fn map<T, U>(xs: List<T>, f: fn(T) -> U) -> List<U> {\n  []\n}\n";
+    let local = format!(
+        "//! Test.\n\nimport std::list\n\n{POINT}fn norm(p: Point) -> Int {{\n  p.x\n}}\n\n\
+         fn a(xs: List<Int>) -> Int {{\n  xs.length()\n}}\n\n\
+         fn b(xs: List<Int>) -> List<Int> {{\n  xs.map(fn(x) {{ x }})\n}}\n\n\
+         fn c(xs: List<Int>) -> Int {{\n  xs.len()\n}}\n\n\
+         fn d(p: Point) -> Int {{\n  p.norm()\n}}\n\n\
+         fn e(p: Point) -> Int {{\n  p.area()\n}}\n\n\
+         fn f(xs: List<Int>) -> Int {{\n  xs.size\n}}\n"
+    );
+    let b = build_with_std(&[("list", list)], &[("", &local)]);
+    let mut helps: Vec<String> = b
+        .diags
+        .iter()
+        .filter(|d| d.code.to_string() == "E0058")
+        .map(|d| {
+            d.helps
+                .iter()
+                .map(|h| h.message.clone())
+                .collect::<Vec<_>>()
+                .join(" / ")
+        })
+        .collect();
+    helps.sort();
+    assert_eq!(
+        helps,
+        [
+            "",
+            "Cheby has no methods; call `list::length(xs)`",
+            "Cheby has no methods; call `list::length(xs)`",
+            "Cheby has no methods; call `list::map(xs, …)`",
+            "Cheby has no methods; call `norm(p)`",
+            "Cheby has no methods; the functions of `Point` are in this module",
+        ],
+        "{}",
+        b.rendered()
+    );
+}
+
+/// A called field whose name is close to a field of the type gets no
+/// method help, since a misspelled field that holds a function is the
+/// likelier cause, unless the home module has a function of that name
+/// (D-1938).
+#[test]
+fn a_called_field_close_to_a_field_gets_no_method_help() {
+    let src = "type Handlers {\n  handler: fn(Int) -> Int,\n}\n\n\
+               fn handle(h: Handlers) -> Int {\n  1\n}\n\n\
+               fn a(h: Handlers) -> Int {\n  h.handlr(1)\n}\n\n\
+               fn b(h: Handlers) -> Int {\n  h.handle()\n}\n";
+    let b = check(src);
+    let mut helps: Vec<String> = b
+        .diags
+        .iter()
+        .filter(|d| d.code.to_string() == "E0058")
+        .map(|d| {
+            d.helps
+                .iter()
+                .map(|h| h.message.clone())
+                .collect::<Vec<_>>()
+                .join(" / ")
+        })
+        .collect();
+    helps.sort();
+    assert_eq!(
+        helps,
+        ["", "Cheby has no methods; call `handle(h)`"],
+        "{}",
+        b.rendered()
+    );
+}

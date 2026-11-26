@@ -1,0 +1,8 @@
+error[E0003]: unexpected character `?`
+  --> tests/ui/02-lexical-structure/habits/question_optional_chain.cheby:11:18
+   |
+11 |   let name = user?.name
+   |                  ^
+   |
+   = help: Cheby has no `?.`; call `option::map(o, f)`, or take the value apart with `case`
+

@@ -1,0 +1,48 @@
+error[E0042]: cannot find type `Void` in this scope
+ --> tests/ui/03-types/habits/foreign_type_names.cheby:7:17
+  |
+7 | fn nothing() -> Void {
+  |                 ^^^^ not found
+  |
+  = help: the type that carries no information is `Nil`
+
+error[E0042]: cannot find type `Vec` in this scope
+  --> tests/ui/03-types/habits/foreign_type_names.cheby:11:12
+   |
+11 | fn all(xs: Vec<Int>) -> List<Int> {
+   |            ^^^ not found
+   |
+   = help: Cheby's list type is `List`
+
+warning[W0002]: unused parameter `m`
+  --> tests/ui/03-types/habits/foreign_type_names.cheby:15:9
+   |
+15 | fn size(m: HashMap<Int, Int>) -> Int {
+   |         ^ never used
+   |
+   = help: if this is intentional, start the name with an underscore: `_m`
+
+error[E0042]: cannot find type `HashMap` in this scope
+  --> tests/ui/03-types/habits/foreign_type_names.cheby:15:12
+   |
+15 | fn size(m: HashMap<Int, Int>) -> Int {
+   |            ^^^^^^^ not found
+   |
+   = help: Cheby's map type is `Map`: add `import std::map` and write `map::Map`
+
+warning[W0002]: unused parameter `s`
+  --> tests/ui/03-types/habits/foreign_type_names.cheby:19:10
+   |
+19 | fn count(s: HashSet<Int>) -> Int {
+   |          ^ never used
+   |
+   = help: if this is intentional, start the name with an underscore: `_s`
+
+error[E0042]: cannot find type `HashSet` in this scope
+  --> tests/ui/03-types/habits/foreign_type_names.cheby:19:13
+   |
+19 | fn count(s: HashSet<Int>) -> Int {
+   |             ^^^^^^^ not found
+   |
+   = help: Cheby's set type is `Set`: add `import std::set` and write `set::Set`
+

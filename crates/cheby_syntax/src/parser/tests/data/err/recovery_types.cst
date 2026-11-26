@@ -94,6 +94,8 @@ error[E0013]: expected a type, found identifier
   |
 1 | fn f(x: int, y: List<>, z: (Int String)) -> Map<String, {
   |         ^^^
+  |
+  = help: type names start with an upper-case letter; write `Int`
 
 error[E0013]: expected a type, found `>`
  --> err/recovery_types.cheby:1:22

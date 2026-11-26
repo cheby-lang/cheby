@@ -1,0 +1,8 @@
+error[E0013]: expected a line break after the item, found `:`
+ --> tests/ui/04-declarations/habits/return_type_colon.cheby:6:17
+  |
+6 | fn twice(n: Int): Int {
+  |                 ^
+  |
+  = help: a return type follows `->`; write `->`
+

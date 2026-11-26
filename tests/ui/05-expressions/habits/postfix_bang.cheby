@@ -1,0 +1,9 @@
+// @mode: parse-fail
+// @decisions: D-1930
+//! The postfix `!` of TypeScript and Kotlin gets the help to use `case` or
+//! `option::expect`.
+
+fn main() {
+  let x = Some(1)!
+  assert x == 1
+}

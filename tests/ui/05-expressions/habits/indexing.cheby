@@ -1,0 +1,9 @@
+// @mode: parse-fail
+// @decisions: D-1930
+//! `xs[0]` gets the help to call `list::get` or `map::get`.
+
+fn main() {
+  let xs = [1, 2]
+  let first = xs[0]
+  assert first == 1
+}

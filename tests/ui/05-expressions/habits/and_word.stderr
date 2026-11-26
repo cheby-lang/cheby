@@ -1,0 +1,8 @@
+error[E0013]: expected a line break or `}`, found identifier
+ --> tests/ui/05-expressions/habits/and_word.cheby:6:19
+  |
+6 |   let both = True and False
+  |                   ^^^
+  |
+  = help: Cheby has no `and`; write `&&`
+

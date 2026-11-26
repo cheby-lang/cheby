@@ -1,0 +1,8 @@
+error[E0013]: expected a type, found identifier
+  --> tests/ui/03-types/habits/lower_case_name.cheby:10:16
+   |
+10 | fn origin() -> point {
+   |                ^^^^^
+   |
+   = help: type names start with an upper-case letter, such as `Point`
+

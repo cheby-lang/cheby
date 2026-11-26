@@ -1,0 +1,26 @@
+// @mode: check-fail
+// @decisions: D-1934, D-1931
+//! Type names of other languages point to the Cheby type: `Void` to `Nil`
+//! and `Vec` to `List` with an edit, `HashMap` to `map::Map` and `HashSet`
+//! to `set::Set` without one.
+
+fn nothing() -> Void {
+  Nil
+}
+
+fn all(xs: Vec<Int>) -> List<Int> {
+  xs
+}
+
+fn size(m: HashMap<Int, Int>) -> Int {
+  1
+}
+
+fn count(s: HashSet<Int>) -> Int {
+  1
+}
+
+fn main() {
+  nothing()
+  assert all([1]) == [1]
+}

@@ -1,0 +1,10 @@
+// @mode: check-fail
+// @decisions: D-1939
+//! `let y = x as Float` is read as a message without `assert`, and its help
+//! is the cast help instead of `let assert`.
+
+fn main() {
+  let x = 1
+  let y = x as Float
+  assert y == 1.0
+}

@@ -1,0 +1,8 @@
+error[E0013]: expected an item, found identifier
+ --> tests/ui/04-declarations/habits/fun_keyword.cheby:5:1
+  |
+5 | fun twice(n: Int) -> Int {
+  | ^^^
+  |
+  = help: Cheby has no `fun`; write `fn`
+

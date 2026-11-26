@@ -1,0 +1,8 @@
+error[E0013]: expected a line break or `}`, found `..`
+ --> tests/ui/05-expressions/habits/range_operator.cheby:6:13
+  |
+6 |   let xs = 0..10
+  |             ^^
+  |
+  = help: Cheby has no range operator; call `list::range(start, end)`, which stops before `end`
+

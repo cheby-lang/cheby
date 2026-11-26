@@ -1,0 +1,8 @@
+error[E0013]: expected an expression, found `>`
+ --> tests/ui/05-expressions/habits/angle_not_equal.cheby:7:18
+  |
+7 |   let other = 1 <> 2
+  |                  ^
+  |
+  = help: Cheby has no `<>`; write `!=` to compare, or `+` to join strings
+

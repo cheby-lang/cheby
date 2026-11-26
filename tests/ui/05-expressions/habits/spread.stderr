@@ -1,0 +1,8 @@
+error[E0013]: expected an expression, found `.`
+ --> tests/ui/05-expressions/habits/spread.cheby:7:15
+  |
+7 |   let ys = [...xs, 2]
+  |               ^
+  |
+  = help: a spread is written `..xs`; write `..`
+

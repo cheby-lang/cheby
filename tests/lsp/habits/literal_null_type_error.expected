@@ -6,7 +6,7 @@
       "codeDescription": {
         "href": "https://github.com/cheby-lang/cheby/blob/main/docs/diagnostics/E0042.md"
       },
-      "message": "cannot find value `null` in this scope\nnot found",
+      "message": "cannot find value `null` in this scope\nnot found\nhelp: the absent case of `Option` is `None`",
       "range": {
         "end": {
           "character": 6,
@@ -81,7 +81,7 @@
         "codeDescription": {
           "href": "https://github.com/cheby-lang/cheby/blob/main/docs/diagnostics/E0042.md"
         },
-        "message": "cannot find value `null` in this scope\nnot found",
+        "message": "cannot find value `null` in this scope\nnot found\nhelp: the absent case of `Option` is `None`",
         "range": {
           "end": {
             "character": 6,

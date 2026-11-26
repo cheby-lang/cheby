@@ -1,0 +1,8 @@
+error[E0003]: unexpected character `?`
+ --> tests/ui/02-lexical-structure/habits/question_ternary.cheby:7:20
+  |
+7 |   let sign = n > 0 ? 1 : 0
+  |                    ^
+  |
+  = help: Cheby has no `? :`; use `case`
+
