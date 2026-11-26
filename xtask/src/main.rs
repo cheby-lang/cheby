@@ -3,6 +3,8 @@
 //! - `test`: runs every Rust test under cargo-nextest with one shared
 //!   build cache and prints the harnesses' pending summary (D-1553,
 //!   D-1554, D-1556; [`mod@test`]).
+//! - `affected`: prints the checks of CI that the changed files can fail,
+//!   as commands, and runs them with `--run` (D-1948; [`affected`]).
 //! - `bless`: rewrites the goldens of examples, UI tests and the language
 //!   server's golden tests under `tests/lsp/` from the current `cheby`
 //!   binary, including the goldens beside package UI tests (directories
@@ -57,6 +59,7 @@
 //! `xtask` process ([`cache`]), so no command reads or fills the
 //! developer's cache (D-1128).
 
+mod affected;
 mod bench;
 mod bench_oqp11;
 mod bench_run;
@@ -95,6 +98,9 @@ enum Cmd {
         #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
         args: Vec<String>,
     },
+    /// Print the checks of CI that the changed files can fail, and with `--run` run them
+    /// (D-1948)
+    Affected(affected::Args),
     /// Rewrite goldens of examples, UI tests and LSP tests from the current `cheby`
     Bless {
         /// Only bless tests whose name contains this filter
@@ -182,6 +188,7 @@ fn main() -> ExitCode {
     let result = match cli.command {
         // nextest's own exit status, not this command's (D-1554).
         Cmd::Test { args } => return test::run(&root, &args, &[]),
+        Cmd::Affected(args) => affected::run(&root, &args),
         Cmd::Bless { filter } => bless(&root, filter.as_deref()),
         Cmd::GenBench {
             lines,
