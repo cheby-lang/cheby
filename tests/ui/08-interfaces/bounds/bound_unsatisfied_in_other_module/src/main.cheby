@@ -8,6 +8,7 @@
 
 import std::io
 import std::json
+
 import ui_test::box
 
 fn main() {

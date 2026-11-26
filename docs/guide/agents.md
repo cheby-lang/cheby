@@ -49,6 +49,9 @@ names such as `len`, `reduce` or `to_string` are not Cheby's.
   debug output. Bind any other expression to a name first.
 - A tuple has no `.0`. Take it apart with a pattern: `let (a, b) = pair`.
 - Comments are `//`. `///` documents the item below it and `//!` the module.
+- Imports come before the first item, in up to three blocks with a blank line between them: `std`,
+  other packages, then the package's own modules, each sorted by path. `cheby fmt` and
+  `cheby check --fix` put them in order.
 - There are no semicolons, and indentation is two spaces. `cheby fmt` gives the one accepted form.
 
 ## Data, `case` and recursion

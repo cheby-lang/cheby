@@ -1,0 +1,16 @@
+// @mode: check-pass
+// @decisions: D-1953
+//! Imports come in up to three blocks: the standard library's, other
+//! packages', then the package's own. A file whose imports are not in
+//! that order gets one warning, at the first import out of place.
+
+import app::geometry
+import std::io
+// The lists of sides.
+import std::list
+
+fn main() {
+  let sides = list::length([2.0, 3.0])
+  io::println("{sides}")
+  assert geometry::square_area(2.0) == 4.0
+}

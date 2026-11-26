@@ -4,12 +4,13 @@
 //! `sqlite:shop.db`, or `sqlite::memory:` for a database of its own in each
 //! connection.
 
-import sql::decode
 import std::fiber
 import std::int as integer
 import std::list
 import std::result
 import std::string
+
+import sql::decode
 
 /// A set of open connections. It closes when the last reference to it and to
 /// its connections goes away.

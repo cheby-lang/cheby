@@ -16,9 +16,10 @@
 //! Chains of operators are read by tail calls. Parentheses and unary
 //! minus are not: every level of nesting uses a few more stack frames.
 
+import std::result
+
 import expression_evaluator::expr
 import expression_evaluator::lexer
-import std::result
 
 /// A parsed line.
 type Statement {

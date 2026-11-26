@@ -907,7 +907,7 @@ fn facts_package(dir: &Path) -> PathBuf {
     .unwrap();
     std::fs::write(
         root.join("src/main.cheby"),
-        "//! User types in three modules.\n\nimport std::io\nimport facts::shapes\nimport facts::wide\n\n\
+        "//! User types in three modules.\n\nimport std::io\n\nimport facts::shapes\nimport facts::wide\n\n\
          /// A count.\ntype Tally {\n  Tally(Int),\n  NoTally,\n}\n\n\
          fn main() -> Result<Nil, io::Error> {\n  let circle = shapes::Circle { radius: 2, label: \"c\" }\n  \
          let square = shapes::Square(3, \"s\")\n  \

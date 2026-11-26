@@ -4,8 +4,9 @@
 //! visible as the type, so `Angle` does not satisfy `Show` anywhere, even
 //! inside its package (§8.2, ADR-0034).
 
-import app::geometry::angle
 import std::io
+
+import app::geometry::angle
 
 fn main() {
   let right = angle::Angle { radians: 1.5708 }

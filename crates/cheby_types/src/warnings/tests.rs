@@ -1,4 +1,4 @@
-//! The module-local warnings (W0002-W0004, W0006, W0009, W0011-W0013)
+//! The module-local warnings (W0002-W0004, W0006, W0009, W0011-W0014)
 //! through the whole front end. The package pass (W0005) needs every
 //! module's resolution, which the test builds do not keep; the driver
 //! tests it.
@@ -113,7 +113,7 @@ fn unused_imports_warn() {
             (
                 "",
                 &module(
-                    "import app::util\nimport std::int::{double, half as halve}\n\n\
+                    "import std::int::{double, half as halve}\n\nimport app::util\n\n\
                      pub fn f(n: Int) -> Int {\n  double(n)\n}\n",
                 ),
             ),
@@ -542,4 +542,86 @@ fn imports_of_planned_modules_are_not_unused() {
     let b = one("import std::http\n\npub fn f(unused: Int) {\n  http::get(\"x\")\n}\n");
     assert_eq!(b.codes(), ["E0038", "W0002"], "{}", b.rendered());
     assert_eq!(with_code(&b, "W0003"), Vec::<String>::new());
+}
+
+// W0014
+
+/// D-1953: one warning for a module whose imports are not in the three
+/// blocks, at the first import out of place, with a fix that rewrites
+/// the section.
+#[test]
+fn imports_out_of_order_warn_once() {
+    let util = "//! Util.\n\npub fn g() -> Int {\n  1\n}\n";
+    let list = "//! Lists.\n\npub fn one() -> Int {\n  1\n}\n";
+    let body = "pub fn f() -> Int {\n  util::g() + list::one() + other::one()\n}\n";
+    let order = |imports: &str| {
+        let b = build_with_std(
+            &[("list", list), ("other", list)],
+            &[
+                ("", &module(&format!("{imports}\n\n{body}"))),
+                ("util", util),
+            ],
+        );
+        assert_eq!(errors(&b), Vec::<String>::new(), "{}", b.rendered());
+        with_code(&b, "W0014")
+    };
+    assert_eq!(
+        order("import app::util\nimport std::other\nimport std::list"),
+        ["the imports are not in order [\"`std::list` comes before this import\"]"]
+    );
+    assert_eq!(
+        order("import std::other\nimport std::list\n\nimport app::util"),
+        ["the imports are not in order [\"`std::list` comes before this import\"]"]
+    );
+    assert_eq!(
+        order("import std::list\nimport std::other\nimport app::util"),
+        ["the imports are not in order [\"a blank line comes before the package's own imports\"]"]
+    );
+    assert_eq!(
+        order("import std::list\n\nimport std::other\n\nimport app::util"),
+        ["the imports are not in order [\"no blank line comes before this import\"]"]
+    );
+    assert_eq!(
+        order("import std::list\nimport std::other\n\n// Ours.\n\nimport app::util"),
+        ["the imports are not in order [\"no blank line comes before this import\"]"]
+    );
+    let none = Vec::<String>::new();
+    assert_eq!(
+        order("import std::list\nimport std::other\n\n// Ours.\nimport app::util // last"),
+        none
+    );
+    assert_eq!(
+        order("import std::list\nimport std::other\n\nimport app::util"),
+        none
+    );
+}
+
+/// The fix is the section in `cheby fmt`'s order, every import and
+/// comment as written.
+#[test]
+fn the_import_order_fix_rewrites_the_section() {
+    let util = "//! Util.\n\npub fn g() -> Int {\n  1\n}\n";
+    let list = "//! Lists.\n\npub fn one() -> Int {\n  1\n}\n";
+    let source = module(
+        "// Ours.\nimport app::util // last\nimport   std::list\n\n\
+         pub fn f() -> Int {\n  util::g() + list::one()\n}\n",
+    );
+    let b = build_with_std(&[("list", list)], &[("", &source), ("util", util)]);
+    let warning = b
+        .diags
+        .iter()
+        .find(|d| d.code == cheby_diag::codes::IMPORT_ORDER)
+        .unwrap();
+    let help = &warning.helps[0];
+    assert!(help.fix);
+    assert_eq!(help.edits.len(), 1);
+    let edit = &help.edits[0];
+    assert_eq!(
+        edit.span.range.slice(&source),
+        Some("// Ours.\nimport app::util // last\nimport   std::list")
+    );
+    assert_eq!(
+        edit.replacement,
+        "import   std::list\n\n// Ours.\nimport app::util // last"
+    );
 }

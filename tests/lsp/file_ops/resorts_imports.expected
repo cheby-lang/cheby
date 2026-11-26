@@ -8,7 +8,7 @@
       {
         "edits": [
           {
-            "newText": "import moves::beta\nimport moves::zeta\nimport std::io",
+            "newText": "import std::io\n\nimport moves::beta\nimport moves::zeta",
             "range": {
               "end": {
                 "character": 14,

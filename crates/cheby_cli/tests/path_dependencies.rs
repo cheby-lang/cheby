@@ -111,7 +111,7 @@ const APP: &str =
 /// A program over `geometry` whose `main` ends with `extra`.
 fn app(extra: &str) -> String {
     format!(
-        "//! App.\n\nimport geo\nimport geo::shape\nimport std::io\n\nfn main() {{\n  let a = shape::area(shape::square(2))\n  let u = geo::unit()\n  let o = shape::origin\n  io::println(\"{{a}} {{u}} {{o.y}}\")\n{extra}}}\n\ntest \"app's test\" {{\n  assert geo::unit() == 3\n}}\n"
+        "//! App.\n\nimport std::io\n\nimport geo\nimport geo::shape\n\nfn main() {{\n  let a = shape::area(shape::square(2))\n  let u = geo::unit()\n  let o = shape::origin\n  io::println(\"{{a}} {{u}} {{o.y}}\")\n{extra}}}\n\ntest \"app's test\" {{\n  assert geo::unit() == 3\n}}\n"
     )
 }
 
@@ -264,7 +264,7 @@ fn packages_of_one_name_stay_apart() {
     );
     packages.write(
         "root/src/main.cheby",
-        "//! One name.\n\nimport one::point as one_point\nimport points::point\nimport std::io\nimport two::point as two_point\n\n/// Any value.\ninterface Any\n\nfn main() {\n  let a: dyn Any = point::Point { x: 1, y: 2 }\n  let b: dyn Any = one_point::Point { x: 1, y: 2 }\n  let c: dyn Any = two_point::Point { x: 1, y: 2 }\n  let d: dyn Any = two_point::Point { x: 1, y: 2 }\n  let ab = a == b\n  let bc = b == c\n  let cd = c == d\n  let e: dyn Any = point::none()\n  let f: dyn Any = one_point::none()\n  let g: dyn Any = two_point::none()\n  let h: dyn Any = two_point::none()\n  let ef = e == f\n  let fg = f == g\n  let gh = g == h\n  io::println(\"{ab} {bc} {cd} {ef} {fg} {gh}\")\n}\n",
+        "//! One name.\n\nimport std::io\n\nimport one::point as one_point\nimport two::point as two_point\n\nimport points::point\n\n/// Any value.\ninterface Any\n\nfn main() {\n  let a: dyn Any = point::Point { x: 1, y: 2 }\n  let b: dyn Any = one_point::Point { x: 1, y: 2 }\n  let c: dyn Any = two_point::Point { x: 1, y: 2 }\n  let d: dyn Any = two_point::Point { x: 1, y: 2 }\n  let ab = a == b\n  let bc = b == c\n  let cd = c == d\n  let e: dyn Any = point::none()\n  let f: dyn Any = one_point::none()\n  let g: dyn Any = two_point::none()\n  let h: dyn Any = two_point::none()\n  let ef = e == f\n  let fg = f == g\n  let gh = g == h\n  io::println(\"{ab} {bc} {cd} {ef} {fg} {gh}\")\n}\n",
     );
     for args in [["run"].as_slice(), &["run"], &["run", "--release"]] {
         packages.prints("root", args, "False False True False False True\n");
@@ -288,7 +288,7 @@ fn a_dependency_has_its_own_constant_limits() {
     let shape = GEOMETRY[2]
         .1
         .replace("y: 7 }", "y: list::length(list::repeat(1, 100_000)) }")
-        .replace("import u\n", "import std::list\nimport u\n");
+        .replace("import u\n", "import std::list\n\nimport u\n");
     packages.write("geometry/src/shape.cheby", &shape);
     packages.write("app/cheby.toml", &format!("{APP}{}", limit("1KiB")));
     packages.prints("app", &["run"], "12 3 100000\n");
@@ -338,7 +338,7 @@ fn native_code_of_several_packages() {
     );
     packages.write(
         "app/src/main.cheby",
-        "//! App.\n\nimport one\nimport std::io\nimport two\n\n@external(native, \"app_number\")\nfn number() -> Int\n\nfn main() {\n  let sum = one::number() + two::number() + number()\n  io::println(\"{sum}\")\n  io::println(one::text())\n  io::println(two::text())\n}\n",
+        "//! App.\n\nimport std::io\n\nimport one\nimport two\n\n@external(native, \"app_number\")\nfn number() -> Int\n\nfn main() {\n  let sum = one::number() + two::number() + number()\n  io::println(\"{sum}\")\n  io::println(one::text())\n  io::println(two::text())\n}\n",
     );
     for args in [["run"].as_slice(), &["run"], &["run", "--release"]] {
         packages.prints("app", args, "6\none\ntwo\n");
@@ -388,7 +388,7 @@ fn native_code_of_two_majors() {
     );
     packages.write(
         "app/src/main.cheby",
-        "//! App.\n\nimport one\nimport std::io\nimport two\n\nfn main() {\n  let sum = one::number() + two::number()\n  io::println(\"{sum}\")\n}\n",
+        "//! App.\n\nimport std::io\n\nimport one\nimport two\n\nfn main() {\n  let sum = one::number() + two::number()\n  io::println(\"{sum}\")\n}\n",
     );
     for command in ["run", "build"] {
         let out = packages.cheby("app", &[command]);

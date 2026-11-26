@@ -4398,7 +4398,7 @@ mod tests {
     #[test]
     fn an_extra_module_reads_the_package_and_std() {
         let (front, mut sources) = front("extra_ok", &[("main.cheby", ROOT), ("util.cheby", UTIL)]);
-        let text = "import app::util\nimport std::list\n\n\
+        let text = "import std::list\n\nimport app::util\n\n\
                     fn entry() -> Int {\n  list::length([util::double(2)])\n}\n";
         let checked = extra(&front, &mut sources, "repl_1", text, Vec::new()).unwrap();
         assert_eq!(

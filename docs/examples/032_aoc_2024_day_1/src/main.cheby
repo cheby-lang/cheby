@@ -13,10 +13,11 @@
 //! the sample is included. Download your own input to solve the real
 //! puzzle.
 
-import aoc_2024_day_1::puzzle
 import std::env
 import std::io
 import std::result
+
+import aoc_2024_day_1::puzzle
 
 fn main() -> Result<Nil, AppError> {
   // Each step builds a `Result` with an `AppError` in it, and `use`

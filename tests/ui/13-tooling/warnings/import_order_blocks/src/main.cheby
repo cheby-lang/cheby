@@ -1,0 +1,18 @@
+// @mode: check-pass
+// @decisions: D-1953
+//! The imports in order: no warning. A comment above an import and one
+//! at its line's end belong to it, and a comment under the last import
+//! is not the imports'.
+
+import std::io
+// The lists of sides.
+import std::list // one more
+
+import app::geometry
+// Not an import's comment.
+
+fn main() {
+  let sides = list::length([2.0, 3.0])
+  io::println("{sides}")
+  assert geometry::square_area(2.0) == 4.0
+}

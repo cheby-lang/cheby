@@ -191,7 +191,7 @@ fn with_shapes(name: &str) -> World {
     world
 }
 
-const MAIN: &str = "//! App.\n\nimport shapes::point\nimport std::io\n\nfn main() {\n  let n = point::number()\n  io::println(\"{n}\")\n}\n";
+const MAIN: &str = "//! App.\n\nimport std::io\n\nimport shapes::point\n\nfn main() {\n  let n = point::number()\n  io::println(\"{n}\")\n}\n";
 
 /// `[dependencies]` with `shapes` at a tag.
 fn at(tag: &str) -> String {
@@ -290,7 +290,7 @@ fn versions_and_majors() {
     );
     world.app(
         "\n[dependencies]\ndraw = { git = \"https://packages.example/draw\", tag = \"v0.1.0\" }\none = { git = \"https://packages.example/shapes\", tag = \"v1.0.0\" }\ntwo = { git = \"https://packages.example/shapes\", tag = \"v2.0.0\" }\n",
-        "//! App.\n\nimport draw\nimport one::point as one_point\nimport std::io\nimport two::point as two_point\n\n/// Any value.\ninterface Any\n\nfn main() {\n  let n = one_point::number()\n  let m = two_point::number()\n  let p: one_point::Point = draw::origin()\n  let a: dyn Any = p\n  let b: dyn Any = one_point::Point { x: 1, y: 2 }\n  let c: dyn Any = two_point::Point { x: 1, y: 2 }\n  let ab = a == b\n  let bc = b == c\n  let d: dyn Any = one_point::none()\n  let e: dyn Any = two_point::none()\n  let de = d == e\n  io::println(\"{n} {m} {ab} {bc} {de}\")\n}\n",
+        "//! App.\n\nimport std::io\n\nimport draw\nimport one::point as one_point\nimport two::point as two_point\n\n/// Any value.\ninterface Any\n\nfn main() {\n  let n = one_point::number()\n  let m = two_point::number()\n  let p: one_point::Point = draw::origin()\n  let a: dyn Any = p\n  let b: dyn Any = one_point::Point { x: 1, y: 2 }\n  let c: dyn Any = two_point::Point { x: 1, y: 2 }\n  let ab = a == b\n  let bc = b == c\n  let d: dyn Any = one_point::none()\n  let e: dyn Any = two_point::none()\n  let de = d == e\n  io::println(\"{n} {m} {ab} {bc} {de}\")\n}\n",
     );
     world.prints(
         &["update"],
@@ -469,7 +469,7 @@ fn add_keeps_what_is_locked() {
     }
     world.app(
         "",
-        "//! App.\n\nimport old\nimport std::io\n\nfn main() {\n  let n = old::number()\n  io::println(\"{n}\")\n}\n",
+        "//! App.\n\nimport std::io\n\nimport old\n\nfn main() {\n  let n = old::number()\n  io::println(\"{n}\")\n}\n",
     );
     world.prints(
         &["add", "https://packages.example/old"],
@@ -544,7 +544,7 @@ fn add_raises_only_what_it_needs() {
     numbered(&world, "high", "1.0.0", 2, &needs("1.2.0"));
     world.app(
         "",
-        "//! App.\n\nimport base\nimport std::io\n\nfn main() {\n  let n = base::number()\n  io::println(\"{n}\")\n}\n",
+        "//! App.\n\nimport std::io\n\nimport base\n\nfn main() {\n  let n = base::number()\n  io::println(\"{n}\")\n}\n",
     );
     world.prints(
         &["add", "https://packages.example/base", "--tag", "v1.1.0"],
@@ -717,7 +717,7 @@ fn a_package_from_git_has_native_code() {
     );
     world.app(
         "targets = [\"native\"]\n",
-        "//! App.\n\nimport half\nimport std::io\n\nfn main() {\n  let n = half::half(7.0)\n  io::println(\"{n}\")\n}\n\ntest \"half of 9\" {\n  assert half::half(9.0) == 4.0\n}\n",
+        "//! App.\n\nimport std::io\n\nimport half\n\nfn main() {\n  let n = half::half(7.0)\n  io::println(\"{n}\")\n}\n\ntest \"half of 9\" {\n  assert half::half(9.0) == 4.0\n}\n",
     );
     world.prints(
         &["add", "https://packages.example/half"],
@@ -832,7 +832,7 @@ fn an_override_replaces_a_package() {
         "{}draw = {{ git = \"https://packages.example/draw\", tag = \"v0.1.0\" }}\n",
         at("v1.0.0")
     );
-    let main = "//! App.\n\nimport draw\nimport shapes::point\nimport std::io\n\nfn main() {\n  let p: point::Point = draw::origin()\n  let n = p.x\n  io::println(\"{n}\")\n}\n";
+    let main = "//! App.\n\nimport std::io\n\nimport draw\nimport shapes::point\n\nfn main() {\n  let p: point::Point = draw::origin()\n  let n = p.x\n  io::println(\"{n}\")\n}\n";
     world.app(&dependencies, main);
     let out = world.cheby(&["update"]);
     assert_eq!(out.status, Some(0), "{}", out.stderr);

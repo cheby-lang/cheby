@@ -23,10 +23,11 @@
 //! `let assert`, which panics instead of asking every caller to handle
 //! a case that should never happen.
 
-import bank_accounts::account
-import bank_accounts::money
 import std::fiber
 import std::result
+
+import bank_accounts::account
+import bank_accounts::money
 
 /// Why a transfer did not happen. In both cases no money has moved by
 /// the time `transfer` returns.

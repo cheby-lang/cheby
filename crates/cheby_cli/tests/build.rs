@@ -811,9 +811,10 @@ fn package_files(dir: &Path, manifest_extra: &str, files: &[(&str, &str)]) -> Pa
 /// The root of [`three_modules`]: two other modules, one with a constant.
 const THREE_MAIN: &str = "//! The root: what the two other modules give.
 
+import std::io
+
 import app::count
 import app::label
-import std::io
 
 fn main() {
   let n = count::total()
@@ -1103,8 +1104,9 @@ fn fails_with_oops(visibility: &str, comment: &str) -> String {
     format!(
         "//! Fails with another module's type.{comment}
 
-import app::lib
 import std::io
+
+import app::lib
 
 {visibility}fn main() -> Result<Nil, lib::Oops> {{
   io::println(\"hello\")
@@ -1155,9 +1157,10 @@ fn a_hidden_function_satisfies_nothing_for_a_private_main() {
     let tmp = FreshDir::create("cheby-build-hidden-show-main").unwrap();
     let main = "//! A private `main`, and a test that fails with the type.
 
-import app::lib
 import std::io
 import std::result
+
+import app::lib
 
 priv fn main() -> Result<Nil, lib::Oops> {
   io::println(\"hello\")
@@ -1199,8 +1202,9 @@ fn a_hidden_function_leaves_e0063_as_cold_as_it_was() {
     let main = fails_with_oops("", "");
     let wrong = "//! Needs `Show` of a type that lacks it.
 
-import app::lib
 import std::io
+
+import app::lib
 
 fn main() {
   let oops = lib::make()
@@ -1445,8 +1449,9 @@ fn link_gc_drops_unreached_functions_and_keeps_locations() {
                 "main.cheby",
                 "//! Calls one function of `util`.
 
-import app::util
 import std::io
+
+import app::util
 
 fn main() {
   io::println(\"start\")
@@ -1482,7 +1487,7 @@ fn main() {
 fn dyn_values_of_two_objects_are_equal_in_an_executable() {
     const KINDS: &str = "//! Shared.\n\n/// Everything.\ninterface Any\n\n/// One field.\ntype Point {\n  x: Int,\n}\n";
     const SIDE: &str = "//! Converts here.\n\nimport dynid::kinds\n\n/// Declared in both.\ntype Own {\n  x: Int,\n}\n\n/// A shared type.\nfn make(x: Int) -> dyn kinds::Any {\n  let b: dyn kinds::Any = kinds::Point { x }\n  b\n}\n\n/// This module's type.\nfn own(x: Int) -> dyn kinds::Any {\n  let b: dyn kinds::Any = Own { x }\n  b\n}\n\n/// An empty list: only the descriptor differs.\nfn list() -> dyn kinds::Any {\n  let xs: List<Own> = []\n  let b: dyn kinds::Any = xs\n  b\n}\n";
-    const MAIN: &str = "//! Compares.\n\nimport dynid::kinds\nimport dynid::left\nimport dynid::right\nimport std::io\nimport std::set\n\nfn main() {\n  let same = left::make(1) == right::make(1)\n  let other = left::make(1) == right::make(2)\n  let own = left::own(1) == right::own(1)\n  let list = left::list() == right::list()\n  let none: set::Set<dyn kinds::Any> = set::new()\n  let size = set::size(set::insert(set::insert(none, left::make(1)), right::make(1)))\n  io::println(\"{same} {other} {own} {list} {size}\")\n}\n";
+    const MAIN: &str = "//! Compares.\n\nimport std::io\nimport std::set\n\nimport dynid::kinds\nimport dynid::left\nimport dynid::right\n\nfn main() {\n  let same = left::make(1) == right::make(1)\n  let other = left::make(1) == right::make(2)\n  let own = left::own(1) == right::own(1)\n  let list = left::list() == right::list()\n  let none: set::Set<dyn kinds::Any> = set::new()\n  let size = set::size(set::insert(set::insert(none, left::make(1)), right::make(1)))\n  io::println(\"{same} {other} {own} {list} {size}\")\n}\n";
     let tmp = FreshDir::create("cheby-build-dyn").unwrap();
     let root = package(tmp.path(), "dynid", MAIN);
     for (file, text) in [

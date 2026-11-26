@@ -22,6 +22,7 @@
 import std::channel
 import std::duration
 import std::fiber
+
 import supervisor::clock
 
 /// Starts beating every `interval`, from beat 1 after the first

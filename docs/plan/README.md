@@ -518,6 +518,7 @@ Logged in [`../decisions/LOG.md`](../decisions/LOG.md#2026-10-04-implementation-
 | D-1950    | `cargo xtask test` builds the runtime archive first; `cargo xtask doctor` reports stale things      |
 | D-1951    | A syntax error stops the later phases for its module and that module's importers only               |
 | D-1952    | `cheby guide` and `AGENTS.md` in `cheby new`: a guide for coding agents, checked by tests           |
+| D-1953    | Imports in three blocks (std, other packages, own), written by `cheby fmt`, reported by W0014       |
 
 ## Open questions
 

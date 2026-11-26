@@ -17,15 +17,17 @@
 //! are made in `checkout`, which is pure and tested, and this module
 //! only moves data between it and the tables.
 
-import shop_service::checkout
-import shop_service::checkout::{Product}
-import shop_service::order
-import sql
-import sql::decode
 import std::list
 import std::map
 import std::map::{Map}
 import std::result
+
+import sql
+import sql::decode
+
+import shop_service::checkout
+import shop_service::checkout::{Product}
+import shop_service::order
 
 /// Why a store operation failed.
 type StoreError {

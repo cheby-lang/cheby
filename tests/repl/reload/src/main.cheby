@@ -2,6 +2,7 @@
 //! copy of this package and reloads it.
 
 import std::io
+
 import store::prices
 
 fn main() {

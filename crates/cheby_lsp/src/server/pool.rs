@@ -27,8 +27,8 @@ use super::{ClientCaps, ConstValues, Effect, Server, Settings, codes};
 use crate::features::handlers::file_ops::std_move_refused;
 use crate::features::stdlib::StdService;
 use crate::features::{
-    Analyzed, CancelToken, Class, FileReports, HandlerOutput, LiveText, PublishedReport, RequestCx,
-    RequestError, Route,
+    Analyzed, CancelToken, Class, FileReports, HandlerOutput, LiveText, PackageName,
+    PublishedReport, RequestCx, RequestError, Route,
 };
 use crate::text::lines::PositionEncoding;
 use crate::text::uri::{UriMap, normalize, uri_to_path};
@@ -389,10 +389,22 @@ impl Server {
             return Some(Arc::clone(live));
         }
         let doc = self.docs.get_mut(path)?;
+        // The name the document's snapshots give its package, which
+        // formatting reads (D-1953): a manifest is read on the query
+        // thread, when a request first parses the text.
+        let package = match &doc.route {
+            DocRoute::Package(root) => PackageName::Manifest(root.clone()),
+            DocRoute::StdCheckout { .. } => PackageName::Known(Some("std".to_owned())),
+            DocRoute::SingleFile { .. } => {
+                PackageName::Known(Some(cheby_driver::SINGLE_PACKAGE.to_owned()))
+            }
+            DocRoute::Std | DocRoute::Unowned => PackageName::Known(None),
+        };
         let live = Arc::new(LiveText::new(
             path.to_path_buf(),
             Some(doc.version),
             doc.shared(),
+            package,
         ));
         self.texts
             .insert(path.to_path_buf(), (doc.stamp, Arc::clone(&live)));

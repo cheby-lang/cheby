@@ -217,7 +217,7 @@ fn grammar_error_gives_front_errors() {
 fn values_name_the_modules_they_reach() {
     let root = package(
         "reaches",
-        "//! Constants that reach `util` or not.\n\nimport reaches::util\nimport reaches::other\n\n\
+        "//! Constants that reach `util` or not.\n\nimport reaches::other\nimport reaches::util\n\n\
          const plain: Int = 20\n\nconst tripled: Int = util::triple(plain)\n\n\
          fn main() {\n  assert tripled > other::zero()\n}\n",
         "",

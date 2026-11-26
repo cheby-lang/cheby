@@ -890,7 +890,7 @@ mod tests {
 
     use cheby_test_support::cache::FreshDir;
 
-    const MAIN: &str = "//! Entry point.\n\nimport std::io\nimport bench::g000::m00039\n\n\
+    const MAIN: &str = "//! Entry point.\n\nimport std::io\n\nimport bench::g000::m00039\n\n\
                         fn main() {\n  let total = m00039::entry(10)\n  io::println(\"{total}\")\n}\n";
 
     fn ran(ms: u64, phases: &[(&str, u64)]) -> Ran {

@@ -41,3 +41,13 @@ pub(crate) struct Refusal(pub String);
 pub(crate) fn is_synthetic(snapshot: &Snapshot, module: ModuleId) -> bool {
     snapshot.is_single_file() && snapshot.module(module).is_some_and(ModuleView::is_own)
 }
+
+/// The name of the session's package: the first segment of its modules'
+/// paths, `std` in a std checkout and `script` in single-file mode. The
+/// formatter reads it to tell the package's own imports from other
+/// packages' (D-1953), and a file move to map paths to modules.
+pub(crate) fn package_name(snapshot: &Snapshot) -> Option<String> {
+    snapshot
+        .own_modules()
+        .find_map(|view| view.path()?.segments().first().cloned())
+}

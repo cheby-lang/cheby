@@ -633,7 +633,7 @@ fn ast_ids_resolve_in_their_tree() {
 #[test]
 fn source_file_header_and_items() {
     let parsed = parse(
-        "//! Module.\n@!target(js)\nimport std::io\nimport a::{B, c as d}\n/// Doc.\n@inline\npub fn f() {}\nconst x: Int = 1\n",
+        "//! Module.\n@!target(js)\nimport std::io\n\nimport a::{B, c as d}\n/// Doc.\n@inline\npub fn f() {}\nconst x: Int = 1\n",
     );
     let file = parsed.source_file();
     assert_eq!(

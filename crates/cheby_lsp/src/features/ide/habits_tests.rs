@@ -402,8 +402,9 @@ fn a_for_loop_becomes_each() {
         text.contains("  list::each(xs, fn(x) { other::put(x) })\n"),
         "{text}"
     );
+    // In a block of its own before the package's (D-1953).
     assert!(
-        text.contains("import app::other\nimport std::list\n"),
+        text.contains("import std::list\n\nimport app::other\n"),
         "{text}"
     );
 }

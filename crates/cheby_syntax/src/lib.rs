@@ -12,6 +12,7 @@
 
 pub mod ast;
 pub mod event;
+pub mod imports;
 pub mod lexer;
 pub mod names;
 mod parser;

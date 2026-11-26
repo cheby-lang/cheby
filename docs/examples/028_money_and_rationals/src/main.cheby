@@ -20,11 +20,12 @@
 //! 1.15` is `84.06499999999998` in floating point, which rounds to
 //! 84.06, although the exact total is 84.065 and rounds to 84.07.
 
-import money_and_rationals::rational
-import money_and_rationals::split
 import std::io
 import std::list
 import std::string
+
+import money_and_rationals::rational
+import money_and_rationals::split
 
 /// A dish or drink on the bill, with its price in cents.
 type Item = (String, Int)

@@ -343,7 +343,25 @@ The standard library's `test` blocks sit next to the code they test, in its sour
 
 The style itself is defined by the formatter, not by this specification. Examples in this specification use it: two-space indentation, one statement per line (D-1155), trailing commas in multi-line lists (D-1152), a type definition's variants or fields one per line (D-1274), every pipeline broken with `|>` at the start of each line (D-1275), an arm's body starting on the arm's line, with one space before `=>` (D-1276), the `else` block of a guard always broken over lines (D-1343), and `_` between groups of three digits in a decimal number of five or more digits (D-1345).
 
-_Note:_ the reference formatter is a pretty printer driven by one line width, 100 columns (D-1252). It sorts the imports within each block of imports, a run of imports on consecutive lines with no blank line or comment between them, by module path in byte order (D-1148). It collapses runs of blank lines into one, keeps comments and single blank lines in their places (D-1149, D-1160, D-1161, ADR-0074), writes files with LF line endings that end with one newline, and never splits a string literal (D-1030). A file of only whitespace formats to the empty file (D-1147). It breaks a type definition's body, a pipeline and a block that is an arm's body over lines even when they fit (D-1274, D-1275, D-1276). It writes a decimal integer literal of five or more digits, or the integer part of such a float literal, with `_` between groups of three digits from the right, so `1000000` becomes `1_000_000` and `10000.5` becomes `10_000.5`. It keeps every literal that already holds a `_`, such as `10_00`, and leaves a shorter literal, a fraction, an exponent and a literal with a base prefix as written (D-1345).
+One part of the style is specified here, because the compiler warns about a file that does not follow it ([§13.8](#138-diagnostics-and-warnings)): the order of a file's imports (D-1953).
+
+- The imports before the first item come in at most three blocks, with one blank line between two blocks and none inside a block: the modules of the standard library, then the modules of other packages, then the modules of the file's own package.
+- Inside a block the imports are sorted by module path in byte order, and imports of one path by their whole text.
+- A file belongs to the package whose `cheby.toml` is the nearest above it, and standard input to the package around the working directory. A file of no package has no third block.
+- A comment on the lines above an import, or at the end of its line, moves with the import. Above the first import, only the comment lines that touch it move, so a file's header stays where it is.
+- A comment after the last import is not moved. Nor is an import that follows an item, which is an error ([§7.5](07-modules-and-packages.md#75-imports)).
+
+```cheby
+import std::io
+import std::list
+
+import json::decode
+
+// The routes of this application.
+import my_app::web::router
+```
+
+_Note:_ the reference formatter is a pretty printer driven by one line width, 100 columns (D-1252). It writes the imports in their blocks, as above (D-1953). It collapses runs of blank lines into one, keeps comments and single blank lines in their places (D-1149, D-1160, D-1161, ADR-0074), writes files with LF line endings that end with one newline, and never splits a string literal (D-1030). A file of only whitespace formats to the empty file (D-1147). It breaks a type definition's body, a pipeline and a block that is an arm's body over lines even when they fit (D-1274, D-1275, D-1276). It writes a decimal integer literal of five or more digits, or the integer part of such a float literal, with `_` between groups of three digits from the right, so `1000000` becomes `1_000_000` and `10000.5` becomes `10_000.5`. It keeps every literal that already holds a `_`, such as `10_00`, and leaves a shorter literal, a fraction, an exponent and a literal with a base prefix as written (D-1345).
 
 ## 13.8 Diagnostics and warnings
 
@@ -367,6 +385,7 @@ The following are warnings (D-080 and the cited decisions):
 | use of a `@deprecated` item                                             | D-200, D-517         |
 | a written tuple type with a tuple element or with four or more elements | D-243, D-440         |
 | a negative integer literal passed as a standard-library count argument  | D-298, D-303, D-518  |
+| imports out of the order of [§13.7](#137-formatter)                     | D-1953               |
 
 Unused `pub` items are never reported (D-152). What counts as a use is fixed as follows (D-515, D-516):
 

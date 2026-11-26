@@ -1,0 +1,130 @@
+== diagnostics
+{
+  "src/main.cheby": [
+    {
+      "code": "W0014",
+      "codeDescription": {
+        "href": "https://github.com/cheby-lang/cheby/blob/main/docs/diagnostics/W0014.md"
+      },
+      "message": "the imports are not in order\n`std::int` comes before this import\nnote: imports come in up to three blocks, each sorted by path: the standard library's, other packages', then the package's own",
+      "range": {
+        "end": {
+          "character": 16,
+          "line": 5
+        },
+        "start": {
+          "character": 0,
+          "line": 5
+        }
+      },
+      "severity": 2,
+      "source": "cheby"
+    },
+    {
+      "code": "E0047",
+      "codeDescription": {
+        "href": "https://github.com/cheby-lang/cheby/blob/main/docs/diagnostics/E0047.md"
+      },
+      "message": "mismatched types\nexpected `Int`, found `String`",
+      "range": {
+        "end": {
+          "character": 13,
+          "line": 15
+        },
+        "start": {
+          "character": 2,
+          "line": 15
+        }
+      },
+      "relatedInformation": [
+        {
+          "location": {
+            "range": {
+              "end": {
+                "character": 18,
+                "line": 14
+              },
+              "start": {
+                "character": 15,
+                "line": 14
+              }
+            },
+            "uri": "src/main.cheby"
+          },
+          "message": "expected because of this return type"
+        }
+      ],
+      "severity": 1,
+      "source": "cheby"
+    }
+  ]
+}
+
+== src/main.cheby:6:1 action put the imports in order, as `cheby fmt` does
+{
+  "actions": [
+    "put the imports in order, as `cheby fmt` does",
+    "Organize imports",
+    "Explain W0014"
+  ],
+  "answer": {
+    "data": {
+      "hash": "<hash>",
+      "range": [
+        205,
+        205
+      ],
+      "uri": "src/main.cheby"
+    },
+    "diagnostics": [
+      {
+        "code": "W0014",
+        "codeDescription": {
+          "href": "https://github.com/cheby-lang/cheby/blob/main/docs/diagnostics/W0014.md"
+        },
+        "message": "the imports are not in order\n`std::int` comes before this import\nnote: imports come in up to three blocks, each sorted by path: the standard library's, other packages', then the package's own",
+        "range": {
+          "end": {
+            "character": 16,
+            "line": 5
+          },
+          "start": {
+            "character": 0,
+            "line": 5
+          }
+        },
+        "severity": 2,
+        "source": "cheby"
+      }
+    ],
+    "edit": {
+      "documentChanges": [
+        {
+          "edits": [
+            {
+              "newText": "// For `int::show`.\nimport std::int\nimport std::io\nimport std::list // lists",
+              "range": {
+                "end": {
+                  "character": 14,
+                  "line": 8
+                },
+                "start": {
+                  "character": 0,
+                  "line": 5
+                }
+              }
+            }
+          ],
+          "textDocument": {
+            "uri": "src/main.cheby",
+            "version": 1
+          }
+        }
+      ]
+    },
+    "isPreferred": true,
+    "kind": "quickfix",
+    "title": "put the imports in order, as `cheby fmt` does"
+  },
+  "showMessage": []
+}

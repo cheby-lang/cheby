@@ -193,7 +193,7 @@ fn hidden_reads_front_end_records_a_type_of_an_unimported_module() {
             MANIFEST,
             (
                 "src/main.cheby",
-                b"//! Root.\n\nimport app::b\nimport std::io\n\n\
+                b"//! Root.\n\nimport std::io\n\nimport app::b\n\n\
                   fn text() -> String {\n  let thing = b::make()\n  \"{thing}\"\n}\n\n\
                   fn main() {\n  io::println(text())\n}\n",
             ),
@@ -318,7 +318,7 @@ fn hidden_reads_are_the_same_with_one_job_and_the_default() {
             MANIFEST,
             (
                 "src/main.cheby",
-                b"//! Root.\n\nimport app::b\nimport app::keeper\nimport std::io\n\n\
+                b"//! Root.\n\nimport std::io\n\nimport app::b\nimport app::keeper\n\n\
                   fn text() -> String {\n  let thing = b::make()\n  \"{thing}\"\n}\n\n\
                   fn main() {\n  let _ = keeper::keep(b::wrap())\n  io::println(text())\n}\n",
             ),

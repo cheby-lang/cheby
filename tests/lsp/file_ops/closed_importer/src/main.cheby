@@ -4,8 +4,9 @@
 //! has `version: null` (D-1445), and the applied-edit check opens it from
 //! disk.
 
-import moves::other
 import std::io
+
+import moves::other
 
 fn main() {
   io::println(other::hello())

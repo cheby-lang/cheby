@@ -223,6 +223,7 @@ mod tests {
 
 import std::float
 import std::u8
+
 import app::util
 
 const own: Int = 7

@@ -59,7 +59,7 @@ impl Drop for TempDir {
 
 /// The root: it calls `calc`, and `main` returns `Err` unless the sums are
 /// right.
-const MAIN: &str = "//! Root.\n\nimport app::calc\nimport std::io\nimport std::list\n\n\
+const MAIN: &str = "//! Root.\n\nimport std::io\nimport std::list\n\nimport app::calc\n\n\
     fn main() -> Result<Nil, String> {\n  let total = calc::sum([1, 2, 3, 4])\n  \
     let words = list::length(calc::words(\"a b c\"))\n  io::println(\"{total} {words}\")\n  \
     case total == 10 && words == 3 {\n    True => Ok(Nil)\n    False => Err(\"wrong\")\n  }\n}\n";

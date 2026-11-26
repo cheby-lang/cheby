@@ -155,6 +155,54 @@ fn fmt_stdin_round_trip() {
     assert_eq!((out.stdout.as_str(), out.status), ("", Some(0)));
 }
 
+/// D-1953: the imports come in three blocks, and the nearest
+/// `cheby.toml` above a file names the package whose modules come last:
+/// for the package's files, for a file named from another directory, and
+/// for standard input by the working directory. Outside a package nothing
+/// is the file's own.
+#[test]
+fn fmt_groups_imports_by_the_package_name() {
+    const MIXED: &str = "//! A module.\n\nimport app::util\nimport json::decode\nimport std::list\nimport std::io\n";
+    const IN_APP: &str = "//! A module.\n\nimport std::io\nimport std::list\n\nimport json::decode\n\nimport app::util\n";
+    const NOWHERE: &str = "//! A module.\n\nimport std::io\nimport std::list\n\nimport app::util\nimport json::decode\n";
+    let outer = dir_with("imports", &[("lone.cheby", MIXED)]);
+    let dir = outer.join("pkg");
+    std::fs::create_dir_all(dir.join("src/deep")).unwrap();
+    std::fs::write(dir.join("cheby.toml"), MANIFEST).unwrap();
+    for file in [
+        "src/main.cheby",
+        "src/deep/inner.cheby",
+        "src/by_path.cheby",
+    ] {
+        std::fs::write(dir.join(file), MIXED).unwrap();
+    }
+    // Standard input, by the working directory.
+    let piped = cheby(&dir.join("src/deep"), &["fmt", "-"], Some(MIXED));
+    assert_eq!((piped.status, piped.stdout.as_str()), (Some(0), IN_APP));
+    let piped = cheby(&outer, &["fmt", "-"], Some(MIXED));
+    assert_eq!((piped.status, piped.stdout.as_str()), (Some(0), NOWHERE));
+    // A file named from outside its package, and one of no package.
+    let out = cheby(
+        &outer,
+        &["fmt", "pkg/src/by_path.cheby", "lone.cheby"],
+        None,
+    );
+    assert_eq!(out.status, Some(0), "{}", out.stderr);
+    assert_eq!(read(&dir.join("src/by_path.cheby")), IN_APP);
+    assert_eq!(read(&outer.join("lone.cheby")), NOWHERE);
+    // The package's files.
+    let check = cheby(&dir, &["fmt", "--check"], None);
+    assert_eq!(
+        (check.status, check.stdout.as_str()),
+        (Some(1), "src/deep/inner.cheby\nsrc/main.cheby\n")
+    );
+    let out = cheby(&dir, &["fmt"], None);
+    assert_eq!(out.status, Some(0), "{}", out.stderr);
+    assert_eq!(read(&dir.join("src/main.cheby")), IN_APP);
+    assert_eq!(read(&dir.join("src/deep/inner.cheby")), IN_APP);
+    assert_eq!(cheby(&dir, &["fmt", "--check"], None).status, Some(0));
+}
+
 #[test]
 fn fmt_leaves_a_file_with_a_syntax_error_alone() {
     let broken = "fn main(  {\n  x\n}\n";

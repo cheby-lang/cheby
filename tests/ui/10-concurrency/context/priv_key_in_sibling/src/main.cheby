@@ -3,9 +3,10 @@
 //! A key is as visible as its constant, so a `priv` key of a sibling
 //! module can be neither provided nor read outside it (§10.11).
 
-import app::db
 import std::context
 import std::io
+
+import app::db
 
 fn main() {
   let name = context::provide(db::pool, "primary", fn() { db::current() })

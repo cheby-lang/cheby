@@ -1001,6 +1001,28 @@ struct FmtTarget {
     /// How `--check` and errors name it: as given on the command line, or
     /// relative to the package root (D-1146).
     display: String,
+    /// The name of the package that holds it, which tells the imports of
+    /// the package's own modules from other packages' (D-1953).
+    package: Option<String>,
+}
+
+/// The name of the package around `path`, a file or, for standard input,
+/// the working directory (D-1953): the name in the nearest `cheby.toml`
+/// above it. `None` outside a package, or when the manifest cannot be
+/// read. `known` keeps the answer for each package root.
+fn package_around(
+    path: Option<&std::path::Path>,
+    known: &mut std::collections::BTreeMap<std::path::PathBuf, Option<String>>,
+) -> Option<String> {
+    let dir = match path {
+        Some(path) => std::path::absolute(path).ok()?.parent()?.to_path_buf(),
+        None => std::env::current_dir().ok()?,
+    };
+    let root = cheby_driver::find_package_root(&dir)?;
+    known
+        .entry(root)
+        .or_insert_with_key(|root| cheby_driver::package_name(root))
+        .clone()
 }
 
 /// `cheby fmt [--check] [PATH…]` (§13.7, D-1031): formats every `.cheby`
@@ -1018,22 +1040,29 @@ fn fmt(out: Out, check: bool, paths: &[std::path::PathBuf]) -> ExitCode {
             Err(code) => return code,
         };
         let src = root.join("src");
+        let package = cheby_driver::package_name(&root);
         match package_sources(&src) {
             Ok(files) => files
                 .into_iter()
                 .map(|path| FmtTarget {
                     display: cheby_diag::display_path(&path, &root),
                     path: Some(path),
+                    package: package.clone(),
                 })
                 .collect(),
             Err(e) => return out.error(&format!("cannot read `{}`: {e}", src.display())),
         }
     } else {
+        let mut known = std::collections::BTreeMap::new();
         paths
             .iter()
-            .map(|path| FmtTarget {
-                display: path.display().to_string(),
-                path: (path.as_os_str() != "-").then(|| path.clone()),
+            .map(|path| {
+                let file = (path.as_os_str() != "-").then(|| path.clone());
+                FmtTarget {
+                    display: path.display().to_string(),
+                    package: package_around(file.as_deref(), &mut known),
+                    path: file,
+                }
             })
             .collect()
     };
@@ -1083,13 +1112,14 @@ fn fmt_one(out: Out, target: &FmtTarget, check: bool) -> Result<bool, ()> {
     let file = sources
         .add_file(name, text.as_str())
         .map_err(|e| fail(e.to_string()))?;
-    let formatted = match cheby_fmt::format_file(file, &text, cheby_fmt::WIDTH) {
-        Ok(formatted) => formatted,
-        Err(e) => {
-            out.errors(e.errors(), &sources);
-            return Err(());
-        }
-    };
+    let formatted =
+        match cheby_fmt::format_file(file, &text, cheby_fmt::WIDTH, target.package.as_deref()) {
+            Ok(formatted) => formatted,
+            Err(e) => {
+                out.errors(e.errors(), &sources);
+                return Err(());
+            }
+        };
     let changed = formatted != text;
     if check {
         return Ok(changed);

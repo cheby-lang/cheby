@@ -18,6 +18,7 @@ import std::int
 import std::io
 import std::list
 import std::result
+
 import word_count::count
 
 /// How many words are printed when no count is given.

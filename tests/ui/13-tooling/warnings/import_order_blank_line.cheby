@@ -1,0 +1,13 @@
+// @mode: check-pass
+// @decisions: D-1953
+//! A blank line among the imports only separates two blocks. One inside
+//! a block is out of order, as two unsorted imports are.
+
+import std::io
+
+import std::list
+
+fn main() {
+  let count = list::length([1])
+  io::println("{count}")
+}

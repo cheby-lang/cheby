@@ -2,8 +2,9 @@
 // @requests: documentLink
 //! Each import's module path links to its module's file.
 
-import links::util
 import std::io
+
+import links::util
 
 fn main() {
   io::println(util::greeting())

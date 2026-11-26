@@ -251,7 +251,7 @@ fn empty_field_lists() {
 
 #[test]
 fn import_shapes() {
-    ok("import std::io as sys\nimport std::{list, Option as Opt, map as m}\n");
+    ok("import std::{list, Option as Opt, map as m}\nimport std::io as sys\n");
     reports("import std::{io, list} as both\n", &[("E0013", "as both")]);
     reports("import std::{Option as opt}\n", &[("E0013", "opt")]);
     reports("import std::{list as List}\n", &[("E0013", "List")]);

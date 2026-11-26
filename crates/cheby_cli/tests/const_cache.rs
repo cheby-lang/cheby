@@ -54,10 +54,11 @@ impl Drop for Scratch {
 /// The root: prints the constants of `table`, which holds them all.
 const MAIN: &str = "//! Root: prints the constants of `table`.
 
-import app::table
 import std::io
 import std::list
 import std::map
+
+import app::table
 
 fn main() {
   let greeting = table::greeting

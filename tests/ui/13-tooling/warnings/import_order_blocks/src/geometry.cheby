@@ -1,0 +1,5 @@
+//! Areas.
+
+pub fn square_area(side: Float) -> Float {
+  side * side
+}

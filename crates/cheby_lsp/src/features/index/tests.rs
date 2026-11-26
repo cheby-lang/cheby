@@ -404,10 +404,11 @@ pub interface Area {
 
 const MAIN: &str = "//! Root.
 
-import app::shapes
-import app::shapes::{Point as P}
 import std::io
 import std::list as lists
+
+import app::shapes
+import app::shapes::{Point as P}
 
 fn first<T>(xs: List<T>, d: T) -> T {
   case xs {

@@ -3,9 +3,10 @@
 //! Importing an `UPPER` name brings in both the type and the constructor
 //! with that name.
 
+import std::io
+
 import app::greeting
 import app::greeting::{Greeting}
-import std::io
 
 fn main() {
   let hello: Greeting = Greeting("Hello!")

@@ -1,0 +1,15 @@
+// @decisions: D-1953, D-1399
+// @requests: formatting
+//! Formatting in a package puts its own imports last, in a block of their
+//! own, after the standard library's, as `cheby fmt` does in the package,
+//! each with the comment that travels with it. Range formatting the
+//! standard library's import moves it, and leaves `main` as it is.
+
+// The package's own.
+import shop::util
+import std::io
+
+fn main() {
+  io::println(  util::name())
+}
+//> 10:1 rangeFormatting

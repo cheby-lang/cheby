@@ -3,8 +3,9 @@
 //! An item without `pub` or `priv` is package-visible, so every module of
 //! the package can use it.
 
-import app::greeting
 import std::io
+
+import app::greeting
 
 fn main() {
   io::println(greeting::text())

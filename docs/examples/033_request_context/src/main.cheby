@@ -11,7 +11,6 @@
 //! sample, and the same one whichever worker takes it. The output is the
 //! same on every run.
 
-import request_context::pool
 import std::context
 import std::duration
 import std::fiber
@@ -20,6 +19,8 @@ import std::list
 import std::random
 import std::string
 import std::time
+
+import request_context::pool
 
 /// The id of the request that a job belongs to. Code outside a request
 /// has none.

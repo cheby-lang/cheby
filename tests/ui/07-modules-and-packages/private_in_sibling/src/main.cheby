@@ -3,8 +3,9 @@
 //! A `priv` item is visible only in its own module, so a sibling module
 //! of the same package cannot use it.
 
-import app::greeting
 import std::io
+
+import app::greeting
 
 fn main() {
   io::println(greeting::text())

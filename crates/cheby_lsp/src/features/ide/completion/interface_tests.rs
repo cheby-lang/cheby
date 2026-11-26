@@ -355,7 +355,7 @@ fn an_interface_function_as_a_value_is_written_bare() {
             "shape::Shape::area",
         ),
     ] {
-        let (found, text) = at(&body("import app::shape\nimport std::list\n", line), ON);
+        let (found, text) = at(&body("import std::list\n\nimport app::shape\n", line), ON);
         let name = path.rsplit("::").next().expect("a name");
         let item = entry(&found, name);
         assert_eq!(item.insert.text, name, "{line}");
@@ -403,7 +403,7 @@ fn an_interface_at_a_later_segment_writes_its_colons() {
         ("let n = s |> shape::Sh‸::area", "Shape"),
         ("let n = list::map([s], shape::Sh‸)", "Shape::"),
     ] {
-        let (found, _) = at(&body("import app::shape\nimport std::list\n", line), ON);
+        let (found, _) = at(&body("import std::list\n\nimport app::shape\n", line), ON);
         let shape = entry(&found, "Shape");
         assert_eq!(shape.kind, EntryKind::Interface, "{line}");
         assert_eq!(shape.insert.text, text, "{line}");

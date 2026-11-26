@@ -53,8 +53,9 @@ fn scaled(radius: Int) -> Int {
 
 const MAIN: &str = "//! The program.
 
-import app::util
 import geo
+
+import app::util
 
 fn main() {
   assert util::twice(geo::area(geo::square(2))) == 8

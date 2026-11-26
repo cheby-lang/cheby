@@ -842,7 +842,7 @@ mod tests {
                 ("std/option.cheby", ""),
                 (
                     "std/string.cheby",
-                    "import std::list::{map}\nimport std::io as out\n",
+                    "import std::io as out\nimport std::list::{map}\n",
                 ),
                 ("std/json/decode.cheby", "import std::string\n"),
                 (

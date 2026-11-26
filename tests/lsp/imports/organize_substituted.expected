@@ -78,6 +78,25 @@
   ],
   "src/main.cheby": [
     {
+      "code": "W0014",
+      "codeDescription": {
+        "href": "https://github.com/cheby-lang/cheby/blob/main/docs/diagnostics/W0014.md"
+      },
+      "message": "the imports are not in order\n`std::io` comes before this import\nnote: imports come in up to three blocks, each sorted by path: the standard library's, other packages', then the package's own",
+      "range": {
+        "end": {
+          "character": 16,
+          "line": 5
+        },
+        "start": {
+          "character": 0,
+          "line": 5
+        }
+      },
+      "severity": 2,
+      "source": "cheby"
+    },
+    {
       "code": "W0003",
       "codeDescription": {
         "href": "https://github.com/cheby-lang/cheby/blob/main/docs/diagnostics/W0003.md"

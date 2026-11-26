@@ -36,6 +36,7 @@
 import std::io
 import std::list
 import std::result
+
 import vending_machine::change
 import vending_machine::command
 import vending_machine::machine

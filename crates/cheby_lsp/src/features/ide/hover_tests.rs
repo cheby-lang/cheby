@@ -136,8 +136,9 @@ pub fn show(p: Point) -> String {
 
 const MAIN: &str = r#"//! The app.
 
-import app::geo
 import std::list
+
+import app::geo
 
 /// Something that can be doubled.
 interface Twice: Show {

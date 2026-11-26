@@ -1,0 +1,9 @@
+warning[W0014]: the imports are not in order
+ --> tests/ui/13-tooling/warnings/import_order_blank_line.cheby:8:1
+  |
+8 | import std::list
+  | ^^^^^^^^^^^^^^^^ no blank line comes before this import
+  |
+  = note: imports come in up to three blocks, each sorted by path: the standard library's, other packages', then the package's own
+  = help: put the imports in order, as `cheby fmt` does
+

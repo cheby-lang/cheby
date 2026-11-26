@@ -92,7 +92,7 @@ fn package(scratch: &Scratch) -> PathBuf {
     .unwrap();
     std::fs::write(
         dir.join("src/main.cheby"),
-        "//! Root.\n\nimport app::numbers\nimport app::words\nimport std::io\n\n\
+        "//! Root.\n\nimport std::io\n\nimport app::numbers\nimport app::words\n\n\
          fn main() {\n  let unused = 1\n  let total = numbers::total()\n  \
          let count = words::count(\"a b c\")\n  let limit = numbers::limit\n  \
          io::println(\"total {total}, limit {limit}, words {count}\")\n}\n",

@@ -677,9 +677,10 @@ fn main() {
 
 const KEYS_MAIN: &str = "//! Root: constants over several modules.
 
+import std::list
+
 import app::shapes
 import app::sizes
-import std::list
 
 /// Reaches `sizes` through a function and `shapes` through a constructor.
 const area: Int = sizes::double(shapes::area(shapes::Square { side: 3 }))

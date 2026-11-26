@@ -43,14 +43,15 @@
 //!   `"Array"` or `"Null"`, D-323) and the `path` to it, with keys and list
 //!   indexes as strings, such as `["books", "1", "format"]`.
 
-import json_codec::book
-import json_codec::format
 import std::env
 import std::io
 import std::json
 import std::json::decode
 import std::list
 import std::result
+
+import json_codec::book
+import json_codec::format
 
 fn main() -> Result<Nil, AppError> {
   // Each `use` stops at the first `Err` and returns it from `main`, after

@@ -3,8 +3,9 @@
 //! `Boxed<T>` satisfies `Show` exactly for the `T` that do, so
 //! `Boxed<Label>` is `Show` and `Boxed<fn() -> Nil>` is not (§8.2.2).
 
-import app::boxed
 import std::io
+
+import app::boxed
 
 type Label {
   text: String,

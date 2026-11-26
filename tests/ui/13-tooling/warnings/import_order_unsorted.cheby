@@ -1,0 +1,11 @@
+// @mode: check-pass
+// @decisions: D-1953
+//! Inside a block the imports are sorted by module path.
+
+import std::list
+import std::io
+
+fn main() {
+  let count = list::length([1])
+  io::println("{count}")
+}

@@ -67,7 +67,7 @@ Never change language behavior in the spec, the examples or the compiler without
 
 ## Writing Cheby code
 
-Code in the spec, the ADRs, the examples, `std/` and the tests must be valid Cheby in the form `cheby fmt` will produce: two-space indentation, no semicolons, trailing commas in multi-line lists, a width of 100 columns, type bodies and pipelines always broken with one variant, field or stage per line, an arm's body on the arm's line with one space before `=>`, and `_` between groups of three digits in a decimal number of five or more digits.
+Code in the spec, the ADRs, the examples, `std/` and the tests must be valid Cheby in the form `cheby fmt` will produce: two-space indentation, no semicolons, trailing commas in multi-line lists, a width of 100 columns, type bodies and pipelines always broken with one variant, field or stage per line, an arm's body on the arm's line with one space before `=>`, `_` between groups of three digits in a decimal number of five or more digits, and the imports in up to three blocks, the standard library's, other packages' and the package's own, each sorted by path (D-1953).
 
 The rules that differ from the languages a model knows are in [`docs/guide/agents.md`](docs/guide/agents.md), the guide the toolchain ships: `cheby guide` prints it, and `cheby new` writes it as a package's `AGENTS.md` (D-1952). Read it before writing Cheby. A test checks, formats and runs every code block of it, and parses every command it shows, so it does not go stale. Here its commands are run as `cargo run -p cheby_cli -- <command>`, such as `cargo run -p cheby_cli -- doc list::map` or `cargo run -p cheby_cli -- check probe.cheby`.
 

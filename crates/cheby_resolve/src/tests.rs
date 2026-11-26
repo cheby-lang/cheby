@@ -657,7 +657,7 @@ fn import_errors() {
     let b = build(&[
         (
             "",
-            "import app::nope\nimport foo::bar\nimport app::main\nimport std::list\nimport std::iox\nimport std::io as out\n\nfn main() {\n  out::println(\"x\")\n}\n",
+            "import std::io as out\nimport std::iox\nimport std::list\n\nimport foo::bar\n\nimport app::main\nimport app::nope\n\nfn main() {\n  out::println(\"x\")\n}\n",
         ),
         ("web", "fn f() {\n  Nil\n}\n"),
     ]);
@@ -692,7 +692,7 @@ fn import_errors() {
         .filter(|l| l.style == cheby_diag::LabelStyle::Primary)
         .map(|l| (l.span.range.start(), l.span.range.end()))
         .collect();
-    assert_eq!(primary, [(40, 49)]);
+    assert_eq!(primary, [(80, 89)]);
 }
 
 #[test]
@@ -1062,7 +1062,7 @@ fn privacy() {
     let b = build(&[
         (
             "",
-            "import std::secret\nimport app::web\n\nfn main() {\n  secret::open()\n  secret::hidden()\n  secret::internal()\n  web::shared()\n  web::own()\n}\n",
+            "import std::secret\n\nimport app::web\n\nfn main() {\n  secret::open()\n  secret::hidden()\n  secret::internal()\n  web::shared()\n  web::own()\n}\n",
         ),
         (
             "web",
@@ -1194,7 +1194,7 @@ fn e0038_is_left_for_planned_std_modules() {
     let b = build(&[
         (
             "",
-            "import std::list\nimport std::io\n\nfn main() {\n  io::println(list::reverse(\"x\"))\n}\n\nfn later() -> String {\n  lib::later()\n}\n",
+            "import std::io\nimport std::list\n\nfn main() {\n  io::println(list::reverse(\"x\"))\n}\n\nfn later() -> String {\n  lib::later()\n}\n",
         ),
         (
             "lib",
@@ -1442,7 +1442,7 @@ fn visibility_through_item_imports() {
     let b = build(&[
         (
             "",
-            "import app::web::{shared, own, Page}\nimport std::secret::{open, internal, Token, Internal}\n\nfn main() {\n  shared()\n  open()\n}\n",
+            "import std::secret::{open, internal, Token, Internal}\n\nimport app::web::{shared, own, Page}\n\nfn main() {\n  shared()\n  open()\n}\n",
         ),
         (
             "web",
@@ -1466,7 +1466,7 @@ fn constructors_of_opaque_types() {
     let b = build(&[
         (
             "",
-            "import app::shapes\nimport std::secret\nimport std::secret::{Token, Open, Pair}\n\nfn make() {\n  let t = secret::Token(\"a\")\n  let u = Token(\"b\")\n  let o = Open(\"c\")\n  let p = Pair { left: \"l\", right: \"r\" }\n  let s = shapes::Secret\n  let c = shapes::Circle\n}\n\nfn read(t: Token, o: secret::Open, p: Pair) {\n  let Token(x) = t\n  let secret::Open(y) = o\n  let q = Pair { ..p, left: \"l\" }\n  let r = secret::Pair { ..p, left: \"l\" }\n}\n",
+            "import std::secret\nimport std::secret::{Token, Open, Pair}\n\nimport app::shapes\n\nfn make() {\n  let t = secret::Token(\"a\")\n  let u = Token(\"b\")\n  let o = Open(\"c\")\n  let p = Pair { left: \"l\", right: \"r\" }\n  let s = shapes::Secret\n  let c = shapes::Circle\n}\n\nfn read(t: Token, o: secret::Open, p: Pair) {\n  let Token(x) = t\n  let secret::Open(y) = o\n  let q = Pair { ..p, left: \"l\" }\n  let r = secret::Pair { ..p, left: \"l\" }\n}\n",
         ),
         (
             "shapes",

@@ -381,7 +381,7 @@ fn changed(a: &BTreeMap<String, String>, b: &BTreeMap<String, String>) -> Vec<St
         .collect()
 }
 
-const MAIN: &str = "//! Root.\n\nimport app::other\nimport app::util\nimport std::io\n\n\
+const MAIN: &str = "//! Root.\n\nimport std::io\n\nimport app::other\nimport app::util\n\n\
     fn main() {\n  let a = util::check(\"a\")\n  let n = other::twice(2)\n  io::println(\"{a} {n}\")\n}\n";
 /// `check` is package-visible and only compares its parameter: borrowed.
 const UTIL: &str = "//! Util.\n\nfn check(s: String) -> Bool {\n  s == \"x\"\n}\n";

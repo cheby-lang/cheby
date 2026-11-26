@@ -7,9 +7,10 @@
 //! order are `==` and hash alike although they were built differently,
 //! and the same entries in another order are not `==` (D-343).
 
-import app::build
 import std::io
 import std::set
+
+import app::build
 
 fn main() {
   let listed = build::listed()

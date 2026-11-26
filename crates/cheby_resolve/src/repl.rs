@@ -461,10 +461,11 @@ pub fn declared_names(input: &ResolveInput<'_>) -> Result<Vec<Name>, Ice> {
 /// synthetic import, or an earlier entry's import, is not), and it is not
 /// E0044 against a name of the session, which a prompt-level binding may
 /// rebind (D-193). Unused-import warnings (W0003) are never the entry's:
-/// an `import` entry is used by later entries.
+/// an `import` entry is used by later entries. Nor is the order of an
+/// entry's imports (W0014), which is a file's rule (D-1953).
 #[must_use]
 pub fn keep_entry_diagnostic(diag: &Diagnostic, file: FileId) -> bool {
-    if diag.code == codes::UNUSED_IMPORT {
+    if diag.code == codes::UNUSED_IMPORT || diag.code == codes::IMPORT_ORDER {
         return false;
     }
     if let Some(span) = diag.primary_span()

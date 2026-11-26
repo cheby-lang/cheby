@@ -8,11 +8,12 @@
 //!
 //! Money is a whole number of cents in an `Int`, never a `Float`.
 
-import shop_service::order
 import std::list
 import std::map
 import std::map::{Map}
 import std::result
+
+import shop_service::order
 
 /// Orders that cost at least this much, after the discount, ship free.
 const free_shipping_from: Int = 5_000

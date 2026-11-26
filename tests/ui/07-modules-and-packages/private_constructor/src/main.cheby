@@ -3,8 +3,9 @@
 //! `priv type` hides the type together with its constructors outside its
 //! module, also from the other modules of the package.
 
-import app::secret
 import std::io
+
+import app::secret
 
 fn main() {
   io::println(secret::reveal())

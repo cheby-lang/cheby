@@ -399,8 +399,9 @@ pub(crate) fn hides_nil(snapshot: &Snapshot, view: ModuleView<'_>) -> bool {
         || hides_prelude(snapshot, view, builtin::NIL_TY, None)
 }
 
-/// `edits`, all of the file at `path` whose text is `text`, in `cheby
-/// fmt`'s form on the lines they touch (D-1735): applied in memory, the
+/// `edits`, all of the file at `path` whose text is `text`, a file of
+/// the package named `package`, in `cheby fmt`'s form on the lines they
+/// touch (D-1735, D-1953): applied in memory, the
 /// formatter's hunks that touch them kept, and the result written as one
 /// replacement of what changed. The edits stay as they are when they
 /// already leave those lines formatted, when the file has a grammar error,
@@ -411,6 +412,7 @@ pub(crate) fn hides_nil(snapshot: &Snapshot, view: ModuleView<'_>) -> bool {
 pub(crate) fn formatted(
     text: &str,
     path: &Path,
+    package: Option<&str>,
     edits: Vec<PlainEdit>,
     renames: bool,
     cancel: &CancelToken,
@@ -446,7 +448,8 @@ pub(crate) fn formatted(
         return edits;
     };
     new.push_str(rest);
-    let Ok(Some(changes)) = format_touching_with(&new, &touched, AtCap::GiveUp, cancel) else {
+    let Ok(Some(changes)) = format_touching_with(&new, package, &touched, AtCap::GiveUp, cancel)
+    else {
         return edits;
     };
     if changes.is_empty() {

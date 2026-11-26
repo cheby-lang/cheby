@@ -466,7 +466,7 @@ module app
 
 fn app::main() -> value check str#0 {
   entry unwind bb1
-  str#0 = "src/main.cheby:6:4"
+  str#0 = "src/main.cheby:7:4"
   str#1 = "hi"
 bb0:
   _1: value = call std::io::println(const str#1) ; unwind bb1
@@ -480,7 +480,7 @@ bb1:
 
 fn app::shout(_0: value) -> value check str#0 {
   entry unwind bb2
-  str#0 = "src/main.cheby:13:4"
+  str#0 = "src/main.cheby:14:4"
   str#1 = "never printed"
   str#2 = "!"
 bb0:

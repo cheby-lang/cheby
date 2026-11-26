@@ -186,9 +186,10 @@ impl Fixture {
 /// The root: two other modules, one with a constant.
 const MAIN: &str = "//! The root: what the two other modules give.
 
+import std::io
+
 import app::count
 import app::label
-import std::io
 
 fn main() {
   let n = count::total()

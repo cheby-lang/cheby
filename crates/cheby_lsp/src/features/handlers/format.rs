@@ -2,7 +2,10 @@
 //! from the live text (class `Text`, D-1367).
 //!
 //! Both run `cheby fmt`'s formatter on the whole text, with no options:
-//! `FormattingOptions` are ignored (D-079). The answer is the line diff
+//! `FormattingOptions` are ignored (D-079). The formatter gets the name of
+//! the document's package from the `DocText`, as `cheby fmt` reads it from
+//! the manifest, so a package's own imports go in a block of their own
+//! (D-1953). The answer is the line diff
 //! against its output, one `TextEdit` per hunk, with LF line breaks, so a
 //! CRLF text is converted as `cheby fmt` converts it (`ide::edits`).
 //! Range formatting keeps the hunks that touch the
@@ -32,7 +35,7 @@ pub(crate) fn formatting(
 ) -> Result<HandlerOutput, RequestError> {
     let _: DocumentFormattingParams = params(params_value)?;
     cx.cancel.check()?;
-    answer(cx, doc, format_edits(&doc.text))
+    answer(cx, doc, format_edits(&doc.text, doc.package.as_deref()))
 }
 
 /// `textDocument/rangeFormatting` (D-1399, D-1738).
@@ -49,7 +52,13 @@ pub(crate) fn range_formatting(
     let p: DocumentRangeFormattingParams = params(params_value)?;
     let range = doc.lines.text_range(&doc.text, p.range, cx.encoding);
     cx.cancel.check()?;
-    let changes = format_touching_with(&doc.text, &[range], AtCap::KeepEvery, cx.cancel)?;
+    let changes = format_touching_with(
+        &doc.text,
+        doc.package.as_deref(),
+        &[range],
+        AtCap::KeepEvery,
+        cx.cancel,
+    )?;
     answer(cx, doc, changes)
 }
 
@@ -91,7 +100,13 @@ mod tests {
     use crate::text::lines::{PositionEncoding, apply_change};
 
     fn format(text: &str) -> Value {
-        let doc = doc(text);
+        format_in(text, None)
+    }
+
+    /// `format` in a file of the package `package`.
+    fn format_in(text: &str, package: Option<&str>) -> Value {
+        let mut doc = doc(text);
+        doc.package = package.map(str::to_owned);
         let p = json!({
             "textDocument": text_document(),
             "options": { "tabSize": 8, "insertSpaces": false }
@@ -102,7 +117,18 @@ mod tests {
     }
 
     fn format_range(text: &str, start: (u32, u32), end: (u32, u32)) -> Value {
-        let doc = doc(text);
+        format_range_in(text, None, start, end)
+    }
+
+    /// `format_range` in a file of the package `package`.
+    fn format_range_in(
+        text: &str,
+        package: Option<&str>,
+        start: (u32, u32),
+        end: (u32, u32),
+    ) -> Value {
+        let mut doc = doc(text);
+        doc.package = package.map(str::to_owned);
         let p = json!({
             "textDocument": text_document(),
             "range": {
@@ -152,8 +178,9 @@ mod tests {
         }
     }
 
-    /// Formatting gives no edit on any example (plan W6's exit). In CRLF
-    /// the same file is converted to the example's own text (X §5.4).
+    /// Formatting gives no edit on any example, in the example's package
+    /// (plan W6's exit, D-1953). In CRLF the same file is converted to the
+    /// example's own text (X §5.4).
     #[test]
     fn every_example_formats_to_no_edit() {
         let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../docs/examples");
@@ -162,10 +189,13 @@ mod tests {
         assert!(files.len() >= 32, "{} files", files.len());
         for file in files {
             let text = std::fs::read_to_string(&file).expect("a source");
-            assert_eq!(format(&text), json!([]), "{}", file.display());
+            let package = cheby_driver::find_package_root(&file)
+                .and_then(|root| cheby_driver::package_name(&root));
+            let package = package.as_deref();
+            assert_eq!(format_in(&text, package), json!([]), "{}", file.display());
             let crlf = text.replace('\n', "\r\n");
             assert_eq!(
-                apply(&crlf, &format(&crlf)),
+                apply(&crlf, &format_in(&crlf, package)),
                 text,
                 "{} in CRLF",
                 file.display()
@@ -224,6 +254,56 @@ mod tests {
         let edits = format_range(MESSY, (1, 0), (1, 4));
         let got = apply(MESSY, &edits);
         assert!(got.starts_with("import std::io\nimport std::list\n\nfn  main( ) {\n"));
+    }
+
+    /// D-1953: in a file of the package `app`, its own imports come last,
+    /// in a block of their own, as `cheby fmt` writes them in the package;
+    /// in a file of no package `app` is another package. Range formatting
+    /// one import moves every import the order moves, each with its
+    /// comments, and the text it leaves formats as the whole text does.
+    #[test]
+    fn a_package_s_own_imports_come_last() {
+        let text = "import app::util // mine\nimport json\n// about io\nimport std::io\n\nfn main() {\n  io::println(util::name() + json::x())\n}\n";
+        let body = "\n\nfn main() {\n  io::println(util::name() + json::x())\n}\n";
+        let own =
+            format!("// about io\nimport std::io\n\nimport json\n\nimport app::util // mine{body}");
+        let formatted = apply(text, &format_in(text, Some("app")));
+        assert_eq!(formatted, own);
+        let fmt =
+            cheby_fmt::format_source_in(text, cheby_fmt::WIDTH, Some("app")).expect("formats");
+        assert_eq!(fmt, own);
+        assert_eq!(
+            apply(text, &format(text)),
+            format!("// about io\nimport std::io\n\nimport app::util // mine\nimport json{body}")
+        );
+        for line in 0..4 {
+            let got = apply(
+                text,
+                &format_range_in(text, Some("app"), (line, 0), (line, 1)),
+            );
+            assert_eq!(
+                apply(&got, &format_in(&got, Some("app"))),
+                own,
+                "line {line}: {got}"
+            );
+            assert!(
+                got.contains("import app::util // mine\n"),
+                "line {line}: {got}"
+            );
+            assert_eq!(got.matches("import").count(), 3, "line {line}: {got}");
+        }
+        // A range on an import that moves moves the section, not `main`'s
+        // body.
+        let messy = text.replace("  io::println(", "  io::println(  ");
+        let got = apply(
+            &messy,
+            &format_range_in(&messy, Some("app"), (0, 0), (0, 1)),
+        );
+        assert!(
+            got.starts_with(own.split("fn main").next().unwrap()),
+            "{got}"
+        );
+        assert!(got.contains("  io::println(  util"), "{got}");
     }
 
     #[test]

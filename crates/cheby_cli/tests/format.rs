@@ -322,6 +322,56 @@ fn main() -> Nil {
     }
 }
 
+/// D-1953: W0014's fix is sure, so `check --fix` puts the imports in
+/// the three blocks, comments with their imports, and leaves them as
+/// `cheby fmt` would.
+#[test]
+fn fix_puts_the_imports_in_order() {
+    let source = "//! Imports.
+
+// Ours.
+import app::util // last
+import std::list
+import std::io
+
+fn main() -> Nil {
+  let count = list::length([util::one()])
+  io::println(\"{count}\")
+}
+";
+    let package = Package::new(source);
+    std::fs::write(
+        package.root().join("src/util.cheby"),
+        "//! Util.\n\npub fn one() -> Int {\n  1\n}\n",
+    )
+    .unwrap();
+    let warned = package.cheby(&["check"]);
+    assert_eq!(warned.status, Some(0), "{}", warned.stderr);
+    assert!(
+        warned
+            .stderr
+            .contains("warning[W0014]: the imports are not in order"),
+        "{}",
+        warned.stderr
+    );
+    assert_eq!(package.cheby(&["check", "--deny-warnings"]).status, Some(1));
+    let out = package.cheby(&["check", "--fix"]);
+    assert_eq!(out.status, Some(0), "{}", out.stderr);
+    assert_eq!(
+        out.stderr,
+        "fixed: src/main.cheby:3:1: put the imports in order, as `cheby fmt` does\n"
+    );
+    assert_eq!(
+        package.text(),
+        source.replace(
+            "// Ours.\nimport app::util // last\nimport std::list\nimport std::io\n",
+            "import std::io\nimport std::list\n\n// Ours.\nimport app::util // last\n"
+        )
+    );
+    assert_eq!(package.cheby(&["fmt", "--check"]).status, Some(0));
+    assert_eq!(package.cheby(&["check", "--deny-warnings"]).status, Some(0));
+}
+
 /// A tool error is a JSON line too, and usage errors stay text.
 #[test]
 fn tool_errors_are_json_lines() {
