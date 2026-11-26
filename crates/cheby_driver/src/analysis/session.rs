@@ -47,7 +47,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU32, Ordering};
 
 use cheby_diag::{Diagnostic, FileId, SourceMap, codes};
-use cheby_iface::{Globals, ModuleId};
+use cheby_iface::Globals;
 use cheby_package::{MANIFEST_FILE, Manifest, ModulePath, PackageError, Target, Targets};
 
 use super::inputs::{DiskView, Loaded, LoadedFile, Overlay, OverlayFile, TextOrigin, load};
@@ -1154,37 +1154,7 @@ fn load_strict(
 /// The files of the modules that import a module of `stubs`, directly or
 /// through others, the stubs left out (D-1357).
 fn held(front: &Frontend, stubs: &BTreeSet<FileId>) -> BTreeSet<FileId> {
-    let roots: BTreeSet<ModuleId> = front
-        .modules
-        .iter()
-        .filter(|(_, info)| info.file.is_some_and(|file| stubs.contains(&file)))
-        .map(|(id, _)| id)
-        .collect();
-    let mut reach = roots.clone();
-    loop {
-        let mut grew = false;
-        for (from, targets) in front.import_targets.iter().enumerate() {
-            let Some(from) = u32::try_from(from).ok().map(ModuleId::from_u32) else {
-                continue;
-            };
-            if !reach.contains(&from)
-                && targets
-                    .iter()
-                    .filter_map(|t| t.module())
-                    .any(|to| reach.contains(&to))
-            {
-                reach.insert(from);
-                grew = true;
-            }
-        }
-        if !grew {
-            break;
-        }
-    }
-    reach
-        .difference(&roots)
-        .filter_map(|&id| front.modules.get(id)?.file)
-        .collect()
+    front.importers_of(stubs)
 }
 
 /// `cheby.toml` and every file of `broken`, with their phase-A

@@ -218,6 +218,8 @@ mod tests {
             sources,
             diagnostics,
             deny_warnings: false,
+            unchecked: Vec::new(),
+            internal: None,
         };
         let applied = apply_fixes(root, &output).unwrap();
         assert_eq!(

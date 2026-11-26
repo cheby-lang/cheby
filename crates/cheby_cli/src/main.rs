@@ -530,6 +530,16 @@ impl Out {
             Format::Text => write_stderr(&out.render_with(self.colors)),
             Format::Json => write_stderr(&out.render_json()),
         }
+        // The modules that import one with syntax errors were not checked
+        // (D-1951): silence about them does not mean they are clean.
+        if let Some(note) = out.unchecked_note() {
+            self.note(&note);
+        }
+        // An internal error of that extra check comes after the syntax
+        // errors, which are what the user fixes first (D-464, D-1951).
+        if let Some(message) = &out.internal {
+            let _ = self.error(message);
+        }
     }
 
     /// Prints diagnostics that are not a check's, as `cheby fmt`'s syntax

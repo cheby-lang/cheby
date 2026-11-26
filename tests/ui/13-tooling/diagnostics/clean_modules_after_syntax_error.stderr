@@ -1,0 +1,43 @@
+error[E0029]: comparison operators cannot be chained
+ --> tests/ui/13-tooling/diagnostics/clean_modules_after_syntax_error/src/parser.cheby:4:16
+  |
+4 |   assert 1 < 2 < 3
+  |            -   ^
+  |            |
+  |            first comparison here
+  |
+  = help: combine the comparisons with `&&`, such as `a < b && b < c`
+
+warning[W0002]: unused binding `n`
+ --> tests/ui/13-tooling/diagnostics/clean_modules_after_syntax_error/src/report.cheby:6:7
+  |
+6 |   let n: String = util::twice(2)
+  |       ^ never used
+  |
+  = help: if this is intentional, start the name with an underscore: `_n`
+
+error[E0047]: mismatched types
+ --> tests/ui/13-tooling/diagnostics/clean_modules_after_syntax_error/src/report.cheby:6:19
+  |
+6 |   let n: String = util::twice(2)
+  |          ------   ^^^^^^^^^^^^^^ expected `String`, found `Int`
+  |          |
+  |          expected because of this annotation
+
+warning[W0002]: unused binding `unused`
+ --> tests/ui/13-tooling/diagnostics/clean_modules_after_syntax_error/src/util.cheby:4:7
+  |
+4 |   let unused = 1
+  |       ^^^^^^ never used
+  |
+  = help: if this is intentional, start the name with an underscore: `_unused`
+
+error[E0042]: cannot find value `true` in this scope
+ --> tests/ui/13-tooling/diagnostics/clean_modules_after_syntax_error/src/util.cheby:9:3
+  |
+9 |   true
+  |   ^^^^ not found
+  |
+  = help: `Bool`'s constructors are `True` and `False`; write `True`
+
+note: 2 modules were not checked, because they import a module with syntax errors: app, app::server

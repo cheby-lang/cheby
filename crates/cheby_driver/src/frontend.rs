@@ -2716,6 +2716,44 @@ pub(crate) fn read_modules(
     Ok(modules)
 }
 
+impl Frontend {
+    /// The files of the modules that import a module of `stubs`, directly
+    /// or through others, the stubs left out (D-1357, D-1951).
+    pub(crate) fn importers_of(&self, stubs: &BTreeSet<FileId>) -> BTreeSet<FileId> {
+        let roots: BTreeSet<ModuleId> = self
+            .modules
+            .iter()
+            .filter(|(_, info)| info.file.is_some_and(|file| stubs.contains(&file)))
+            .map(|(id, _)| id)
+            .collect();
+        let mut reach = roots.clone();
+        loop {
+            let mut grew = false;
+            for (from, targets) in self.import_targets.iter().enumerate() {
+                let Some(from) = u32::try_from(from).ok().map(ModuleId::from_u32) else {
+                    continue;
+                };
+                if !reach.contains(&from)
+                    && targets
+                        .iter()
+                        .filter_map(|t| t.module())
+                        .any(|to| reach.contains(&to))
+                {
+                    reach.insert(from);
+                    grew = true;
+                }
+            }
+            if !grew {
+                break;
+            }
+        }
+        reach
+            .difference(&roots)
+            .filter_map(|&id| self.modules.get(id)?.file)
+            .collect()
+    }
+}
+
 /// Runs name resolution and type checking over `package`, which has no
 /// phase-A errors. Diagnostics are pushed unsorted.
 pub(crate) fn run(

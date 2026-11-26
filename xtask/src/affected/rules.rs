@@ -41,6 +41,7 @@ pub(crate) const CLI_TESTS: &[(&str, &[&str])] = &[
     ("git_dependencies", TOOLCHAIN),
     ("http_fixture", TOOLCHAIN),
     ("interrupt", TOOLCHAIN),
+    ("later_phases", TOOLCHAIN),
     ("lsp", &["cheby_lsp"]),
     ("native", TOOLCHAIN),
     ("new", &["cheby_driver"]),

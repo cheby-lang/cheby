@@ -1,0 +1,14 @@
+//! Imports nothing: its later errors are reported.
+
+fn twice(n: Int) -> Int {
+  let unused = 1
+  n + n
+}
+
+fn flag() -> Bool {
+  true
+}
+
+fn nobody_calls_this() -> Int {
+  1
+}

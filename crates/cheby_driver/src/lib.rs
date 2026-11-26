@@ -388,6 +388,15 @@ pub struct ParsedFile {
 pub struct CheckOutput {
     pub sources: SourceMap,
     pub diagnostics: Vec<Diagnostic>,
+    /// The modules of the package that were not checked past phase A,
+    /// because they import a module with phase-A errors, directly or
+    /// through others (D-1951), by path, sorted. Empty for a check that
+    /// stopped as a whole or stopped nowhere.
+    pub unchecked: Vec<String>,
+    /// The message of an internal error in the run that checks the modules
+    /// phase-A errors do not reach (D-1951): the diagnostics are then the
+    /// phase-A ones alone, and the error is printed after them (D-464).
+    pub internal: Option<String>,
     /// `--deny-warnings` (D-549): every warning counts and is rendered as
     /// an error.
     pub deny_warnings: bool,
@@ -421,6 +430,35 @@ impl CheckOutput {
     #[must_use]
     pub fn render_with(&self, colors: Colors) -> String {
         render_diagnostics(&self.diagnostics, &self.sources, colors, self.deny_warnings)
+    }
+
+    /// The note that names the modules the later phases left out
+    /// (D-1951), with its line break: `note: 2 modules were not checked,
+    /// because they import a module with syntax errors: app, app::server`.
+    /// `None` when no module was left out.
+    #[must_use]
+    pub fn unchecked_note(&self) -> Option<String> {
+        /// How many modules the note names.
+        const NAMED: usize = 6;
+        let count = self.unchecked.len();
+        let subject = match count {
+            0 => return None,
+            1 => "1 module was not checked, because it imports".to_owned(),
+            _ => format!("{count} modules were not checked, because they import"),
+        };
+        let mut names = self
+            .unchecked
+            .iter()
+            .take(NAMED)
+            .map(String::as_str)
+            .collect::<Vec<_>>()
+            .join(", ");
+        if count > NAMED {
+            names = format!("{names} and {} more", count.saturating_sub(NAMED));
+        }
+        Some(format!(
+            "note: {subject} a module with syntax errors: {names}\n"
+        ))
     }
 
     /// The diagnostics as JSON Lines, one line each (`--format json`,
@@ -885,6 +923,7 @@ fn front_end_once(
         if vouched.is_some() && modules.any(|module| !module.parsed) {
             return Ok(Attempt::Again);
         }
+        check_clean_modules(package, mode, out);
         return Ok(Attempt::Done(None));
     }
     let name = package.manifest.name.clone();
@@ -899,6 +938,93 @@ fn front_end_once(
         return Ok(Attempt::Done(None));
     }
     Ok(Attempt::Done(Some((front, name))))
+}
+
+/// The later phases for the modules that phase-A errors do not reach
+/// (D-1951), as the language server reports them for a file that never
+/// parsed (D-1357). Each module of the package with a phase-A error enters
+/// the front end as an empty module, so no later phase sees a broken tree
+/// (D-452). The diagnostics of the modules that import one, directly or
+/// through others, are dropped, since they would come from the empty
+/// module, and those modules are named in [`CheckOutput::unchecked`]. Every
+/// other module's diagnostics join `out`, but W0005, which is about uses
+/// in the whole package.
+///
+/// Nothing is added when something else than a module of the package has
+/// an error, such as the manifest, the discovery of modules or a
+/// dependency, or when every module has one: the phase-A errors are then
+/// the whole report, as before. An internal error of this run adds nothing
+/// either, and is kept in [`CheckOutput::internal`], so that the phase-A
+/// errors are still printed, and the internal error after them.
+fn check_clean_modules(mut package: Package, mode: frontend::Mode, out: &mut CheckOutput) {
+    let broken = |module: &Module| module.syntax_diagnostics.iter().any(Diagnostic::is_error);
+    let in_modules: usize = package
+        .modules
+        .iter()
+        .map(|module| {
+            module
+                .syntax_diagnostics
+                .iter()
+                .filter(|d| d.is_error())
+                .count()
+        })
+        .sum();
+    let errors = out.diagnostics.iter().filter(|d| d.is_error()).count();
+    if in_modules != errors || package.modules.iter().all(broken) {
+        return;
+    }
+    let mut stubs = std::collections::BTreeSet::new();
+    for module in &mut package.modules {
+        if !broken(module) {
+            continue;
+        }
+        let mut none = Vec::new();
+        let empty = out
+            .sources
+            .file(module.source.file)
+            .map(|file| file.path().to_owned())
+            .and_then(|display| parse_file(&mut out.sources, &display, Vec::new(), &mut none).ok());
+        let Some(empty) = empty else {
+            out.internal = Some(
+                Error::from(Ice::new(
+                    "a module with phase-A errors has no empty stand-in",
+                ))
+                .message()
+                .to_owned(),
+            );
+            return;
+        };
+        stubs.insert(empty.file);
+        module.source = empty;
+        module.hashes = SourceHashes::of(&[]);
+        module.parsed = true;
+        module.syntax_diagnostics = none;
+    }
+    let dependency_files = package.dependencies.file_set();
+    let mut later = Vec::new();
+    let front = match frontend::run(package, mode, &mut out.sources, &mut later) {
+        Ok(front) => front,
+        Err(error) => {
+            out.internal = Some(error.message().to_owned());
+            return;
+        }
+    };
+    let held = front.importers_of(&stubs);
+    dependencies::drop_warnings(&dependency_files, &mut later);
+    later.retain(|d| {
+        d.code != codes::UNUSED_PACKAGE_ITEM
+            && d.primary_span()
+                .is_some_and(|span| !stubs.contains(&span.file) && !held.contains(&span.file))
+    });
+    out.diagnostics.extend(later);
+    let mut unchecked: Vec<String> = front
+        .modules
+        .iter()
+        .filter(|(_, info)| info.file.is_some_and(|file| held.contains(&file)))
+        .map(|(_, info)| info.path.to_string())
+        .collect();
+    unchecked.sort();
+    out.unchecked = unchecked;
 }
 
 /// What `cheby run` runs (D-137, D-286).

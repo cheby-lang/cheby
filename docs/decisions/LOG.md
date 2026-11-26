@@ -3363,3 +3363,16 @@ Open:
 - `cargo xtask doctor` does not look at the size of `target` or of `cheby`'s build cache.
 
 Spec: none. No new diagnostic code. Tree-sitter: no grammar change.
+
+## 2026-11-26: Later phases for the modules that parse
+
+Goal: report in one run what name resolution and type checking find in the modules that a syntax error does not reach.
+
+- **D-1951 A phase-A error in a module stops the later phases for that module and its importers only**: When the only phase-A errors are in modules of the package, `cheby check`, `cheby build`, `cheby run` and `cheby test` run the later phases with each such module as an empty module, as the language server does for a file that never parsed (D-1357). The diagnostics of the modules that import one, directly or through others, are not reported, and neither is W0005. Every other module's diagnostics are, sorted with the phase-A ones in the usual order (D-264). A line `note: N modules were not checked, because they import a module with syntax errors: …` follows the diagnostics, with at most six names and "and N more", and with `--format json` it is a `note` line (D-1944). The command fails with status 1 as before, evaluates no constant and runs nothing. A phase-A error in the manifest, in the discovery of modules or in a dependency stops the later phases for the whole package, as before, and so does a package whose every module has one. This run reads and writes no build cache. An internal error in it adds no diagnostic, and is printed after the phase-A diagnostics as `error: internal compiler error: …` (D-464), so the errors the user has to fix first are still shown and the compiler's own failure is not hidden; the user chose that over the internal error alone and over dropping it. Why: D-452 stopped every later phase at one unclosed bracket, so a package of several modules cost one run per phase, while D-452's own reason, that no later diagnostic comes from a broken tree, holds for every module that does not import the broken one: it never sees that tree or an interface made from it. The server has reported such modules since D-1357, so `cheby check` now prints what the editor shows, and the parity trial of the new UI test passes unchanged. The user chose this rule over also checking what parsed of the broken module, which ADR-0076 measured at false errors in 6.6% of multi-file runs, every command over `cheby check` alone, since they share the front end, and the note over silence, so that a module that was skipped is not read as clean. Refines D-452. Extends D-1357.
+
+Open:
+
+- A module that imports the broken one gets nothing from the later phases, and neither does the rest of the broken module (D-1951).
+- The note says "syntax errors" for every phase-A error of a module, a file that is not UTF-8 included.
+
+Spec: §13.8. No new diagnostic code. Tree-sitter: no grammar change.
