@@ -52,6 +52,12 @@ pub struct Edit {
 pub struct Help {
     pub message: String,
     pub edits: Vec<Edit>,
+    /// Whether the edits are a sure fix (D-1945): they do the one thing the
+    /// message names, nothing else fits the code as written, and they are
+    /// whole on their own. `cheby check --fix` applies only such helps. A
+    /// guess among candidates, a rename of a declaration alone, or an edit
+    /// that only silences a warning is not one. Never set without edits.
+    pub fix: bool,
 }
 
 /// A compiler diagnostic.
@@ -134,6 +140,7 @@ impl Diagnostic {
         self.helps.push(Help {
             message: help.into(),
             edits: Vec::new(),
+            fix: false,
         });
         self
     }
@@ -154,6 +161,37 @@ impl Diagnostic {
                 span,
                 replacement: replacement.into(),
             }],
+            fix: false,
+        });
+        self
+    }
+
+    /// As [`Self::with_suggestion`], for a sure fix ([`Help::fix`]), which
+    /// `cheby check --fix` applies (D-1945).
+    #[must_use]
+    pub fn with_fix(
+        self,
+        help: impl Into<String>,
+        span: Span,
+        replacement: impl Into<String>,
+    ) -> Self {
+        self.with_fix_edits(
+            help,
+            vec![Edit {
+                span,
+                replacement: replacement.into(),
+            }],
+        )
+    }
+
+    /// As [`Self::with_suggestion_edits`], for a sure fix ([`Help::fix`]).
+    #[must_use]
+    pub fn with_fix_edits(mut self, help: impl Into<String>, edits: Vec<Edit>) -> Self {
+        let fix = !edits.is_empty();
+        self.helps.push(Help {
+            message: help.into(),
+            edits,
+            fix,
         });
         self
     }
@@ -167,6 +205,7 @@ impl Diagnostic {
         self.helps.push(Help {
             message: help.into(),
             edits,
+            fix: false,
         });
         self
     }
@@ -200,6 +239,12 @@ mod tests {
         assert!(!d.is_error());
         assert_eq!(d.primary_span(), Some(span));
         assert_eq!(d.helps.first().map(|h| h.edits.len()), Some(1));
+        assert_eq!(d.helps.first().map(|h| h.fix), Some(false));
+        let sure = Diagnostic::new(codes::TUPLE_SHAPE, "m")
+            .with_fix("h", span, "x")
+            .with_fix_edits("no edits, so no fix", Vec::new());
+        let marks: Vec<bool> = sure.helps.iter().map(|h| h.fix).collect();
+        assert_eq!(marks, [true, false]);
         assert_eq!(d.notes, vec!["n".to_owned()]);
     }
 

@@ -245,7 +245,7 @@ pub fn resolve_import_targets(
                         format!("the root module is imported as `{package}`, not `{text}`"),
                     )
                     .with_primary(span, "the root module has no `main` segment")
-                    .with_suggestion(
+                    .with_fix(
                         format!("import it as `{package}`"),
                         span,
                         package.to_owned(),

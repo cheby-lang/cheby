@@ -66,7 +66,7 @@ pub(super) fn arg_list(list: ArgList<'_>, out: &mut Vec<Diagnostic>) {
             .with_note(format!(
                 "`{callee_text}(_)` means exactly `{callee_text}` (D-245)"
             ))
-            .with_suggestion(
+            .with_fix(
                 format!("write `{callee_text}` instead"),
                 call.significant_span(),
                 callee_text,
@@ -100,7 +100,7 @@ pub(super) fn path_expr(expr: PathExpr<'_>, out: &mut Vec<Diagnostic>) {
         )
         .with_primary(turbofish, "")
         .with_note("interface functions are not generic (D-165)")
-        .with_suggestion("remove the type arguments", turbofish, ""),
+        .with_fix("remove the type arguments", turbofish, ""),
     );
 }
 
@@ -237,7 +237,7 @@ pub(super) fn tuple_expr(tuple: TupleExpr<'_>, out: &mut Vec<Diagnostic>) {
     out.push(
         Diagnostic::new(codes::SHORT_TUPLE, "a tuple has at least two elements")
             .with_primary(span, "")
-            .with_suggestion(
+            .with_fix(
                 "write the value alone; `(e)` is just `e` in parentheses",
                 span,
                 replacement,

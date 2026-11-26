@@ -288,6 +288,9 @@ pub(super) fn explain_habits(lexed: &Lexed, text: &str, errors: &mut Vec<Diagnos
             && let Some(habit) = habit(cx, diag.code, i)
         {
             cascade = habit.cascade;
+            // A habit's edit rewrites one token (D-1931), so it is a sure
+            // fix (D-1945).
+            let fix = habit.edit.is_some();
             diag.helps.push(Help {
                 message: habit.help,
                 edits: habit
@@ -298,6 +301,7 @@ pub(super) fn explain_habits(lexed: &Lexed, text: &str, errors: &mut Vec<Diagnos
                     })
                     .into_iter()
                     .collect(),
+                fix,
             });
         }
         cascades.push(cascade);

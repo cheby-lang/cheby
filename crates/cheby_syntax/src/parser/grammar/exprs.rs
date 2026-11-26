@@ -355,7 +355,7 @@ fn paren_or_tuple(p: &mut Parser<'_>) -> CompletedMarker {
         // The help's edit writes `Nil` in place of `()` (D-1689).
         let diag = Diagnostic::new(codes::SHORT_TUPLE, "`()` is not a value")
             .with_primary(p.span(range), "")
-            .with_suggestion(
+            .with_fix(
                 "the value that carries no information is `Nil`",
                 p.span(range),
                 "Nil",

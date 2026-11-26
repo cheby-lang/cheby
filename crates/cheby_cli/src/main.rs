@@ -90,8 +90,27 @@ struct Cli {
     /// Number of worker threads for the build; defaults to the available parallelism
     #[arg(short = 'j', long, global = true, value_name = "N")]
     jobs: Option<NonZeroUsize>,
+    /// How diagnostics, tool errors and test results are written (D-1944)
+    #[arg(
+        long,
+        global = true,
+        value_enum,
+        value_name = "FORMAT",
+        default_value_t = Format::Text
+    )]
+    format: Format,
     #[command(subcommand)]
     command: Command,
+}
+
+/// The value of `--format` (D-1944).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, ValueEnum)]
+enum Format {
+    /// The layout of §13.8, for people
+    #[default]
+    Text,
+    /// One JSON object per line, for tools
+    Json,
 }
 
 #[derive(Debug, Subcommand)]
@@ -112,6 +131,10 @@ enum Command {
         /// Treat every warning as an error (D-549)
         #[arg(long)]
         deny_warnings: bool,
+        /// Apply the sure fixes of the diagnostics to the package's files and check again
+        /// (D-1945)
+        #[arg(long)]
+        fix: bool,
     },
     /// Compile a module's `main` into an executable for `native` (AOT) or `js` (D-006, D-937)
     Build {
@@ -172,6 +195,10 @@ enum Command {
         /// Compile the tests with the release profile, which optimizes the program as a whole
         #[arg(long)]
         release: bool,
+        /// Write a line only for the tests that fail, and drop the output of those that pass
+        /// (D-1946)
+        #[arg(long)]
+        report_failures_only: bool,
     },
     /// Format source files (§13.7, D-1031)
     Fmt {
@@ -311,7 +338,10 @@ fn run_command() -> ExitCode {
         color::forced(cli.color, env),
         std::io::stderr().is_terminal(),
     );
-    let out = Out { colors };
+    let out = Out {
+        colors,
+        format: cli.format,
+    };
     // The commands that build start the worker pool first (D-551), and so
     // does the language server, whose analysis runs the front end on it.
     // `-j` is global, and the commands that build nothing ignore it (D-622).
@@ -333,12 +363,14 @@ fn run_command() -> ExitCode {
         Command::Check {
             target,
             deny_warnings,
+            fix,
         } => check(
             out,
             cheby_driver::CheckOptions {
                 target: target.map(Into::into),
                 deny_warnings,
             },
+            fix,
         ),
         Command::Build {
             module_path,
@@ -383,6 +415,7 @@ fn run_command() -> ExitCode {
             deny_warnings,
             reuse_report,
             release,
+            report_failures_only,
         } => test(
             out,
             &cheby_driver::TestOptions {
@@ -391,6 +424,10 @@ fn run_command() -> ExitCode {
                 deny_warnings,
                 reuse_report,
                 profile: profile(release),
+            },
+            cheby_driver::ReportStyle {
+                json: cli.format == Format::Json,
+                failures_only: report_failures_only,
             },
         ),
         Command::Fmt { check, paths } => fmt(out, check, &paths),
@@ -430,28 +467,92 @@ fn write_stderr(text: &str) {
     let _ = std::io::stderr().lock().write_all(text.as_bytes());
 }
 
-/// How the toolchain's own messages are written to stderr: colored or not.
+/// How the toolchain's own messages are written to stderr: colored or not,
+/// and as text or, with `--format json`, as one JSON object per line
+/// (D-1944).
 #[derive(Clone, Copy)]
 struct Out {
     colors: Colors,
+    format: Format,
 }
 
 impl Out {
     /// Prints diagnostics in the layout of D-418, warnings as errors
-    /// under `--deny-warnings` (D-549).
+    /// under `--deny-warnings` (D-549), or as JSON lines.
     fn diagnostics(self, out: &cheby_driver::CheckOutput) {
-        write_stderr(&out.render_with(self.colors));
+        match self.format {
+            Format::Text => write_stderr(&out.render_with(self.colors)),
+            Format::Json => write_stderr(&out.render_json()),
+        }
     }
 
-    /// Prints an `error:` line without a code (D-442) and returns status 1.
+    /// Prints diagnostics that are not a check's, as `cheby fmt`'s syntax
+    /// errors.
+    fn errors(self, errors: &[cheby_diag::Diagnostic], sources: &cheby_diag::SourceMap) {
+        match self.format {
+            Format::Text => {
+                write_stderr(&cheby_diag::render_all_with(errors, sources, self.colors));
+            }
+            Format::Json => {
+                for error in errors {
+                    write_stderr(&cheby_diag::render_json(error, sources, error.severity()));
+                }
+            }
+        }
+    }
+
+    /// Prints an `error:` line without a code (D-442), or its JSON line,
+    /// and returns status 1.
     fn error(self, message: &str) -> ExitCode {
-        write_stderr(&cheby_diag::render_tool_error(message, self.colors));
+        match self.format {
+            Format::Text => write_stderr(&cheby_diag::render_tool_error(message, self.colors)),
+            Format::Json => write_stderr(&cheby_diag::render_json_message("error", message)),
+        }
         ExitCode::FAILURE
     }
 
     /// Prints a `help:` line that follows a tool error.
     fn help(self, message: &str) {
-        write_stderr(&cheby_diag::render_tool_help(message, self.colors));
+        match self.format {
+            Format::Text => write_stderr(&cheby_diag::render_tool_help(message, self.colors)),
+            Format::Json => write_stderr(&cheby_diag::render_json_message("help", message)),
+        }
+    }
+
+    /// Prints a `note: …` line, given whole with its line break.
+    fn note(self, line: &str) {
+        match self.format {
+            Format::Text => write_stderr(line),
+            Format::Json => {
+                let message = line.strip_prefix("note: ").unwrap_or(line).trim_end();
+                write_stderr(&cheby_diag::render_json_message("note", message));
+            }
+        }
+    }
+
+    /// Prints a line for each fix that `cheby check --fix` applied:
+    /// `fixed: src/main.cheby:7:11: <the help>` (D-1945).
+    fn fixes(self, fixes: &[cheby_driver::AppliedFix]) {
+        use cheby_diag::json_string;
+        for fix in fixes {
+            let line = match self.format {
+                Format::Text => format!(
+                    "fixed: {}:{}:{}: {}\n",
+                    fix.path, fix.line, fix.column, fix.message
+                ),
+                Format::Json => cheby_diag::render_json_object(
+                    "fix",
+                    &[
+                        ("code", json_string(&fix.code.to_string())),
+                        ("message", json_string(&fix.message)),
+                        ("file", json_string(&fix.path)),
+                        ("line", fix.line.to_string()),
+                        ("column", fix.column.to_string()),
+                    ],
+                ),
+            };
+            write_stderr(&line);
+        }
     }
 
     fn not_yet(self, command: &str, milestone: &str) -> ExitCode {
@@ -530,7 +631,7 @@ fn open_cache(out: Out) -> Result<cheby_driver::Cache, ExitCode> {
     match cheby_driver::Cache::open(&CacheEnv::from_process(), build_id::build_id(), log) {
         Ok((cache, fallback)) => {
             if let Some(fallback) = fallback {
-                write_stderr(&fallback_note(&fallback));
+                out.note(&fallback_note(&fallback));
             }
             Ok(cache)
         }
@@ -555,7 +656,11 @@ fn finish_cache(out: Out, cache: cheby_driver::Cache, trim: bool, code: ExitCode
 /// implemented phase and prints its diagnostics. It reads and writes the
 /// build cache's front records (D-955) and trims the cache at most once a
 /// day at its end (D-961).
-fn check(out: Out, options: cheby_driver::CheckOptions) -> ExitCode {
+/// How many times `cheby check --fix` applies fixes and checks again
+/// (D-1945).
+const FIX_ROUNDS: u32 = 4;
+
+fn check(out: Out, options: cheby_driver::CheckOptions, fix: bool) -> ExitCode {
     let _phases = cheby_driver::phases::command("check");
     let root = match package_root(out) {
         Ok(root) => root,
@@ -565,16 +670,32 @@ fn check(out: Out, options: cheby_driver::CheckOptions) -> ExitCode {
         Ok(cache) => cache,
         Err(code) => return code,
     };
-    let code = match cheby_driver::check_cached(&root, &options, &cache) {
-        Ok(result) => {
-            out.diagnostics(&result);
-            if result.has_errors() {
-                ExitCode::FAILURE
-            } else {
-                ExitCode::SUCCESS
+    // `--fix` (D-1945): the fixes of a check are applied and the package is
+    // checked again, since a fix can clear the way for a later phase's
+    // diagnostics (D-452); the last check's diagnostics are the output.
+    let mut rounds: u32 = 0;
+    let code = loop {
+        let result = match cheby_driver::check_cached(&root, &options, &cache) {
+            Ok(result) => result,
+            Err(e) => break out.error(e.message()),
+        };
+        if fix && rounds < FIX_ROUNDS {
+            match cheby_driver::apply_fixes(&root, &result) {
+                Ok(applied) if applied.is_empty() => {}
+                Ok(applied) => {
+                    out.fixes(&applied);
+                    rounds = rounds.saturating_add(1);
+                    continue;
+                }
+                Err(e) => break out.error(e.message()),
             }
         }
-        Err(e) => out.error(e.message()),
+        out.diagnostics(&result);
+        break if result.has_errors() {
+            ExitCode::FAILURE
+        } else {
+            ExitCode::SUCCESS
+        };
     };
     finish_cache(out, cache, true, code)
 }
@@ -640,7 +761,11 @@ fn run(out: Out, options: cheby_driver::RunOptions) -> ExitCode {
 /// reads and writes the cache's front records (D-955); the cache is
 /// trimmed at most once a day (D-961) and closed when the build ends,
 /// before any test runs.
-fn test(out: Out, options: &cheby_driver::TestOptions) -> ExitCode {
+fn test(
+    out: Out,
+    options: &cheby_driver::TestOptions,
+    report: cheby_driver::ReportStyle,
+) -> ExitCode {
     let _phases = cheby_driver::phases::command("test");
     let root = match package_root(out) {
         Ok(root) => root,
@@ -650,7 +775,7 @@ fn test(out: Out, options: &cheby_driver::TestOptions) -> ExitCode {
         Ok(cache) => cache,
         Err(code) => return code,
     };
-    let program = match cheby_driver::prepare_test_cached(&root, options, &cache) {
+    let mut program = match cheby_driver::prepare_test_cached(&root, options, &cache) {
         Ok(cheby_driver::PreparedTests::Ready(program)) => program,
         Ok(cheby_driver::PreparedTests::CompileFailed(result)) => {
             out.diagnostics(&result);
@@ -674,6 +799,7 @@ fn test(out: Out, options: &cheby_driver::TestOptions) -> ExitCode {
     // that output ends the run with 1 and prints nothing more
     // (`terminated`, D-306, D-783); a tool error here is only a runtime
     // that cannot start or run a test.
+    program.set_report(report);
     match program.run(&mut std::io::stdout(), &mut std::io::stderr()) {
         Ok(report) if report.success() => ExitCode::SUCCESS,
         Ok(_) => ExitCode::FAILURE,
@@ -813,11 +939,7 @@ fn fmt_one(out: Out, target: &FmtTarget, check: bool) -> Result<bool, ()> {
     let formatted = match cheby_fmt::format_file(file, &text, cheby_fmt::WIDTH) {
         Ok(formatted) => formatted,
         Err(e) => {
-            write_stderr(&cheby_diag::render_all_with(
-                e.errors(),
-                &sources,
-                out.colors,
-            ));
+            out.errors(e.errors(), &sources);
             return Err(());
         }
     };
@@ -1134,7 +1256,8 @@ mod tests {
             cli.command,
             Command::Check {
                 target: Some(Target::Js),
-                deny_warnings: true
+                deny_warnings: true,
+                fix: false,
             }
         ));
         assert_eq!(cli.jobs, None);

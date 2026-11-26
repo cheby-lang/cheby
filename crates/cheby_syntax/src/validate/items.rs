@@ -167,7 +167,7 @@ pub(super) fn interface_ref(iref: InterfaceRef<'_>, out: &mut Vec<Diagnostic>) {
             "an interface is named without type arguments",
         )
         .with_primary(args.significant_span(), "")
-        .with_suggestion("remove the type arguments", args.significant_span(), ""),
+        .with_fix("remove the type arguments", args.significant_span(), ""),
     );
 }
 
@@ -187,7 +187,7 @@ pub(super) fn variant(variant: Variant<'_>, out: &mut Vec<Diagnostic>) {
     out.push(
         Diagnostic::new(codes::SYNTAX_ERROR, "a variant's field list is empty")
             .with_primary(span, "")
-            .with_suggestion(
+            .with_fix(
                 "for a variant without fields, remove the brackets",
                 span,
                 "",
@@ -260,7 +260,7 @@ pub(super) fn local_fn(function: LocalFn<'_>, out: &mut Vec<Diagnostic>) {
         out.push(
             Diagnostic::new(codes::SYNTAX_ERROR, "a local function has no visibility")
                 .with_primary(visibility.significant_span(), "")
-                .with_suggestion("remove it", removal, ""),
+                .with_fix("remove it", removal, ""),
         );
     }
     if let Some(params) = function.type_params() {
@@ -344,6 +344,6 @@ pub(super) fn use_stmt(stmt: UseStmt<'_>, out: &mut Vec<Diagnostic>) {
             "trailing comma after the `use` binders",
         )
         .with_primary(comma.span(), "")
-        .with_suggestion("remove the comma", comma.span(), ""),
+        .with_fix("remove the comma", comma.span(), ""),
     );
 }

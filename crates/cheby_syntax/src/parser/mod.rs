@@ -110,6 +110,7 @@ fn explain_reserved_words(lexed: &Lexed, text: &str, errors: &mut [Diagnostic]) 
             diag.helps.push(cheby_diag::Help {
                 message: help,
                 edits: Vec::new(),
+                fix: false,
             });
         }
     }
@@ -639,7 +640,7 @@ impl<'a> Parser<'a> {
                 help,
                 edit: Some((range, replacement)),
                 ..
-            }) => diag.with_suggestion(help, self.span(range), replacement),
+            }) => diag.with_fix(help, self.span(range), replacement),
             Some(PendingHelp {
                 help, edit: None, ..
             }) => diag.with_help(help),

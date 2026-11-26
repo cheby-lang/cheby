@@ -75,6 +75,7 @@ mod borrowing;
 pub mod cache;
 mod code_cache;
 pub mod dependencies;
+mod fix;
 mod frontend;
 mod load_set;
 mod native;
@@ -91,9 +92,10 @@ pub use aot::{BuildOptions, BuildOutcome, build_cached, build_cached_with, build
 pub use cheby_mir::Profile;
 pub use cheby_package::{EXTENSION, is_valid_name, module_file, suggest_name};
 pub use cheby_package::{Kind, Target};
+pub use fix::{AppliedFix, apply_fixes};
 pub use test::{
-    ModuleTests, PreparedTests, TestCounts, TestOptions, TestOutcome, TestProgram, TestReport,
-    TestResult, prepare_test, prepare_test_cached, test_std, test_std_in,
+    ModuleTests, PreparedTests, ReportStyle, TestCounts, TestOptions, TestOutcome, TestProgram,
+    TestReport, TestResult, prepare_test, prepare_test_cached, test_std, test_std_in,
 };
 
 /// What a command reads and writes in the build cache (D-956 to D-965):
@@ -418,6 +420,37 @@ impl CheckOutput {
     #[must_use]
     pub fn render_with(&self, colors: Colors) -> String {
         render_diagnostics(&self.diagnostics, &self.sources, colors, self.deny_warnings)
+    }
+
+    /// The diagnostics as JSON Lines, one line each (`--format json`,
+    /// D-1944). With `--deny-warnings` a warning's severity is `error`
+    /// and the first one has the note [`DENIED_NOTE`], as in the text
+    /// form (D-549).
+    #[must_use]
+    pub fn render_json(&self) -> String {
+        let mut out = String::new();
+        let mut noted = false;
+        for diagnostic in &self.diagnostics {
+            if self.deny_warnings && diagnostic.severity() == Severity::Warning {
+                let mut denied = diagnostic.clone();
+                if !noted {
+                    denied.notes.push(DENIED_NOTE.to_owned());
+                    noted = true;
+                }
+                out.push_str(&cheby_diag::render_json(
+                    &denied,
+                    &self.sources,
+                    Severity::Error,
+                ));
+            } else {
+                out.push_str(&cheby_diag::render_json(
+                    diagnostic,
+                    &self.sources,
+                    diagnostic.severity(),
+                ));
+            }
+        }
+        out
     }
 }
 

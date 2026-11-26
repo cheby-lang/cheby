@@ -134,6 +134,20 @@ pub struct TestProgram {
     threads: Option<usize>,
     /// The text of `--reuse-report`, empty without the flag.
     reuse_report: String,
+    /// How the results are written ([`TestProgram::set_report`]).
+    report: ReportStyle,
+}
+
+/// How `cheby test` writes its results (D-1946).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct ReportStyle {
+    /// `--format json`: a line of JSON for each test, with the output it
+    /// wrote and its failure, and one for the summary, in place of the
+    /// text report and the replay of the tests' output.
+    pub json: bool,
+    /// `--report-failures-only`: a passing test gets no line, and the
+    /// output it wrote is dropped.
+    pub failures_only: bool,
 }
 
 /// The stacks of a test run (D-660): each test's root fiber gets `main`,
@@ -317,6 +331,19 @@ impl TestReport {
         text
     }
 
+    /// The summary line of `--format json` (D-1946), with its line break.
+    fn json_summary(&self) -> String {
+        let c = self.counts();
+        cheby_diag::render_json_object(
+            "summary",
+            &[
+                ("passed", c.passed.to_string()),
+                ("failed", c.failed.saturating_add(c.not_built).to_string()),
+                ("filtered_out", self.filtered_out.to_string()),
+            ],
+        )
+    }
+
     /// `test result: ok. 3 passed; 0 failed; 1 filtered out` (D-541), with
     /// `FAILED` when a test failed or did not build, and a newline.
     fn summary(&self) -> String {
@@ -332,6 +359,41 @@ impl TestReport {
             c.passed, c.failed, self.filtered_out
         )
     }
+}
+
+/// A test's line of `--format json` (D-1946), with its line break:
+/// `{"type":"test","module":…,"name":…,"outcome":"passed"}`, with `failed`
+/// for a test that failed or did not build, then `stdout` and `stderr`
+/// with what the test wrote there, each left out when it wrote nothing,
+/// and `failure` with the text of the failure block. Bytes that are not
+/// UTF-8 become U+FFFD.
+fn json_line(module: &str, name: &str, outcome: &TestOutcome, chunks: &[Chunk]) -> String {
+    use cheby_diag::json_string;
+    let (verdict, failure) = match outcome {
+        TestOutcome::Passed => ("passed", None),
+        TestOutcome::Failed(text) | TestOutcome::NotBuilt(text) => ("failed", Some(text)),
+    };
+    let mut fields = vec![
+        ("module", json_string(module)),
+        ("name", json_string(name)),
+        ("outcome", json_string(verdict)),
+    ];
+    for (key, stream) in [("stdout", Stream::Stdout), ("stderr", Stream::Stderr)] {
+        let mut bytes = Vec::new();
+        for chunk in chunks {
+            match chunk {
+                Chunk::Write(to, written) if *to == stream => bytes.extend_from_slice(written),
+                Chunk::Write(..) | Chunk::Flush => {}
+            }
+        }
+        if !bytes.is_empty() {
+            fields.push((key, json_string(&String::from_utf8_lossy(&bytes))));
+        }
+    }
+    if let Some(failure) = failure {
+        fields.push(("failure", json_string(failure)));
+    }
+    cheby_diag::render_json_object("test", &fields)
 }
 
 /// `test <module> "<name>" ... ok` or `... FAILED`, without a newline.
@@ -522,6 +584,7 @@ fn prepare_test_once(
         stacks,
         threads: None,
         reuse_report,
+        report: ReportStyle::default(),
     })))
 }
 
@@ -546,6 +609,12 @@ impl TestProgram {
     /// variable (`RuntimeConfig::threads`).
     pub const fn set_threads(&mut self, threads: usize) {
         self.threads = Some(threads);
+    }
+
+    /// Sets how the results are written; the text report of D-541 with
+    /// every test is the default (D-1946).
+    pub const fn set_report(&mut self, report: ReportStyle) {
+        self.report = report;
     }
 
     /// Runs the tests, several at once (D-723), and writes the report of
@@ -599,11 +668,20 @@ impl TestProgram {
                 limit: usize::MAX,
                 hooks,
             };
+            let style = self.report;
             let mut sink = |test: &Selected, outcome: TestOutcome, chunks: Vec<Chunk>| {
-                replay(chunks, out, err)?;
-                let line = test_line(&test.module, &test.name, &outcome);
-                out.write_all(format!("{line}\n").as_bytes())?;
-                printed = true;
+                let passed = matches!(outcome, TestOutcome::Passed);
+                if !(passed && style.failures_only) {
+                    if style.json {
+                        let line = json_line(&test.module, &test.name, &outcome, &chunks);
+                        out.write_all(line.as_bytes())?;
+                    } else {
+                        replay(chunks, out, err)?;
+                        let line = test_line(&test.module, &test.name, &outcome);
+                        out.write_all(format!("{line}\n").as_bytes())?;
+                    }
+                    printed = true;
+                }
                 push_result(&mut report, &test.module, &test.name, outcome);
                 Ok(())
             };
@@ -630,7 +708,13 @@ impl TestProgram {
         if let Some(runtime) = runtime {
             runtime.shutdown();
         }
-        if write_tail(&report, printed, out).is_err() {
+        let tail = if self.report.json {
+            out.write_all(report.json_summary().as_bytes())
+                .and_then(|()| out.flush())
+        } else {
+            write_tail(&report, printed, out)
+        };
+        if tail.is_err() {
             report.terminated = true;
         }
         Ok(report)

@@ -461,7 +461,7 @@ impl<'a> Scanner<'a> {
             ';' => {
                 let help = "statements are separated by line breaks, not `;`";
                 if self.only_trivia_follows(end) {
-                    diag.with_suggestion(help, self.span(pos, end), "")
+                    diag.with_fix(help, self.span(pos, end), "")
                 } else {
                     diag.with_help(help)
                 }
@@ -471,7 +471,7 @@ impl<'a> Scanner<'a> {
                 match self.closing_quote(pos, end) {
                     Some(close) => {
                         self.quote_close = Some(close);
-                        diag.with_suggestion_edits(
+                        diag.with_fix_edits(
                             help,
                             vec![
                                 Edit {
@@ -515,7 +515,7 @@ impl<'a> Scanner<'a> {
                 ) =>
             {
                 end = self.run_while(end, |b| b != b'\n' && b != b'\r');
-                diag.with_suggestion(
+                diag.with_fix(
                     "comments start with `//`; write `//`",
                     self.span(pos, pos + 1),
                     "//",

@@ -25,7 +25,7 @@ pub(super) fn tuple_pat(tuple: TuplePat<'_>, out: &mut Vec<Diagnostic>) {
         // The help that names one fix carries its edit (D-1689).
         0 if !has_comma => Diagnostic::new(codes::SHORT_TUPLE, "`()` is not a pattern")
             .with_primary(span, "")
-            .with_suggestion(
+            .with_fix(
                 "the value with no information is `Nil`; match it with `Nil`",
                 span,
                 "Nil",
@@ -107,7 +107,7 @@ pub(super) fn pos_pat_list(list: PosPatList<'_>, out: &mut Vec<Diagnostic>) {
             "a constructor pattern's field list is empty",
         )
         .with_primary(list.significant_span(), "")
-        .with_suggestion(
+        .with_fix(
             "for a constructor without fields, remove the parentheses",
             list.significant_span(),
             "",

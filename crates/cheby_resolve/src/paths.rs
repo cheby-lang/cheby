@@ -141,7 +141,7 @@ impl PathCx<'_> {
         let constructor =
             ns == Namespace::Value && text.starts_with(|c: char| c.is_ascii_uppercase());
         if constructor && let Some((target, help)) = self.foreign_constructor(text) {
-            return diag.with_suggestion(help, span, target);
+            return diag.with_fix(help, span, target);
         }
         let foreign = match ns {
             Namespace::Value if !constructor => foreign_value(text, self.next_char(span)),
@@ -159,7 +159,7 @@ impl PathCx<'_> {
                 )
             });
             return match in_scope {
-                Some(target) => diag.with_suggestion(help, span, target),
+                Some(target) => diag.with_fix(help, span, target),
                 None => diag.with_help(help),
             };
         }

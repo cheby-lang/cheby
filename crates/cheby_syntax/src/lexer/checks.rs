@@ -44,7 +44,7 @@ pub(crate) fn check_tokens(tree: &SyntaxTree, out: &mut Vec<Diagnostic>) {
                         "whitespace inside an interpolation",
                     )
                     .with_primary(token.span(), "")
-                    .with_suggestion(
+                    .with_fix(
                         "remove the whitespace (D-115)",
                         token.span(),
                         "",
@@ -137,7 +137,7 @@ fn number(token: SyntaxToken<'_>, out: &mut Vec<Diagnostic>) {
                     format!("`_` right after `{prefix}`"),
                 )
                 .with_primary(token.span(), "")
-                .with_suggestion(format!("write `{fixed}`"), token.span(), fixed),
+                .with_fix(format!("write `{fixed}`"), token.span(), fixed),
             );
         }
         return;

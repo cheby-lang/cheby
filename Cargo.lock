@@ -207,6 +207,7 @@ dependencies = [
  "libtest-mimic",
  "object",
  "rustls",
+ "serde_json",
  "siphasher",
 ]
 

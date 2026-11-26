@@ -30,9 +30,13 @@ _Note:_ the reference implementation links with the `cc` found on `PATH` and ign
 
 `cheby check --target native` or `cheby check --target js` checks the code as it runs on that target only, so the cross-target check of [§12.6](12-targets-and-ffi.md#126-target-specific-code) reports only uses that would fail there. A target that the manifest's `targets` leaves out is a tool error, such as "the package does not target `js`" (D-550).
 
+`cheby check --fix` applies the sure fixes of the diagnostics to the package's own files and checks again ([§13.8.2](#1382-sure-fixes-and-cheby-check---fix)) (D-1945).
+
 `cheby explain` prints the long explanation of a diagnostic code such as `E0012`, with examples and fixes ([§13.8](#138-diagnostics-and-warnings)) (D-420).
 
 Every command takes a global `--color=auto|always|never` flag, which says whether diagnostics and other errors are colored ([§13.8](#138-diagnostics-and-warnings)) (D-467).
+
+Every command also takes a global `--format=text|json` flag. With `json`, diagnostics and other errors are written as JSON, one object per line ([§13.8.1](#1381-json-output)), and `cheby test` writes its results that way too ([§13.6](#136-tests)). `text` is the default (D-1944, D-1946).
 
 `cheby check`, `cheby build`, `cheby run`, `cheby test` and `cheby repl` accept `--deny-warnings`, which turns warnings into errors ([§13.8](#138-diagnostics-and-warnings)) (D-080, D-549, D-937).
 
@@ -308,6 +312,10 @@ Test blocks are type-checked by `cheby build` as well, so a broken test is caugh
 
 `cheby test` writes to standard output one line per test, `test <module path> "<name>" ... ok` or `... FAILED`. For each failure, a block follows that starts with `---- <module path> "<name>" ----` and holds the panic report or the `Err` text. A summary ends the output, such as `test result: ok. 3 passed; 0 failed; 1 filtered out`, with `FAILED` in place of `ok` when a test failed. A test's own output on standard output and standard error, including that of the fibers it spawns and what foreign code writes through `cheby.h` ([§12.5.1](12-targets-and-ffi.md#1251-native-abi)), is captured (D-951). Once the test has finished and every test before it has been written, its output is written to the same streams, followed by its line. Tests are written in order, by module path and then in source order, so the output is the same as if the tests ran one after another, whatever order they finish in (D-541, D-598, D-723). The failure blocks follow all the lines, each preceded by an empty line. The summary is preceded by an empty line when a test line was written, and when no test is selected it is the only output (D-598). A test's panic report appears only in its failure block, never on standard error, and standard output is flushed before it is taken (D-595). The exit status is 0 when every selected test passes, also when none is selected, and 1 when one fails. A compile error stops the command with status 1 before any test runs (D-541). A write or flush that ends the program ([§10.10](10-concurrency.md#1010-program-entry-and-exit)) also ends the test run at once: nothing more is printed, and the exit status is 1 (D-306, D-783). A test's own writes go to its capture and never fail, so such a failure comes from `cheby test` itself, when it writes a test's captured output, a test line, a failure block or the summary (D-834).
 
+With `--format json` ([§13.1](#131-the-cheby-command)), `cheby test` writes its results to standard output as JSON, one object per line, in place of the lines, the failure blocks and the summary (D-1946). Each test has a line `{"type":"test","module":…,"name":…,"outcome":…}`, in the order of the text form, with the outcome `"passed"` or `"failed"`. `stdout` and `stderr` follow with what the test wrote to each stream, and a key is left out when the test wrote nothing there. Bytes that are not UTF-8 become U+FFFD, and the output is not written to the streams themselves. A failed test's line ends with `failure`, the text of its failure block without the block's first line. The last line is `{"type":"summary","passed":…,"failed":…,"filtered_out":…}`. No line holds a time, so a run's output is the same every time. Diagnostics and other errors are JSON on standard error ([§13.8.1](#1381-json-output)).
+
+`cheby test --report-failures-only` writes no line for a test that passes and drops what that test wrote, in both formats. The failure blocks and the summary are as without it, and the summary counts every selected test (D-1946).
+
 _Note:_ the reference implementation runs each test on a 64 MiB stack like `main`, unless the manifest's `main-stack` sets another size ([§13.3](#133-manifest)) (D-596, D-660). In M1 it ran tests one after another. A test whose start is refused a stack waits for a running test to end and is started again, and fails only when no other test runs (D-836). A toolchain with debug assertions counts the live objects of each test separately, after the test's detached fibers have ended, and objects still live fail that test with the message of the leak check ([§10.10](10-concurrency.md#1010-program-entry-and-exit)) (D-458, D-541, D-723). Each test counts in an accounting domain of its own, which the fibers it starts inherit (D-691, D-833). A test's check is skipped and counted only when one of its detached fibers cannot be stopped, for the reasons given there (D-710, D-786, D-804), or when a request for memory that the system refused ended in `out of memory` (D-771, D-907). The checks of later tests still run: a skipped fiber that goes on when its call returns releases what it holds into its own test's count, which no other test's check reads (D-833). A deadlocked test fails, so it is not checked, as no failing test is (D-541, D-859).
 
 _Note:_ a test's writes to standard output and standard error go to its capture, with two exceptions that go straight to standard error: a fatal runtime error, and the report that precedes one when a fiber cannot unwind because its code was compiled without unwind edges (D-770). The process ends right after these writes, before any captured output could be written, so captured they would be lost (D-820).
@@ -405,6 +413,48 @@ error[E0029]: comparison operators cannot be chained
 ```
 
 Codes are listed with their explanations in [`docs/diagnostics/`](../diagnostics/README.md).
+
+### 13.8.1 JSON output
+
+With the global flag `--format json` ([§13.1](#131-the-cheby-command)), a command writes its diagnostics to standard error as JSON, one object per line, in place of the text form (D-1944). A diagnostic is an object with these keys, in this order:
+
+| Key                                                                | Value                                                                                             |
+| ------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------- |
+| `type`                                                             | `"diagnostic"`                                                                                    |
+| `severity`                                                         | `"error"` or `"warning"`; a warning that `--deny-warnings` denies is an `"error"` with its code   |
+| `code`                                                             | the code, such as `"E0042"`                                                                       |
+| `message`                                                          | the message of the header                                                                         |
+| `file`, `line`, `column`, `end_line`, `end_column`, `start`, `end` | the place of the first primary label; left out when the diagnostic has none                       |
+| `labels`                                                           | an array with each label: the keys of a place, `message`, which may be empty, and `primary`       |
+| `notes`                                                            | an array with the text of each note                                                               |
+| `helps`                                                            | an array with each help: `message`, `fix` and `edits`                                             |
+
+A place gives a span. `file`, `line` and `column` are the location of its start as the text form writes it, and `end_line` and `end_column` are that of its end. `start` and `end` are the byte offsets of both in the file's text. `primary` is `true` for a label that the text form marks with `^`. A help's `edits` are the replacements that apply it, each with the keys of a place and `replacement`, the text that replaces the span, and the array is empty for a help that is words only. `fix` says whether the help is a sure fix ([§13.8.2](#1382-sure-fixes-and-cheby-check---fix)).
+
+An error that has no code is `{"type":"error","message":…}`. A `help:` line that follows such an error is the same object with the type `"help"`, and a note of the toolchain with the type `"note"`. Later versions may add keys and values of `type`, so a consumer skips what it does not know. The lines are never colored, and a string holds its text in UTF-8 with control characters escaped.
+
+The flag changes only what the toolchain itself reports. A program's own output, a panic report ([§11.6](11-errors-and-panics.md#116-panic-and-todo)) and the lines of `--reuse-report` are written as without it, and so is an error in the command line, which is found before the flag is read. `cheby repl` and `cheby lsp` ignore the flag. `cheby test` also writes its results as JSON ([§13.6](#136-tests)).
+
+_Example:_ one line, broken here to fit the page.
+
+```
+{"type":"diagnostic","severity":"error","code":"E0003","message":"unexpected character `;`",
+ "file":"src/main.cheby","line":6,"column":8,"end_line":6,"end_column":9,"start":62,"end":63,
+ "labels":[{"file":"src/main.cheby","line":6,"column":8,"end_line":6,"end_column":9,
+            "start":62,"end":63,"message":"","primary":true}],
+ "notes":[],
+ "helps":[{"message":"statements are separated by line breaks, not `;`","fix":true,
+           "edits":[{"file":"src/main.cheby","line":6,"column":8,"end_line":6,"end_column":9,
+                     "start":62,"end":63,"replacement":""}]}]}
+```
+
+### 13.8.2 Sure fixes and `cheby check --fix`
+
+A help may carry edits, which an editor offers as a quick fix ([§13.11](#1311-language-server)). Some helps are also marked as sure fixes: the edits do the one thing the message names, no other reading fits the code as written, and they are whole on their own. Removing a `;` after a statement and writing `True` for `true` are sure fixes. A guess among similar names, a help that names one of two possible fixes, the rename of a declaration without its uses, and a help that only silences a warning are not (D-1945).
+
+`cheby check --fix` applies the sure fixes to the source files of the package itself and checks the package again. Of a diagnostic's helps it applies the first sure fix, when each of its edits lies in such a file and none overlaps an edit that it has applied in this round. A file that changed after the check read it is left alone. The second check can report diagnostics of a later phase, which the errors of the first one held back, so the command applies their sure fixes too, and so on, for at most four rounds of fixes. It never writes to the standard library or to a dependency, and it does not ask whether the files are under version control (D-1945).
+
+For each fix it applies, the command writes a line `fixed: path:line:column: message` to standard error, with the location of the fix's first edit and the help's message. With `--format json` the line is `{"type":"fix","code":…,"message":…,"file":…,"line":…,"column":…}`. The diagnostics of the last check follow, and the exit status is the one they give (D-1945).
 
 ## 13.9 Compile-time evaluation
 

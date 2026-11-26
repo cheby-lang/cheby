@@ -35,7 +35,7 @@ pub(super) fn tuple_type(tuple: TupleType<'_>, out: &mut Vec<Diagnostic>) {
         out.push(
             Diagnostic::new(codes::SHORT_TUPLE, message)
                 .with_primary(span, "")
-                .with_suggestion(help, span, replacement),
+                .with_fix(help, span, replacement),
         );
         return;
     }

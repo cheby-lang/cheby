@@ -138,7 +138,7 @@ fn spaced_negative_literal(node: SyntaxNode<'_>, gap: TextRange, out: &mut Vec<D
         )
         .with_primary(span, "")
         .with_note(explanation)
-        .with_suggestion("remove the space", span, "")
+        .with_fix("remove the space", span, "")
     } else {
         Diagnostic::new(
             codes::SPACED_NEGATIVE_LITERAL,
