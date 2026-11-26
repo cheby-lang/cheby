@@ -12,5 +12,6 @@ import std::json
 import ui_test::box
 
 fn main() {
-  io::println(json::to_string(box::to_json(box::of(1))))
+  let boxed = box::of(1)
+  io::println(json::to_string(box::to_json(boxed)))
 }

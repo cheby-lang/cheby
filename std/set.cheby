@@ -342,7 +342,8 @@ test "is_subset checks every element" {
 test "maps compare by contents and print sorted" {
   let numbers = maps::from_list([(10, "ten"), (9, "nine")])
   assert numbers == maps::from_list([(9, "nine"), (10, "ten")])
-  assert size(from_list([numbers, maps::insert(maps::new(), 9, "nine")])) == 2
+  let nine = maps::insert(maps::new(), 9, "nine")
+  assert size(from_list([numbers, nine])) == 2
   assert "{numbers:?}" == "map::from_list([(10, \"ten\"), (9, \"nine\")])"
 }
 

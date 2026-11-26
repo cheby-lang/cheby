@@ -88,5 +88,8 @@ test "stacks with the same items are ==" {
 }
 
 test "stacks show their items top first" {
-  assert show(push(push(new(), "a"), "b")) == "stack [b, a]"
+  let filled = new()
+    |> push(_, "a")
+    |> push(_, "b")
+  assert show(filled) == "stack [b, a]"
 }

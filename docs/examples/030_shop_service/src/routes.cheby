@@ -89,7 +89,8 @@ priv fn by_id(text: String, make: fn(Int) -> Route) -> Route {
 /// `POST /orders`: decode, validate, then place. Each step stops at its
 /// first failure, and each kind of failure gets its own status.
 priv fn place(pool: sql::Pool, body: String) -> Result<http::Response, Failure> {
-  use new_order <- result::try(result::map_error(json::parse(body, order::decoder()), BadJson))
+  let parsed = json::parse(body, order::decoder())
+  use new_order <- result::try(result::map_error(parsed, BadJson))
   use valid <- result::try(result::map_error(order::validate(new_order), Invalid))
   use placed <- result::try(result::map_error(store::place_order(pool, valid), Store))
   Ok(http::json(201, placed_json(placed)))

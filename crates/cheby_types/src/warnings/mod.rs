@@ -17,7 +17,7 @@
 //! | W0013 | negative literal for a clamped std count     | `body.rs`       |
 //! | W0014 | imports out of `cheby fmt`'s order           | `order.rs`      |
 //!
-//! W0001 is phase A's, W0007 name resolution's, W0008 and W0010 the
+//! W0001 and W0015 are phase A's, W0007 name resolution's, W0008 and W0010 the
 //! exhaustiveness checker's.
 //!
 //! Unused-code warnings (W0002-W0005) need every use. Uses come from

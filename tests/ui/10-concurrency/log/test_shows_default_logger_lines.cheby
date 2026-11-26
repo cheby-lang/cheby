@@ -16,7 +16,8 @@ fn main() {
 }
 
 test "a passing test shows its lines" {
-  use <- context::provide(time::clock, time::fixed_clock(time::from_unix(duration::seconds(0))))
+  let epoch = time::from_unix(duration::seconds(0))
+  use <- context::provide(time::clock, time::fixed_clock(epoch))
   log::info("shown")
   log::debug("dropped by the default logger")
   assert True

@@ -81,7 +81,10 @@ fn debug<T>(h: Heap<T>) -> String {
 
 test "heaps compare by direction and contents" {
   let built = from_list([3, 1, 2])
-  let pushed = push(push(push(new_min(), 3), 2), 1)
+  let pushed = new_min()
+    |> push(_, 3)
+    |> push(_, 2)
+    |> push(_, 1)
   assert built == pushed
   assert built != from_list_max([3, 1, 2])
   assert built != from_list([1, 2])
@@ -92,7 +95,11 @@ test "heaps compare by direction and contents" {
 
 test "equal heaps hash alike" {
   let built = from_list([1, 2, 3, 2])
-  let pushed = push(push(push(push(new_min(), 3), 2), 2), 1)
+  let pushed = new_min()
+    |> push(_, 3)
+    |> push(_, 2)
+    |> push(_, 2)
+    |> push(_, 1)
   assert built == pushed
   assert map::size(map::from_list([(built, 1), (pushed, 2)])) == 1
   assert map::size(map::from_list([(built, 1), (from_list_max([1, 2, 3, 2]), 2)])) == 2
@@ -159,7 +166,10 @@ pub fn new_max<T>() -> Heap<T> {
 }
 
 test "new_max pops the largest element first" {
-  let h = push(push(push(new_max(), 2), 7), 4)
+  let h = new_max()
+    |> push(_, 2)
+    |> push(_, 7)
+    |> push(_, 4)
   assert to_list(h) == [7, 4, 2]
 }
 
@@ -199,7 +209,10 @@ pub fn push<T: Compare>(h: Heap<T>, item: T) -> Heap<T> {
 }
 
 test "push keeps duplicates" {
-  let h = push(push(push(new_min(), "b"), "a"), "b")
+  let h = new_min()
+    |> push(_, "b")
+    |> push(_, "a")
+    |> push(_, "b")
   assert to_list(h) == ["a", "b", "b"]
   assert size(h) == 3
 }

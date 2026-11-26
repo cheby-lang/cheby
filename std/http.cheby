@@ -549,8 +549,8 @@ test "ten redirects are followed, and an eleventh is too many" {
 /// closes the connection (D-1008).
 priv fn exchange(outgoing: Outgoing) -> Result<Response, Error> {
   use connection <- result::try(open(outgoing.target))
-  use _ <-
-    result::try(result::map_error(net::write_bytes(connection, request_bytes(outgoing)), from_io))
+  let sent = net::write_bytes(connection, request_bytes(outgoing))
+  use _ <- result::try(result::map_error(sent, from_io))
   use response_head <- result::try(read_head(connection, bytes::new()))
   use body <- result::try(read_body(connection, outgoing.method, response_head))
   let _ = net::close(connection)

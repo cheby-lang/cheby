@@ -3406,3 +3406,17 @@ Open:
 - ~~Sources written inline in Rust tests were reordered only where a test reads the warnings.~~ Done: the rest were reordered too, except the tests whose subject is the order of imports.
 
 Spec: §7.5.1 (example), §13.7, §13.8. New code: W0014. Tree-sitter: no grammar change.
+
+## 2026-11-27: A limit on nested calls
+
+Goal: keep an expression readable in the order it runs.
+
+- **D-1954 Function calls nest at most three deep**: A function call may hold function calls in its arguments down to a third level, as in `f(g(h(x)))`. A fourth level is a new warning, W0015. The depth of a function call is one more than the depth of the deepest function call in its arguments. A constructor call, whose callee is a path that ends in an upper-case name, adds no level, though the calls in its arguments count. Operators, lists, tuples, records and field accesses pass the levels on. A block, a closure, a local function and a `case` expression start the count again, and a call in a callee, as in `f(x)(y)`, stands at the callee's own level. The stages of a pipeline are not nested in each other, so a pipeline is how a longer chain is written. The call after `<-` in a `use` counts like any other. A chain gets one warning, for its outermost call, at the first call of the fourth level, with a help line and no fix. The check is syntax validation, so it needs no types and runs in every command and in the language server. Why: the user asked for a limit. A chain of calls is read from the inside out, against the order in which it runs, and Cheby has pipelines and `let` for exactly that. Constructors are left out because `Ok(Some(parse(text)))` builds data in the shape it is written. No fix is offered because moving a call out of an argument can change the order in which calls run. The user first chose a limit of two and then changed it to three: at two, std and the examples had 239 warnings, 98 of them in `use x <- result::try(…)`, the everyday error-handling form; at three they had 24, which were rewritten in the same change, as pipelines in tests and with a `let` elsewhere. A warning was chosen over an error, so that `--deny-warnings` decides where it binds. Refines D-080.
+
+Open:
+
+- The sibling checkouts were not checked for W0015.
+- The tests of generated programs drop W0015 from what they compare: a generated program nests calls as its random shape says (D-1954).
+- Sources written inline in Rust tests were rewritten only where a test reads the warnings.
+
+Spec: §13.8. New code: W0015. Tree-sitter: no grammar change.

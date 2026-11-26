@@ -1,0 +1,18 @@
+warning[W0015]: function calls are nested 4 deep
+  --> tests/ui/13-tooling/warnings/nested_calls.cheby:14:38
+   |
+14 |   io::println(string::trim(int::show(list::length(numbers))))
+   |                                      ^^^^^^^^^^^^^^^^^^^^^ this call is the fourth level
+   |
+   = note: function calls may nest three deep, as in `f(g(h(x)))`; constructors do not count
+   = help: write a pipeline with `|>`, or bind an inner call to a name with `let`
+
+warning[W0015]: function calls are nested 5 deep
+  --> tests/ui/13-tooling/warnings/nested_calls.cheby:19:42
+   |
+19 |   let total = int::abs(int::max(int::min(list::length(list::reverse(doubled)), 9), 0))
+   |                                          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ this call is the fourth level
+   |
+   = note: function calls may nest three deep, as in `f(g(h(x)))`; constructors do not count
+   = help: write a pipeline with `|>`, or bind an inner call to a name with `let`
+

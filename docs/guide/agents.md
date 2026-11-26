@@ -40,6 +40,8 @@ names such as `len`, `reduce` or `to_string` are not Cheby's.
 - There are no methods. Call the module's function: `list::length(xs)`, not `xs.length()`.
 - A pipe needs a hole: `xs |> list::map(_, f)`. Only a function of one parameter is piped bare:
   `xs |> list::length`.
+- Function calls nest at most three deep: `f(g(h(x)))` is the limit. Write a longer chain as a
+  pipeline, or bind an inner call with `let`.
 - Errors are values: `Result` and `Option`. There is no `?`, no `null` and no exception. Chain
   with `use x <- result::try(…)`.
 - `Bool` is `True` and `False`, the value with no information is `Nil`, and types and constructors

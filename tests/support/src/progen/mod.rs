@@ -61,6 +61,7 @@ use std::path::Path;
 
 pub use diff::{
     DiffError, DiffErrorKind, DiffOptions, DiffReport, differential_with, program_in, shared_cache,
+    without_nesting_warnings,
 };
 pub use eval::{EvalError, Expected, evaluate};
 

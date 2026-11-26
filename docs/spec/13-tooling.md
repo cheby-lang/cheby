@@ -386,6 +386,9 @@ The following are warnings (D-080 and the cited decisions):
 | a written tuple type with a tuple element or with four or more elements | D-243, D-440         |
 | a negative integer literal passed as a standard-library count argument  | D-298, D-303, D-518  |
 | imports out of the order of [§13.7](#137-formatter)                     | D-1953               |
+| function calls nested more than three deep                              | D-1954               |
+
+Function calls may nest three deep, as in `f(g(h(x)))`. The depth of a function call is one more than the depth of the deepest function call in its arguments. A constructor call adds no level, though the calls in its arguments count. A block, a closure, a local function and a `case` expression start the count again, and the stages of a pipeline are not nested in each other. A call of the fourth level is a warning, one for each outermost call, with no sure fix: moving a call out of an argument can change the order in which calls run (D-1954).
 
 Unused `pub` items are never reported (D-152). What counts as a use is fixed as follows (D-515, D-516):
 

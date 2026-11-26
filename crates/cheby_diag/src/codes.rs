@@ -239,6 +239,7 @@ codes! {
     W0012 Warning 12 DEPRECATED "use of a `@deprecated` item";
     W0013 Warning 13 NEGATIVE_COUNT "negative integer literal passed as a standard-library count argument";
     W0014 Warning 14 IMPORT_ORDER "imports that are not in `cheby fmt`'s blocks and order";
+    W0015 Warning 15 NESTED_CALLS "function calls nested more than three deep";
 }
 
 #[cfg(test)]

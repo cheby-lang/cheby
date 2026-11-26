@@ -58,8 +58,8 @@ fn main() -> Result<Nil, AppError> {
   // `result::map_error` has wrapped it in an `AppError`.
   use path <- result::try(parse_args(env::args()))
   use text <- result::try(result::map_error(io::read_file(path), ReadFailed(path, _)))
-  use books <-
-    result::try(result::map_error(json::parse(text, library_decoder()), InvalidLibrary(path, _)))
+  let parsed = json::parse(text, library_decoder())
+  use books <- result::try(result::map_error(parsed, InvalidLibrary(path, _)))
   books
   |> list::map(_, summary)
   |> list::each(_, io::println)

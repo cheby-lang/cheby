@@ -1,0 +1,26 @@
+// @mode: check-pass
+// @decisions: D-1954
+//! Function calls may nest three deep. A fourth level is a warning, one
+//! for each outermost call. A constructor adds no level, and a closure
+//! starts the count again.
+
+import std::int
+import std::io
+import std::list
+import std::string
+
+fn main() {
+  let numbers = [1, 2, 3]
+  io::println(string::trim(int::show(list::length(numbers))))
+  io::println(int::show(list::length(numbers)))
+  let wrapped: Result<Option<String>, Nil> =
+    Ok(Some(string::trim(int::show(list::length(numbers)))))
+  let doubled = list::map(numbers, fn(n) { int::max(int::min(int::abs(n), 9), 0) })
+  let total = int::abs(int::max(int::min(list::length(list::reverse(doubled)), 9), 0))
+  numbers
+  |> list::length
+  |> int::show
+  |> string::trim
+  |> io::println
+  assert wrapped == Ok(Some("3")) && total == 3
+}

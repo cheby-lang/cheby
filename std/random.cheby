@@ -391,7 +391,8 @@ fn step_until(generator: Generator, threshold: U64) -> (U64, Generator) {
 /// which needs a bound outside that range (D-037).
 pub fn next_int_between(generator: Generator, low: Int, high: Int) -> (Int, Generator) {
   let start = bits_of(int::min(low, high))
-  let span = u64::wrapping_add(u64::wrapping_sub(bits_of(int::max(low, high)), start), 1)
+  let last = bits_of(int::max(low, high))
+  let span = u64::wrapping_add(u64::wrapping_sub(last, start), 1)
   case span {
     0 => {
       let (output, next) = step(generator)

@@ -106,11 +106,13 @@ fn find_order(pool: sql::Pool, id: Int) -> Result<Option<StoredOrder>, StoreErro
     FROM order_lines l JOIN products p ON p.id = l.product_id
     WHERE l.order_id = $1
     ORDER BY l.product_id"
-  use found <- result::try(db(sql::query_one(connection, order_query, [sql::int(id)], order_row())))
+  let order_reply = sql::query_one(connection, order_query, [sql::int(id)], order_row())
+  use found <- result::try(db(order_reply))
   case found {
     None => Ok(None)
     Some(stored) => {
-      use lines <- result::try(db(sql::query(connection, lines_query, [sql::int(id)], line_row())))
+      let lines_reply = sql::query(connection, lines_query, [sql::int(id)], line_row())
+      use lines <- result::try(db(lines_reply))
       Ok(Some(StoredOrder { ..stored, lines }))
     }
   }
@@ -127,7 +129,8 @@ priv fn load_products(
     SELECT id, name, price_cents, stock
     FROM products
     WHERE id IN (SELECT value FROM json_each($1))"
-  use rows <- result::try(db(sql::query(connection, query, [sql::ints(ids)], product_row())))
+  let reply = sql::query(connection, query, [sql::ints(ids)], product_row())
+  use rows <- result::try(db(reply))
   Ok(list::fold(rows, map::new(), fn(found, product: Product) {
     map::insert(found, product.id, product)
   }))
@@ -146,7 +149,8 @@ priv fn load_codes(
         SELECT code, percent_off, cents_off, minimum_cents
         FROM discount_codes
         WHERE code = $1"
-      use found <- result::try(db(sql::query_one(connection, query, [sql::text(text)], code_row())))
+      let reply = sql::query_one(connection, query, [sql::text(text)], code_row())
+      use found <- result::try(db(reply))
       case found {
         None => Ok(map::new())
         Some(code) => Ok(map::insert(map::new(), code.code, code))
@@ -172,7 +176,8 @@ priv fn insert_order(
     sql::int(quote.shipping_cents),
     sql::int(quote.total_cents),
   ]
-  use found <- result::try(db(sql::query_one(connection, query, params, id_row())))
+  let reply = sql::query_one(connection, query, params, id_row())
+  use found <- result::try(db(reply))
   let assert Some(id) = found as "INSERT … RETURNING always returns the new row"
   Ok(id)
 }
@@ -197,10 +202,8 @@ priv fn save_line(
     sql::int(product.price_cents),
   ]
   use _ <- result::try(db(sql::execute(connection, insert, insert_params)))
-  use _ <- result::try(db(sql::execute(connection, take, [
-    sql::int(product.id),
-    sql::int(line.quantity),
-  ])))
+  let take_params = [sql::int(product.id), sql::int(line.quantity)]
+  use _ <- result::try(db(sql::execute(connection, take, take_params)))
   Ok(Nil)
 }
 

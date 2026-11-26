@@ -34,7 +34,8 @@ fn checksum(data: bytes::Bytes) -> U32 {
     case bytes::get(data, index) {
       Some(byte) => {
         let weight = option::unwrap_or(result_to_option(u32::from_int(index + 1)), 0)
-        step(u32::wrapping_add(sum, u32::wrapping_mul(u32::from_u8(byte), weight)), index + 1)
+        let term = u32::wrapping_mul(u32::from_u8(byte), weight)
+        step(u32::wrapping_add(sum, term), index + 1)
       }
       None => sum
     }
