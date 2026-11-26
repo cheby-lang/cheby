@@ -32,6 +32,12 @@ _Note:_ the reference implementation links with the `cc` found on `PATH` and ign
 
 `cheby check --fix` applies the sure fixes of the diagnostics to the package's own files and checks again ([§13.8.2](#1382-sure-fixes-and-cheby-check---fix)) (D-1945).
 
+`cheby check`, `cheby run` and `cheby test` take a single file in place of a package: `cheby check FILE`, `cheby run FILE [-- args]` and `cheby test FILE [FILTER]`, where `FILE` is a path that ends in `.cheby` (D-1949). The file is the only module of a package that has no `cheby.toml`. The package and the module are named `script`, the version is `0.0.0`, the targets are the default ones, and there are no dependencies, so the file imports the standard library alone. No `cheby.toml` is read, also when one is above the file. `cheby run FILE` runs the file's `main`, and `cheby test FILE` its `test` blocks, whose full names start with `script`. A diagnostic names the file by the path as it was given, and `cheby check --fix FILE` writes to the file. The warning for an unused package-visible item ([§13.8](#138-diagnostics-and-warnings)) is not reported, since a single file has no other module that could use one.
+
+A file under the `src/` directory of a package is a module of that package and is not taken alone, since its imports of the package's modules would not resolve: naming it is a tool error that names the package (D-1949).
+
+`cheby check -` and `cheby run -` read the source from standard input and show it as `<stdin>`. The program then finds its own standard input at its end. `cheby check --fix -` and `cheby test -` are tool errors (D-1949).
+
 `cheby explain` prints the long explanation of a diagnostic code such as `E0012`, with examples and fixes ([§13.8](#138-diagnostics-and-warnings)) (D-420).
 
 Every command takes a global `--color=auto|always|never` flag, which says whether diagnostics and other errors are colored ([§13.8](#138-diagnostics-and-warnings)) (D-467).

@@ -93,6 +93,7 @@ pub use cheby_mir::Profile;
 pub use cheby_package::{EXTENSION, is_valid_name, module_file, suggest_name};
 pub use cheby_package::{Kind, Target};
 pub use fix::{AppliedFix, apply_fixes};
+pub use test::prepare_test_file_cached;
 pub use test::{
     ModuleTests, PreparedTests, ReportStyle, TestCounts, TestOptions, TestOutcome, TestProgram,
     TestReport, TestResult, prepare_test, prepare_test_cached, test_std, test_std_in,
@@ -584,7 +585,7 @@ pub fn check(root: &Path) -> Result<CheckOutput, Error> {
 /// As [`check`], and a tool error "the package does not target `js`"
 /// when the manifest's `targets` lack the selected target (D-550).
 pub fn check_with(root: &Path, options: &CheckOptions) -> Result<CheckOutput, Error> {
-    check_inner(root, *options, None)
+    check_inner(Origin::Package(root), *options, None)
 }
 
 /// [`check_with`] through the build cache, as `cheby check` runs it: the
@@ -600,11 +601,38 @@ pub fn check_cached(
     options: &CheckOptions,
     cache: &Cache,
 ) -> Result<CheckOutput, Error> {
-    check_inner(root, *options, Some(cache))
+    check_inner(Origin::Package(root), *options, Some(cache))
+}
+
+/// [`check_cached`] for a single file (D-1949): the file is the one module
+/// of a package with a synthetic manifest.
+///
+/// # Errors
+///
+/// As [`check_with`], and an [`Error`] for a file that cannot be read.
+pub fn check_file_cached(
+    file: &SingleFile,
+    options: &CheckOptions,
+    cache: &Cache,
+) -> Result<CheckOutput, Error> {
+    check_inner(Origin::File(file), *options, Some(cache))
+}
+
+/// [`prepare_run_cached`] for a single file (D-1949), whose `main` runs.
+///
+/// # Errors
+///
+/// As [`prepare_run`], and an [`Error`] for a file that cannot be read.
+pub fn prepare_run_file_cached(
+    file: &SingleFile,
+    options: RunOptions,
+    cache: &Cache,
+) -> Result<Prepared, Error> {
+    prepare_run_inner(Origin::File(file), options, Some(cache))
 }
 
 fn check_inner(
-    root: &Path,
+    origin: Origin<'_>,
     options: CheckOptions,
     cache: Option<&Cache>,
 ) -> Result<CheckOutput, Error> {
@@ -612,7 +640,19 @@ fn check_inner(
         deny_warnings: options.deny_warnings,
         ..CheckOutput::default()
     };
-    let front = front_end_for(root, frontend::Mode::Check, options.target, &mut out, cache)?;
+    let front = front_end_for(
+        origin,
+        frontend::Mode::Check,
+        options.target,
+        &mut out,
+        cache,
+    )?;
+    if matches!(origin, Origin::File(_)) {
+        // W0005 is about uses elsewhere in a package, which a single file
+        // has none of: the language server leaves it out too (D-1371).
+        out.diagnostics
+            .retain(|d| d.code != codes::UNUSED_PACKAGE_ITEM);
+    }
     out.sources.sort(&mut out.diagnostics);
     // Every constant of the package is evaluated (D-459, D-534), but only
     // when the front end reported no error, so constant evaluation never
@@ -642,8 +682,8 @@ pub fn check_syntax(root: &Path) -> Result<CheckOutput, Error> {
 
 /// Phase A, then, without errors, the front end (D-452). Returns the
 /// checked package if the front end ran, with the package name.
-fn front_end(
-    root: &Path,
+fn front_end<'a>(
+    root: impl Into<Origin<'a>>,
     mode: frontend::Mode,
     out: &mut CheckOutput,
 ) -> Result<Option<(frontend::Frontend, String)>, Error> {
@@ -657,8 +697,8 @@ fn front_end(
 /// front end that skipped checking its hits again
 /// ([`frontend::Frontend::complete`]) reported an error, and is returned
 /// as `None`, so nothing lowers it.
-fn front_end_for(
-    root: &Path,
+fn front_end_for<'a>(
+    root: impl Into<Origin<'a>>,
     mode: frontend::Mode,
     target: Option<Target>,
     out: &mut CheckOutput,
@@ -682,8 +722,8 @@ fn front_end_for(
 /// build needs, every package module in release
 /// ([`crate::warm_keys`]); `None` checks every module, as a command that
 /// starts again after its build wanted a hit's body does.
-fn front_end_family(
-    root: &Path,
+fn front_end_family<'a>(
+    root: impl Into<Origin<'a>>,
     mode: frontend::Mode,
     family: cache::index::CommandFamily,
     target: Option<Target>,
@@ -691,8 +731,11 @@ fn front_end_family(
     cache: Option<&Cache>,
     warm: Option<(bool, Option<&str>, Profile)>,
 ) -> Result<Option<(frontend::Frontend, String)>, Error> {
+    let origin: Origin<'a> = root.into();
     let deny_warnings = out.deny_warnings;
     let index_key = cache.map(|cache| {
+        // A single file has an index of its own, under its own path.
+        let root = origin.key_path();
         let root = std::path::absolute(root).unwrap_or_else(|_| root.to_path_buf());
         cache::index::PackageIndex::key(&root, family, cache.store.build_id())
     });
@@ -746,7 +789,7 @@ fn front_end_family(
                 build,
                 dependencies: dependencies::are_cached(),
             });
-        match front_end_once(root, mode, target, out, use_)? {
+        match front_end_once(origin, mode, target, out, use_)? {
             Attempt::Done(result) => return Ok(result),
             Attempt::Again if lazy => attempt.restarted(),
             Attempt::Again => break,
@@ -770,7 +813,7 @@ enum Attempt {
 
 /// One run of [`front_end_family`].
 fn front_end_once(
-    root: &Path,
+    origin: Origin<'_>,
     mode: frontend::Mode,
     target: Option<Target>,
     out: &mut CheckOutput,
@@ -794,7 +837,18 @@ fn front_end_once(
                 .is_some_and(|entry| entry.source == hash)
         })
     };
-    let package = load_package_skipping(root, &mut out.sources, &mut out.diagnostics, &skip)?;
+    let root = origin.root();
+    let package = match origin {
+        Origin::Package(root) => {
+            load_package_skipping(root, &mut out.sources, &mut out.diagnostics, &skip)?
+        }
+        Origin::File(file) => Some(load_single(
+            file,
+            &mut out.sources,
+            &mut out.diagnostics,
+            &skip,
+        )?),
+    };
     let Some(mut package) = package else {
         return Ok(Attempt::Done(None));
     };
@@ -949,7 +1003,7 @@ pub enum RunResult {
 /// of the package, or names a module without `main`, and an [`Error`] for
 /// internal failures.
 pub fn prepare_run(root: &Path, options: RunOptions) -> Result<Prepared, Error> {
-    prepare_run_inner(root, options, None)
+    prepare_run_inner(Origin::Package(root), options, None)
 }
 
 /// [`prepare_run`] through the build cache, as `cheby run` runs it (D-955,
@@ -963,7 +1017,7 @@ pub fn prepare_run_cached(
     options: RunOptions,
     cache: &Cache,
 ) -> Result<Prepared, Error> {
-    prepare_run_inner(root, options, Some(cache))
+    prepare_run_inner(Origin::Package(root), options, Some(cache))
 }
 
 #[expect(
@@ -971,16 +1025,16 @@ pub fn prepare_run_cached(
     reason = "the public entry points' options, moved in as before D-1250's second attempt"
 )]
 fn prepare_run_inner(
-    root: &Path,
+    origin: Origin<'_>,
     options: RunOptions,
     cache: Option<&Cache>,
 ) -> Result<Prepared, Error> {
     // D-1250: a warm run checks only what its build needs; a build that
     // then wants a hit's body starts again with every module checked.
-    match prepare_run_once(root, &options, cache, Some(options.reuse_report)) {
+    match prepare_run_once(origin, &options, cache, Some(options.reuse_report)) {
         Err(Restart::Again(mark)) => {
             rollback_log(cache, mark);
-            prepare_run_once(root, &options, cache, None).map_err(Restart::into_error)
+            prepare_run_once(origin, &options, cache, None).map_err(Restart::into_error)
         }
         other => other.map_err(Restart::into_error),
     }
@@ -1035,7 +1089,7 @@ impl From<JitError> for Restart {
 /// One attempt of [`prepare_run_inner`], `warm` as
 /// [`front_end_family`]'s.
 fn prepare_run_once(
-    root: &Path,
+    origin: Origin<'_>,
     options: &RunOptions,
     cache: Option<&Cache>,
     warm: Option<bool>,
@@ -1047,7 +1101,7 @@ fn prepare_run_once(
         ..CheckOutput::default()
     };
     let front = front_end_family(
-        root,
+        origin,
         frontend::Mode::Build,
         cache::index::CommandFamily::Run,
         None,
@@ -1287,6 +1341,99 @@ fn units_for_dump(root: &Path, out: &mut CheckOutput) -> Result<Vec<cheby_mir::M
 fn report_back_end(out: &mut CheckOutput, mut diagnostics: Vec<Diagnostic>) {
     out.sources.sort(&mut diagnostics);
     out.diagnostics.extend(diagnostics);
+}
+
+/// One `.cheby` file that `cheby check`, `cheby run` and `cheby test` take
+/// in place of a package (D-1949): the only module of a package with a
+/// synthetic manifest, as the language server's single-file mode has it
+/// (D-1371). It imports std alone.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SingleFile {
+    /// The file, an absolute path.
+    pub path: PathBuf,
+    /// How diagnostics name it: the path as the user wrote it, with `/`,
+    /// or `<stdin>`.
+    pub display: String,
+}
+
+/// The name of a single file's synthetic package and of its one module
+/// (D-1477): `env::program_name()` while it runs, and the module path in
+/// its tests' names.
+pub const SINGLE_PACKAGE: &str = "script";
+
+/// What a command works on: a package, by its root, or a single file.
+#[derive(Clone, Copy, Debug)]
+pub enum Origin<'a> {
+    Package(&'a Path),
+    File(&'a SingleFile),
+}
+
+impl<'a> From<&'a Path> for Origin<'a> {
+    fn from(root: &'a Path) -> Self {
+        Self::Package(root)
+    }
+}
+
+impl<'a> From<&'a PathBuf> for Origin<'a> {
+    fn from(root: &'a PathBuf) -> Self {
+        Self::Package(root)
+    }
+}
+
+impl<'a> Origin<'a> {
+    /// The package root, or the directory of a single file.
+    fn root(self) -> &'a Path {
+        match self {
+            Self::Package(root) => root,
+            Self::File(file) => file.path.parent().unwrap_or_else(|| Path::new("")),
+        }
+    }
+
+    /// The path that names the origin in the build cache's package index.
+    fn key_path(self) -> &'a Path {
+        match self {
+            Self::Package(root) => root,
+            Self::File(file) => &file.path,
+        }
+    }
+}
+
+/// The package of a single file (D-1949): the synthetic manifest, and the
+/// file as the root module, read and parsed as a package's module is.
+fn load_single(
+    file: &SingleFile,
+    sources: &mut SourceMap,
+    diagnostics: &mut Vec<Diagnostic>,
+    skip: &(dyn Fn(&ModulePath, cache::Hash128) -> bool + Sync),
+) -> Result<Package, Error> {
+    let manifest = session::synthetic_manifest(SINGLE_PACKAGE, sources, diagnostics)?;
+    let root = file.path.parent().unwrap_or_else(|| Path::new(""));
+    let name = file
+        .path
+        .file_name()
+        .ok_or_else(|| Error::new(format!("`{}` is not a file", file.display)))?;
+    let module = cheby_package::ModuleFile {
+        path: ModulePath::root(SINGLE_PACKAGE),
+        file: PathBuf::from(name),
+        display: file.display.clone(),
+    };
+    let modules = frontend::read_modules(root, vec![module], sources, diagnostics, skip)?;
+    Ok(Package {
+        root: root.to_path_buf(),
+        manifest,
+        modules,
+        dependencies: dependencies::Dependencies::default(),
+    })
+}
+
+/// The name of the package at `root`, when its manifest can be read.
+#[must_use]
+pub fn package_name(root: &Path) -> Option<String> {
+    let mut sources = SourceMap::new();
+    Manifest::load(root, &mut sources, &mut Vec::new())
+        .ok()
+        .flatten()
+        .map(|manifest| manifest.name)
 }
 
 /// Reads the manifest, discovers the modules and parses each one. Every

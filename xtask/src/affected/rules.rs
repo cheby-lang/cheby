@@ -54,6 +54,7 @@ pub(crate) const CLI_TESTS: &[(&str, &[&str])] = &[
     ("repl_backtrace", &["cheby_repl"]),
     ("repl_runtime", &["cheby_repl"]),
     ("run", TOOLCHAIN),
+    ("single", TOOLCHAIN),
     ("sql_fixture", TOOLCHAIN),
     ("std_cache", TOOLCHAIN),
     ("temp_root", TOOLCHAIN),

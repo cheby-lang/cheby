@@ -3337,3 +3337,16 @@ Open:
 - Nothing compares what `affected` planned with what CI then failed, so a missing rule shows only when CI catches what the plan left out.
 
 Spec: none. No new diagnostic code. Tree-sitter: no grammar change.
+
+## 2026-11-26: Single files
+
+Goal: check, run and test one file without making a package around it.
+
+- **D-1949 Single files in `cheby check`, `cheby run` and `cheby test`**: The three commands take a path that ends in `.cheby` where `check` took nothing, `run` its module path and `test` its filter, which then follows the file. The file is the only module of a package with the synthetic manifest of D-1371, named `script` (D-1477), with no dependencies, so it imports std alone. No `cheby.toml` is read, also when one is above the file. `run` runs its `main` and `test` its `test` blocks, constants are evaluated as in a package, and the build cache is used, with a package index under the file's own path (D-962). Diagnostics name the file by the path as given, `check --fix` writes to it (D-1945), and W0005 is left out, as in the language server (D-1371). A file under the `src/` of a package is a tool error that names the package. `check -` and `run -` read the source from standard input, shown as `<stdin>` as `cheby fmt -` shows it (D-1146). The program then has its standard input at its end, `check --fix -` is a tool error, and `test` takes no `-`. `cheby build` takes no file. Why: trying one snippet needed a directory, a `cheby.toml` and a `src/main.cheby`, which every probe of an agent paid, while the language server already checked such a file. D-289 rejected a `cheby check <file>` mode because the UI tests did not need one, and they still do not use it: this mode is for people and agents. The user chose the three commands over `check` and `run` alone and over adding `build`, the path where the module path or the filter goes over a `--file` flag, and an error for a module of a package over checking it alone, whose imports would fail, and over checking its package, which gives one argument two meanings. Refines D-289. Extends D-1371.
+
+Open:
+
+- `cheby build FILE` and `cheby test -` do not exist. An executable from a single file needs a rule for where it is written (D-1949).
+- A single file imports std alone: it cannot import a file next to it or a dependency (D-1949).
+
+Spec: §13.1. No new diagnostic code. Tree-sitter: no grammar change.

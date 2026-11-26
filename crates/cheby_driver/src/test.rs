@@ -441,7 +441,7 @@ pub(crate) fn on_native(front: &Frontend, test: &thir::TestDef) -> bool {
 /// the package (D-597), and an [`Error`] for internal
 /// failures.
 pub fn prepare_test(root: &Path, options: &TestOptions) -> Result<PreparedTests, Error> {
-    prepare_test_inner(root, options, None)
+    prepare_test_inner(crate::Origin::Package(root), options, None)
 }
 
 /// [`prepare_test`] through the build cache, as `cheby test` runs it
@@ -456,20 +456,34 @@ pub fn prepare_test_cached(
     options: &TestOptions,
     cache: &crate::Cache,
 ) -> Result<PreparedTests, Error> {
-    prepare_test_inner(root, options, Some(cache))
+    prepare_test_inner(crate::Origin::Package(root), options, Some(cache))
+}
+
+/// [`prepare_test_cached`] for a single file (D-1949): the file's own
+/// `test` blocks.
+///
+/// # Errors
+///
+/// As [`prepare_test`], and an [`Error`] for a file that cannot be read.
+pub fn prepare_test_file_cached(
+    file: &crate::SingleFile,
+    options: &TestOptions,
+    cache: &crate::Cache,
+) -> Result<PreparedTests, Error> {
+    prepare_test_inner(crate::Origin::File(file), options, Some(cache))
 }
 
 fn prepare_test_inner(
-    root: &Path,
+    origin: crate::Origin<'_>,
     options: &TestOptions,
     cache: Option<&crate::Cache>,
 ) -> Result<PreparedTests, Error> {
     // D-1250: a warm `cheby test` checks only what its build needs; a build
     // that then wants a hit's body starts again with every module checked.
-    match prepare_test_once(root, options, cache, Some(options.reuse_report)) {
+    match prepare_test_once(origin, options, cache, Some(options.reuse_report)) {
         Err(crate::Restart::Again(mark)) => {
             crate::rollback_log(cache, mark);
-            prepare_test_once(root, options, cache, None).map_err(crate::Restart::into_error)
+            prepare_test_once(origin, options, cache, None).map_err(crate::Restart::into_error)
         }
         other => other.map_err(crate::Restart::into_error),
     }
@@ -478,7 +492,7 @@ fn prepare_test_inner(
 /// One attempt of [`prepare_test_inner`], `warm` as
 /// `crate::front_end_family`'s.
 fn prepare_test_once(
-    root: &Path,
+    origin: crate::Origin<'_>,
     options: &TestOptions,
     cache: Option<&crate::Cache>,
     warm: Option<bool>,
@@ -489,7 +503,7 @@ fn prepare_test_once(
         ..CheckOutput::default()
     };
     let front = crate::front_end_family(
-        root,
+        origin,
         frontend::Mode::Build,
         crate::cache::index::CommandFamily::Test,
         None,

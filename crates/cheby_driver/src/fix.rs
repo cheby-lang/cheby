@@ -10,11 +10,11 @@
 //! whose text on disk is no longer the text that was checked.
 
 use std::collections::BTreeMap;
-use std::path::Path;
+use std::path::PathBuf;
 
 use cheby_diag::{Code, Diagnostic, FileId, Help, SourceMap, TextRange};
 
-use crate::{CheckOutput, Error};
+use crate::{CheckOutput, Error, Origin};
 
 /// One help that [`apply_fixes`] applied.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -39,8 +39,12 @@ pub struct AppliedFix {
 ///
 /// An [`Error`] if a file cannot be read or written; files written before
 /// it keep their fixes.
-pub fn apply_fixes(root: &Path, output: &CheckOutput) -> Result<Vec<AppliedFix>, Error> {
-    let taken = select(&output.diagnostics, &output.sources);
+pub fn apply_fixes<'a>(
+    origin: impl Into<Origin<'a>>,
+    output: &CheckOutput,
+) -> Result<Vec<AppliedFix>, Error> {
+    let origin = origin.into();
+    let taken = select(&output.diagnostics, &output.sources, origin);
     let mut by_file: BTreeMap<FileId, Vec<(TextRange, &str)>> = BTreeMap::new();
     for &(_, help) in &taken {
         for edit in &help.edits {
@@ -55,7 +59,9 @@ pub fn apply_fixes(root: &Path, output: &CheckOutput) -> Result<Vec<AppliedFix>,
         let Some(source) = output.sources.file(file) else {
             continue;
         };
-        let path = root.join(source.path());
+        let Some(path) = own_file(origin, source.path()) else {
+            continue;
+        };
         let on_disk =
             std::fs::read(&path).map_err(|e| Error::new(format!("{}: {e}", source.path())))?;
         // The file changed since the check read it, or is not UTF-8, so
@@ -101,6 +107,7 @@ pub fn apply_fixes(root: &Path, output: &CheckOutput) -> Result<Vec<AppliedFix>,
 fn select<'a>(
     diagnostics: &'a [Diagnostic],
     sources: &SourceMap,
+    origin: Origin<'_>,
 ) -> Vec<(&'a Diagnostic, &'a Help)> {
     let mut taken: Vec<(&Diagnostic, &Help)> = Vec::new();
     let mut ranges: Vec<(FileId, TextRange)> = Vec::new();
@@ -115,7 +122,7 @@ fn select<'a>(
         let own = help.edits.iter().all(|edit| {
             sources
                 .file(edit.span.file)
-                .is_some_and(|file| is_own(file.path()))
+                .is_some_and(|file| own_file(origin, file.path()).is_some())
         });
         let mine: Vec<(FileId, TextRange)> = help
             .edits
@@ -136,12 +143,16 @@ fn select<'a>(
     taken
 }
 
-/// Whether a file shown as `path` is one of the package itself: its sources
-/// are shown from the package root, under `src/`, while a file of the
-/// standard library is shown under `std/` and one of a dependency after its
-/// package and version (D-421, D-450, D-468).
-fn is_own(path: &str) -> bool {
-    path.starts_with("src/")
+/// The file on disk of a source shown as `path`, when it is one of the
+/// package itself: its sources are shown from the package root, under
+/// `src/`, while a file of the standard library is shown under `std/` and
+/// one of a dependency after its package and version (D-421, D-450, D-468).
+/// For a single file (D-1949), the file itself.
+fn own_file(origin: Origin<'_>, path: &str) -> Option<PathBuf> {
+    match origin {
+        Origin::Package(root) => path.starts_with("src/").then(|| root.join(path)),
+        Origin::File(file) => (path == file.display).then(|| file.path.clone()),
+    }
 }
 
 /// Whether two edits touch the same text: ranges of one file that share a

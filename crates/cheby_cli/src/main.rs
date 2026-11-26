@@ -47,6 +47,7 @@ use cheby_doc as _; // M5
 mod build_id;
 mod color;
 mod new;
+mod single;
 
 use std::io::{IsTerminal as _, Write as _};
 use std::num::NonZeroUsize;
@@ -125,6 +126,10 @@ enum Command {
     },
     /// Type-check the package without producing artifacts (D-282)
     Check {
+        /// A `.cheby` file to check without a package, or `-` for the source on standard
+        /// input (D-1949)
+        #[arg(value_name = "FILE")]
+        file: Option<String>,
         /// Check the code as it runs on this target only (D-550)
         #[arg(long, value_enum)]
         target: Option<Target>,
@@ -156,7 +161,10 @@ enum Command {
     },
     /// Compile with the JIT and run a module's `main` (D-137)
     Run {
-        /// Module path, such as `my_app::tools::migrate`; defaults to the root module
+        /// Module path, such as `my_app::tools::migrate`; defaults to the root module. A
+        /// `.cheby` file, or `-` for the source on standard input, runs without a package
+        /// (D-1949)
+        #[arg(value_name = "MODULE_PATH|FILE")]
         module_path: Option<String>,
         /// Treat every warning as an error and run nothing after one (D-549)
         #[arg(long)]
@@ -179,8 +187,14 @@ enum Command {
     },
     /// Run `test` blocks (§13.6, D-541)
     Test {
-        /// Only run tests whose full name, `<module path> "<test name>"`, contains this text
+        /// Only run tests whose full name, `<module path> "<test name>"`, contains this text.
+        /// A `.cheby` file runs its own tests without a package, and the filter may follow it
+        /// (D-1949)
+        #[arg(value_name = "FILTER|FILE")]
         filter: Option<String>,
+        /// The filter, after a file
+        #[arg(value_name = "FILTER")]
+        file_filter: Option<String>,
         /// Only run the tests of this module and its submodules, such as `my_app::util`
         #[arg(long, value_name = "PATH")]
         module: Option<String>,
@@ -366,11 +380,13 @@ fn run_command() -> ExitCode {
     match cli.command {
         Command::New { name, library } => new(out, &name, kind(library)),
         Command::Check {
+            file,
             target,
             deny_warnings,
             fix,
         } => check(
             out,
+            file.as_deref(),
             cheby_driver::CheckOptions {
                 target: target.map(Into::into),
                 deny_warnings,
@@ -399,16 +415,24 @@ fn run_command() -> ExitCode {
             reuse_report,
             release,
             args,
-        } => run(
-            out,
-            cheby_driver::RunOptions {
-                module_path,
-                args,
-                deny_warnings,
-                reuse_report,
-                profile: profile(release),
-            },
-        ),
+        } => {
+            // A file stands where the module path does (D-1949).
+            let (file, module_path) = match module_path {
+                Some(arg) if single::names_file(&arg) => (Some(arg), None),
+                other => (None, other),
+            };
+            run(
+                out,
+                file.as_deref(),
+                cheby_driver::RunOptions {
+                    module_path,
+                    args,
+                    deny_warnings,
+                    reuse_report,
+                    profile: profile(release),
+                },
+            )
+        }
         Command::Repl { deny_warnings } => cheby_repl::run_cached(
             &cheby_repl::ReplOptions { deny_warnings },
             colors,
@@ -416,25 +440,41 @@ fn run_command() -> ExitCode {
         ),
         Command::Test {
             filter,
+            file_filter,
             module,
             deny_warnings,
             reuse_report,
             release,
             report_failures_only,
-        } => test(
-            out,
-            &cheby_driver::TestOptions {
-                filter,
-                module,
-                deny_warnings,
-                reuse_report,
-                profile: profile(release),
-            },
-            cheby_driver::ReportStyle {
-                json: cli.format == Format::Json,
-                failures_only: report_failures_only,
-            },
-        ),
+        } => {
+            // A file stands where the filter does, and the filter after it
+            // (D-1949).
+            let (file, filter) = match (filter, file_filter) {
+                (Some(arg), filter) if single::names_file(&arg) => (Some(arg), filter),
+                (filter, None) => (None, filter),
+                (_, Some(_)) => {
+                    return out.error(
+                        "`cheby test` takes one filter; a first argument is a file only when it \
+                         ends in `.cheby`",
+                    );
+                }
+            };
+            test(
+                out,
+                file.as_deref(),
+                &cheby_driver::TestOptions {
+                    filter,
+                    module,
+                    deny_warnings,
+                    reuse_report,
+                    profile: profile(release),
+                },
+                cheby_driver::ReportStyle {
+                    json: cli.format == Format::Json,
+                    failures_only: report_failures_only,
+                },
+            )
+        }
         Command::Fmt { check, paths } => fmt(out, check, &paths),
         // The flag only names the one transport there is.
         Command::Lsp { .. } => cheby_lsp::run(cheby_lsp::ServerOptions {
@@ -568,6 +608,17 @@ impl Out {
     }
 }
 
+/// What `cheby <command>` works on: the single file `file` names
+/// (D-1949), or the package that holds the current directory.
+fn work(out: Out, file: Option<&str>, command: &str) -> Result<single::Work, ExitCode> {
+    match file {
+        Some(arg) => single::load(arg, command)
+            .map(single::Work::File)
+            .map_err(|message| out.error(&message)),
+        None => package_root(out).map(single::Work::Package),
+    }
+}
+
 /// The root of the package that holds the current directory.
 fn package_root(out: Out) -> Result<std::path::PathBuf, ExitCode> {
     let cwd = std::env::current_dir()
@@ -666,12 +717,15 @@ fn finish_cache(out: Out, cache: cheby_driver::Cache, trim: bool, code: ExitCode
 /// (D-1945).
 const FIX_ROUNDS: u32 = 4;
 
-fn check(out: Out, options: cheby_driver::CheckOptions, fix: bool) -> ExitCode {
+fn check(out: Out, file: Option<&str>, options: cheby_driver::CheckOptions, fix: bool) -> ExitCode {
     let _phases = cheby_driver::phases::command("check");
-    let root = match package_root(out) {
-        Ok(root) => root,
+    let work = match work(out, file, "check") {
+        Ok(work) => work,
         Err(code) => return code,
     };
+    if fix && work.is_stdin() {
+        return out.error("`--fix` has no file to write to when the source is on standard input");
+    }
     let cache = match open_cache(out) {
         Ok(cache) => cache,
         Err(code) => return code,
@@ -681,12 +735,18 @@ fn check(out: Out, options: cheby_driver::CheckOptions, fix: bool) -> ExitCode {
     // diagnostics (D-452); the last check's diagnostics are the output.
     let mut rounds: u32 = 0;
     let code = loop {
-        let result = match cheby_driver::check_cached(&root, &options, &cache) {
+        let checked = match &work {
+            single::Work::Package(root) => cheby_driver::check_cached(root, &options, &cache),
+            single::Work::File(loaded) => {
+                cheby_driver::check_file_cached(&loaded.file, &options, &cache)
+            }
+        };
+        let result = match checked {
             Ok(result) => result,
             Err(e) => break out.error(e.message()),
         };
         if fix && rounds < FIX_ROUNDS {
-            match cheby_driver::apply_fixes(&root, &result) {
+            match cheby_driver::apply_fixes(work.origin(), &result) {
                 Ok(applied) if applied.is_empty() => {}
                 Ok(applied) => {
                     out.fixes(&applied);
@@ -713,17 +773,22 @@ fn check(out: Out, options: cheby_driver::CheckOptions, fix: bool) -> ExitCode {
 /// errors (D-549). The build reads and writes the cache's front records
 /// (D-955); the cache is closed before the program starts, which may end
 /// the process itself, and `cheby run` never trims (D-961).
-fn run(out: Out, options: cheby_driver::RunOptions) -> ExitCode {
+fn run(out: Out, file: Option<&str>, options: cheby_driver::RunOptions) -> ExitCode {
     let _phases = cheby_driver::phases::command("run");
-    let root = match package_root(out) {
-        Ok(root) => root,
+    let work = match work(out, file, "run") {
+        Ok(work) => work,
         Err(code) => return code,
     };
     let cache = match open_cache(out) {
         Ok(cache) => cache,
         Err(code) => return code,
     };
-    let prepared = cheby_driver::prepare_run_cached(&root, options, &cache);
+    let prepared = match &work {
+        single::Work::Package(root) => cheby_driver::prepare_run_cached(root, options, &cache),
+        single::Work::File(loaded) => {
+            cheby_driver::prepare_run_file_cached(&loaded.file, options, &cache)
+        }
+    };
     let mut program = match prepared {
         Ok(cheby_driver::Prepared::Ready(program)) => program,
         Ok(cheby_driver::Prepared::CompileFailed(result)) => {
@@ -769,19 +834,26 @@ fn run(out: Out, options: cheby_driver::RunOptions) -> ExitCode {
 /// before any test runs.
 fn test(
     out: Out,
+    file: Option<&str>,
     options: &cheby_driver::TestOptions,
     report: cheby_driver::ReportStyle,
 ) -> ExitCode {
     let _phases = cheby_driver::phases::command("test");
-    let root = match package_root(out) {
-        Ok(root) => root,
+    let work = match work(out, file, "test") {
+        Ok(work) => work,
         Err(code) => return code,
     };
     let cache = match open_cache(out) {
         Ok(cache) => cache,
         Err(code) => return code,
     };
-    let mut program = match cheby_driver::prepare_test_cached(&root, options, &cache) {
+    let prepared = match &work {
+        single::Work::Package(root) => cheby_driver::prepare_test_cached(root, options, &cache),
+        single::Work::File(loaded) => {
+            cheby_driver::prepare_test_file_cached(&loaded.file, options, &cache)
+        }
+    };
+    let mut program = match prepared {
         Ok(cheby_driver::PreparedTests::Ready(program)) => program,
         Ok(cheby_driver::PreparedTests::CompileFailed(result)) => {
             out.diagnostics(&result);
@@ -1295,6 +1367,7 @@ mod tests {
         assert!(matches!(
             cli.command,
             Command::Check {
+                file: None,
                 target: Some(Target::Js),
                 deny_warnings: true,
                 fix: false,
