@@ -14,6 +14,12 @@
 //! and deletes it. The command exits with nextest's status. The variables
 //! `cargo run` sets for `xtask`'s own package are removed first, so the
 //! nested cargo reuses the build a plain `cargo` made.
+//!
+//! Before nextest, the command builds the runtime archive
+//! `libcheby_rt_exe.a` in the run's profile and for its target (D-1950):
+//! `cheby build` links the archive next to `cheby` (D-929), nextest builds
+//! the workspace's tests but not this static library, and an archive of
+//! older runtime sources fails every test that builds an executable.
 
 use std::path::Path;
 use std::process::{Command, ExitCode, ExitStatus};
@@ -49,6 +55,7 @@ pub(crate) fn nextest(
     args: &[String],
     envs: &[(&str, &str)],
 ) -> Result<ExitStatus, String> {
+    build_archive(root, args)?;
     // Fresh and deleted on drop, or the developer's kept directory.
     let cache = HarnessCache::create("test")?;
     let verdicts = FreshDir::create("cheby-test-verdicts")?;
@@ -72,6 +79,55 @@ pub(crate) fn nextest(
     Ok(status)
 }
 
+/// Builds the runtime archive where the tests of this run look for it
+/// (D-1950): with the profile and the target that `args`, nextest's
+/// arguments, select.
+fn build_archive(root: &Path, args: &[String]) -> Result<(), String> {
+    let cargo = std::env::var("CARGO").unwrap_or_else(|_| "cargo".to_owned());
+    let mut cmd = Command::new(cargo);
+    remove_package_variables(&mut cmd);
+    let status = cmd
+        .current_dir(root)
+        .args(["build", "--locked", "--package", "cheby_rt_exe"])
+        .args(build_arguments(args))
+        .status()
+        .map_err(|e| format!("cannot run cargo: {e}"))?;
+    if status.success() {
+        Ok(())
+    } else {
+        Err("cannot build the runtime archive (`cargo build -p cheby_rt_exe`)".to_owned())
+    }
+}
+
+/// The arguments of `cargo build` that put its output where `cargo nextest
+/// run` with `args` puts its own: the profile, the target and the target
+/// directory. nextest names a cargo profile `--cargo-profile`, and what
+/// follows `--` goes to the test binaries.
+fn build_arguments(args: &[String]) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut args = args.iter().take_while(|arg| *arg != "--");
+    while let Some(arg) = args.next() {
+        let (flag, value) = match arg.split_once('=') {
+            Some((flag, value)) => (flag, Some(value.to_owned())),
+            None => (arg.as_str(), None),
+        };
+        let build_flag = match flag {
+            "--release" | "-r" => {
+                out.push("--release".to_owned());
+                continue;
+            }
+            "--cargo-profile" => "--profile",
+            "--target" => "--target",
+            "--target-dir" => "--target-dir",
+            _ => continue,
+        };
+        if let Some(value) = value.or_else(|| args.next().cloned()) {
+            out.extend([build_flag.to_owned(), value]);
+        }
+    }
+    out
+}
+
 /// Removes the variables `cargo run` sets for `xtask`'s own package
 /// (`CARGO_MANIFEST_DIR`, `CARGO_PKG_NAME` and the like) from `cmd`'s
 /// environment. Build scripts such as `ring`'s declare
@@ -92,5 +148,33 @@ fn remove_package_variables(cmd: &mut Command) {
         if key.starts_with("CARGO_PKG_") || EXACT.contains(&key) {
             cmd.env_remove(key);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The archive is built with the profile and the target of the test
+    /// run, and nextest's other arguments are not cargo build's.
+    #[test]
+    fn the_archive_follows_the_runs_profile_and_target() {
+        let of = |args: &[&str]| {
+            let args: Vec<String> = args.iter().map(|&arg| arg.to_owned()).collect();
+            build_arguments(&args).join(" ")
+        };
+        assert_eq!(of(&["-E", "package(xtask)", "--no-fail-fast"]), "");
+        assert_eq!(of(&["--release", "-E", "test(x)"]), "--release");
+        assert_eq!(of(&["-r"]), "--release");
+        assert_eq!(
+            of(&["--cargo-profile", "bench", "--target=aarch64-apple-darwin"]),
+            "--profile bench --target aarch64-apple-darwin"
+        );
+        assert_eq!(
+            of(&["--target-dir", "out", "--profile", "ci"]),
+            "--target-dir out"
+        );
+        // What follows `--` belongs to the test binaries.
+        assert_eq!(of(&["--", "--release"]), "");
     }
 }

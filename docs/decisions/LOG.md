@@ -3350,3 +3350,16 @@ Open:
 - A single file imports std alone: it cannot import a file next to it or a dependency (D-1949).
 
 Spec: §13.1. No new diagnostic code. Tree-sitter: no grammar change.
+
+## 2026-11-26: Stale artifacts
+
+Goal: stop a stale file or a missing tool from failing tests for a reason that is not the change.
+
+- **D-1950 `cargo xtask test` builds the runtime archive, and `cargo xtask doctor`**: `cargo xtask test`, and so `cargo xtask bless`, builds `cheby_rt_exe` with `cargo build --locked` before nextest, with the profile, the target and the target directory that the run's arguments select. `cargo xtask affected` no longer plans that build as a step of its own. `cargo xtask doctor` reports what is stale or missing and changes nothing. It checks each tool of CI's list, cargo-nextest, typos, taplo, cargo-deny, actionlint and tree-sitter's CLI, for its installed version against the one `ci.yml` pins, which it reads from the workflow, and looks for a C compiler. It counts the entries of `target/debug/deps`, a problem past 100,000, and on macOS notes a `RUSTFLAGS` or `CARGO_ENCODED_RUSTFLAGS` variable, which replaces the flag of `.cargo/config.toml`. It compares `tests/tree-sitter-cheby.rev` with the HEAD of `../tree-sitter-cheby` and the `rev` of `../zed-cheby/extension.toml`, when those are there. It counts the worktrees whose directory is gone and the branches named `worktree-agent-*`, and it says when the runtime archive is missing or older than the runtime's sources. A line is `ok`, `note` or `problem`, with the command that fixes it below, and the exit status is 1 when there is a problem: no cargo-nextest, no pin file, or the directory past its limit. Why: nextest builds the tests and `cheby`, but not the static library that `cheby build` links (D-929), so after a change to the runtime about 90 tests failed on an archive of older sources until someone built it by hand, while CI had a step of its own for it. The other traps had each cost a session: three million object files that made a one-line compile take 28 s, and a grammar pin that three repositories share. The user chose building before every run over a check that stops, a report over a `--fix`, since deleting from `target` or pruning worktrees can hit another session, and all four groups of checks. CI's own step for the archive stays. Refines D-1948.
+
+Open:
+
+- A plain `cargo nextest run` still does not build the archive; only `cargo xtask test` does (D-1950).
+- `cargo xtask doctor` does not look at the size of `target` or of `cheby`'s build cache.
+
+Spec: none. No new diagnostic code. Tree-sitter: no grammar change.

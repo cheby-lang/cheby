@@ -515,6 +515,7 @@ Logged in [`../decisions/LOG.md`](../decisions/LOG.md#2026-10-04-implementation-
 | D-1947    | `cheby doc <path>`: signatures and doc comments of std, the package and its dependencies            |
 | D-1948    | `cargo xtask affected`: the checks of CI that changed files can fail, and `--run`                   |
 | D-1949    | `cheby check`, `run` and `test` take a single `.cheby` file, and `check` and `run` take `-`         |
+| D-1950    | `cargo xtask test` builds the runtime archive first; `cargo xtask doctor` reports stale things      |
 
 ## Open questions
 

@@ -1,8 +1,10 @@
 //! Developer commands (docs/plan/m0-foundation.md, task 0.10):
 //!
-//! - `test`: runs every Rust test under cargo-nextest with one shared
-//!   build cache and prints the harnesses' pending summary (D-1553,
-//!   D-1554, D-1556; [`mod@test`]).
+//! - `test`: builds the runtime archive, then runs every Rust test under
+//!   cargo-nextest with one shared build cache and prints the harnesses'
+//!   pending summary (D-1553, D-1554, D-1556, D-1950; [`mod@test`]).
+//! - `doctor`: reports what is stale or missing in the checkout and on the
+//!   machine, and changes nothing (D-1950; [`doctor`]).
 //! - `affected`: prints the checks of CI that the changed files can fail,
 //!   as commands, and runs them with `--run` (D-1948; [`affected`]).
 //! - `bless`: rewrites the goldens of examples, UI tests and the language
@@ -67,6 +69,7 @@ mod cache;
 mod cross_check;
 mod decisions;
 mod determinism;
+mod doctor;
 mod examples;
 mod junit;
 mod native_libs;
@@ -147,6 +150,9 @@ enum Cmd {
     /// Read, number and check the decision log, and number ADRs (D-1940,
     /// D-1943)
     Decisions(decisions::Args),
+    /// Report what is stale or missing: tools, `target/debug/deps`, the grammar's pin,
+    /// worktrees and the runtime archive (D-1950)
+    Doctor,
     /// Parse examples and UI tests with tree-sitter-cheby at the pinned
     /// commit and with the compiler parser, and compare
     CrossCheck(cross_check::Args),
@@ -204,6 +210,7 @@ fn main() -> ExitCode {
         Cmd::CheckNativeLibs => native_libs::run(&root),
         Cmd::Coverage => coverage(&root),
         Cmd::Decisions(args) => decisions::run(&root, &args),
+        Cmd::Doctor => doctor::run(&root),
         Cmd::CrossCheck(args) => cross_check::run(&root, &args),
         Cmd::TestStd { filter, release } => test_std(filter.as_deref(), release),
         Cmd::BenchCompile(args) => bench::run(&root, &args),

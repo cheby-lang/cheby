@@ -149,7 +149,6 @@ pub(crate) fn std_importers(sources: &BTreeMap<String, String>, module: &str) ->
 pub(crate) enum Check {
     RustFmt,
     Clippy,
-    RuntimeArchive,
     Tests,
     TestStd,
     Examples,
@@ -339,7 +338,6 @@ impl Plan {
                 Check::ChebyFmt => step.args.extend(self.cheby_files.iter().cloned()),
                 Check::Rustdoc => step.env.push(("RUSTDOCFLAGS", "-D warnings")),
                 Check::RustFmt
-                | Check::RuntimeArchive
                 | Check::TestStd
                 | Check::Examples
                 | Check::Parsers
@@ -365,7 +363,6 @@ impl Check {
             Self::Actionlint => "actionlint",
             Self::RustFmt
             | Self::Clippy
-            | Self::RuntimeArchive
             | Self::Tests
             | Self::TestStd
             | Self::Examples
@@ -384,7 +381,6 @@ impl Check {
         match self {
             Self::RustFmt => &["fmt", "--all", "--check"],
             Self::Clippy => &["clippy", "--locked", "--all-targets"],
-            Self::RuntimeArchive => &["build", "--locked", "-p", "cheby_rt_exe"],
             Self::Tests => &["xtask", "test"],
             Self::TestStd => &["xtask", "test-std"],
             Self::Examples => &["xtask", "check-examples"],
@@ -536,7 +532,7 @@ impl Rules<'_> {
         ] {
             plan.ask_whole(check, path);
         }
-        for check in [Check::RuntimeArchive, Check::Examples, Check::Rustdoc] {
+        for check in [Check::Examples, Check::Rustdoc] {
             plan.ask(check, path);
         }
         if path.starts_with("Cargo.") {
@@ -585,10 +581,6 @@ impl Rules<'_> {
         }
         if toolchain.contains(name) || name == "cheby_cli" {
             plan.ask(Check::Examples, path);
-        }
-        if matches!(name, "cheby_runtime" | "cheby_rt_exe") {
-            // `cheby build` links the archive, which the tests do not build.
-            plan.ask(Check::RuntimeArchive, path);
         }
         if name == "cheby_syntax" {
             plan.ask(Check::Parsers, path);
@@ -937,22 +929,23 @@ mod tests {
         ] {
             assert!(syntax.why.contains_key(&check), "{check:?}");
         }
-        assert!(!syntax.why.contains_key(&Check::RuntimeArchive));
         let shown: Vec<String> = syntax.steps().iter().map(Step::shown).collect();
         assert!(shown.contains(&"cargo xtask test-std".to_owned()));
         assert!(shown.contains(&"cargo xtask check-determinism".to_owned()));
     }
 
+    /// The runtime's archive package runs the binaries that link it. The
+    /// archive itself needs no step: `cargo xtask test` builds it (D-1950).
     #[test]
-    fn the_runtime_builds_its_archive_first() {
+    fn the_runtime_archive_runs_what_links_it() {
         let shown = commands(&["crates/cheby_rt_exe/src/lib.rs"]);
-        assert_eq!(shown[2], "cargo build --locked -p cheby_rt_exe");
         assert!(
-            shown[3].contains("binary_id(cheby_cli::build)"),
+            shown[2].contains("binary_id(cheby_cli::build)"),
             "{}",
-            shown[3]
+            shown[2]
         );
-        assert!(!shown[3].contains("cheby_cli::fmt"), "{}", shown[3]);
+        assert!(!shown[2].contains("cheby_cli::fmt"), "{}", shown[2]);
+        assert!(shown.iter().all(|command| !command.contains("cargo build")));
     }
 
     /// One of `cheby_cli`'s test files runs its binary alone, and its
