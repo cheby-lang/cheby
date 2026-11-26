@@ -1,0 +1,74 @@
+// @mode: run-pass
+// @decisions: D-1914, D-1915, D-1072
+//! A child's pipes: one fiber writes lines to `cat` while the body reads them back, `read_bytes`
+//! counts a limit below 1 as 1, `io::copy` takes a `Reader` as an `io::Source`, a write to a
+//! child that has ended is a broken pipe, and a stream that is not piped is invalid input (§10.9).
+
+import std::bytes
+import std::fiber
+import std::file
+import std::filepath
+import std::io
+import std::list
+import std::process
+import std::result
+
+fn echo(writer: process::Writer, lines: List<String>) -> Result<Nil, io::Error> {
+  case lines {
+    [] => process::close(writer)
+    [line, ..rest] => {
+      use _ <- result::try(process::write_line(writer, line))
+      echo(writer, rest)
+    }
+  }
+}
+
+fn read_all(reader: process::Reader, seen: List<String>) -> Result<List<String>, io::Error> {
+  case process::read_line(reader) {
+    Ok(Some(line)) => read_all(reader, [line, ..seen])
+    Ok(None) => Ok(list::reverse(seen))
+    Err(reason) => Err(reason)
+  }
+}
+
+fn main() -> Result<Nil, io::Error> {
+  let lines = ["one", "two", "three"]
+  use echoed <- result::try(process::with_child(process::command("cat", []), fn(child) {
+    let outcome = fiber::scope(fn(owner) {
+      let writer = fiber::spawn(owner, fn() { echo(process::stdin(child), lines) })
+      let seen = read_all(process::stdout(child), [])
+      let _ = fiber::join(writer)
+      seen
+    })
+    let assert Ok(seen) = outcome
+    seen
+  }))
+  io::println("cat echoed {echoed:?}")
+  use first <- result::try(process::with_child(process::command("printf", ["abc"]), fn(child) {
+    process::read_bytes(process::stdout(child), 0)
+  }))
+  io::println("read_bytes with limit 0: {first:?}")
+  use dir <- file::with_temp_dir()
+  let path = filepath::join(dir, "copied.txt")
+  use copied <- result::try({
+    use sink <- file::with_create(path)
+    use child <- process::with_child(process::command("printf", ["copied through io::copy"]))
+    io::copy(process::stdout(child), sink)
+  })
+  use text <- result::try(io::read_file(path))
+  io::println("{copied} bytes: {text}")
+  use late <- result::try(process::with_child(process::command("true", []), fn(child) {
+    use _ <- result::try(process::wait(child))
+    let written = process::write_bytes(process::stdin(child), bytes::from_string("late"))
+    Ok(result::map_error(written, io::is_broken_pipe))
+  }))
+  io::println("a write after the end, a broken pipe: {late:?}")
+  let quiet = process::command("true", [])
+    |> process::with_stdout(_, process::discarded())
+  use unpiped <- result::try(process::with_child(quiet, fn(child) {
+    let read = process::read_line(process::stdout(child))
+    Ok(result::map_error(read, io::is_invalid_input))
+  }))
+  io::println("reading a discarded stream, invalid input: {unpiped:?}")
+  Ok(Nil)
+}

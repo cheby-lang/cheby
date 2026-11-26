@@ -1,7 +1,31 @@
-//! The running program as a process: `exit` ends it with a chosen status (D-1022, D-1023), and
-//! `until_interrupted` turns Ctrl-C or a request to stop into a cancellation (D-1073).
+//! The running program as a process, and the programs it starts. `exit` ends the program with a
+//! chosen status (D-1022, D-1023), and `until_interrupted` turns Ctrl-C or a request to stop into
+//! a cancellation (D-1073).
+//!
+//! A `Command` describes a program to start, and `run`, `output` and `with_child` start it
+//! (D-1907 to D-1914). A child lives inside `with_child`, which stops it when its body ends, so no
+//! function returns a child to keep (D-1912, ADR-0086). `Child`, `Reader` and `Writer` are
+//! handles, runtime kinds 49, 50 and 51 (D-1919).
+//!
+//! Every public function is written in Cheby over private `@std_context` kernels, and no kernel
+//! calls a Cheby closure (D-675, D-985, D-1916): `with_child` calls its body here, and `output`
+//! reads standard output and standard error in fibers of its own. Failures are `io::Error`s, built
+//! by `std::io` from the kernels' kind codes (D-981, D-1915). No function here runs in constants
+//! (D-1919).
+//!
+//! The tests start programs that every Unix system has, and no child writes to an inherited
+//! stream, since the standard library's tests run without capturing their output (D-837, D-1920).
 
+import std::bytes
+import std::duration
 import std::fiber
+import std::file
+import std::filepath
+import std::io
+import std::list
+import std::result
+import std::secret
+import std::string
 
 /// Ends the program with exit status `status`, as a termination does (D-709, D-1022, D-1293): the
 /// calling fiber stops where it is, every other fiber stops without unwinding, no drop function
@@ -20,6 +44,15 @@ pub fn exit(status: Int) -> Never {
 @external(native, "cheby_process_sys_exit")
 @external(js, "./process.mjs", "sys_exit")
 priv fn sys_exit(status: Int) -> Never
+
+/// A child process, started by `with_child` and alive while its body runs (D-1912, D-1919).
+pub type Child
+
+/// The reading end of a pipe from a child's standard output or error (D-1914, D-1919).
+pub type Reader
+
+/// The writing end of a pipe to a child's standard input (D-1914, D-1919).
+pub type Writer
 
 /// The error of `until_interrupted`: a signal came first, or `body` panicked first, with the
 /// shape of `fiber::Timeout` (D-1073, ADR-0071).
@@ -52,4 +85,1060 @@ test "until_interrupted reports a panic as Panicked" {
   let outcome = until_interrupted(fn() { panic as "crash" })
   let assert Err(Panicked(failure)) = outcome
   assert fiber::message(failure) == "crash"
+}
+
+// Describing a command
+
+/// A program to start, with its arguments, its working directory, its environment and where its
+/// streams go (D-1907, D-1908). It is opaque data, built only through this module's functions, so
+/// parts can be added later. Each value given to `with_env` is kept as a `secret::Secret<String>`,
+/// so the debug text shows the program and the arguments and `<redacted>` for those values
+/// (D-1901, D-1908).
+pub type Command {
+  program: String,
+  args: List<String>,
+  dir: Option<String>,
+  clear_env: Bool,
+  env: List<EnvEdit>,
+  input: Input,
+  out: Option<Stream>,
+  errors: Errors,
+}
+
+/// One edit of the child's environment (D-1908). `Command` keeps them in the order they were made,
+/// which the start applies them in and the debug text shows.
+type EnvEdit {
+  SetVar(String, secret::Secret<String>),
+  RemoveVar(String),
+}
+
+/// Where standard input comes from: the runner's default, a stream, or bytes that the runner
+/// writes to a pipe and then closes (D-1909, D-1911).
+type Input {
+  DefaultInput,
+  InputFrom(Stream),
+  Fed(bytes::Bytes),
+}
+
+/// Where standard error goes: the runner's default, a stream, or wherever standard output goes
+/// (D-1909).
+type Errors {
+  DefaultErrors,
+  ErrorsTo(Stream),
+  ErrorsToOutput,
+}
+
+/// Describes a run of `program` with the arguments `args`, never a shell line, with the program's
+/// working directory and environment and the streams of the runner it is given to (D-1078,
+/// D-1908). A file the system refuses to run, such as a script without `#!`, runs through
+/// `/bin/sh`, as `execvp` does (D-1926).
+pub fn command(program: String, args: List<String>) -> Command {
+  Command {
+    program,
+    args,
+    dir: None,
+    clear_env: False,
+    env: [],
+    input: DefaultInput,
+    out: None,
+    errors: DefaultErrors,
+  }
+}
+
+test "command passes each argument as it is" {
+  let spec = command("printf", ["%s|%s", "two words", "*"])
+  use captured <- result::try(output(spec))
+  assert captured.stdout == bytes::from_string("two words|*")
+  Ok(Nil)
+}
+
+test "a command that cannot be started is invalid input" {
+  let assert Err(empty) = run(command("", []))
+  assert io::is_invalid_input(empty)
+  let assert Err(zero) = run(command("printf", ["a\u{0}b"]))
+  assert io::is_invalid_input(zero)
+}
+
+test "a program that does not exist is not found" {
+  let assert Err(reason) = run(command("cheby-no-such-program", []))
+  assert io::is_not_found(reason)
+  assert "{reason}" == "not found"
+  let assert Err(relative) = run(command("./no/such/program", []))
+  assert io::is_not_found(relative)
+}
+
+/// Returns `spec` with the child's working directory set to `path`. It does not change where a
+/// relative program with `/` is found (D-1051, D-1908).
+pub fn with_dir(spec: Command, path: String) -> Command {
+  Command { ..spec, dir: Some(path) }
+}
+
+test "with_dir runs the child in a directory" {
+  use dir <- file::with_temp_dir()
+  use _ <- result::try(io::write_file(filepath::join(dir, "notes.txt"), "inside"))
+  let spec = command("cat", ["notes.txt"])
+    |> with_dir(_, dir)
+  use captured <- result::try(output(spec))
+  assert captured.stdout == bytes::from_string("inside")
+  Ok(Nil)
+}
+
+test "a directory that does not exist is not found" {
+  let spec = command("true", [])
+    |> with_dir(_, "no/such/directory")
+  let assert Err(reason) = run(spec)
+  assert io::is_not_found(reason)
+}
+
+/// Returns `spec` with the child's variable `name` set to `value`, kept as a
+/// `secret::Secret<String>` so that the debug text of the command never shows it (D-1908).
+pub fn with_env(spec: Command, name: String, value: String) -> Command {
+  Command { ..spec, env: [..spec.env, SetVar(name, secret::new(value))] }
+}
+
+test "with_env sets a variable of the child" {
+  let spec = command("sh", ["-c", "printf %s \"$CHEBY_GREETING\""])
+    |> with_env(_, "CHEBY_GREETING", "hello")
+  use captured <- result::try(output(spec))
+  assert captured.stdout == bytes::from_string("hello")
+  Ok(Nil)
+}
+
+test "the debug text of a command hides the values of variables" {
+  let spec = command("curl", ["--silent", "https://example.com"])
+    |> with_env(_, "TOKEN", "hunter2")
+  let text = "{spec:?}"
+  assert string::contains(text, "curl")
+  assert string::contains(text, "--silent")
+  assert string::contains(text, "<redacted>")
+  assert !string::contains(text, "hunter2")
+}
+
+test "a variable name with = is invalid input" {
+  let spec = command("true", [])
+    |> with_env(_, "A=B", "c")
+  let assert Err(reason) = run(spec)
+  assert io::is_invalid_input(reason)
+  let unnamed = command("true", [])
+    |> with_env(_, "", "c")
+  let assert Err(empty) = run(unnamed)
+  assert io::is_invalid_input(empty)
+}
+
+/// Returns `spec` with the child's variable `name` removed, whether the program has it or an
+/// earlier `with_env` set it (D-1908).
+pub fn without_env(spec: Command, name: String) -> Command {
+  Command { ..spec, env: [..spec.env, RemoveVar(name)] }
+}
+
+test "without_env removes a variable" {
+  let spec = command("sh", ["-c", "printf %s \"$CHEBY_GREETING\""])
+    |> with_env(_, "CHEBY_GREETING", "hello")
+    |> without_env(_, "CHEBY_GREETING")
+  use captured <- result::try(output(spec))
+  assert captured.stdout == bytes::new()
+  Ok(Nil)
+}
+
+/// Returns `spec` so that the child starts with no variables but those that a later `with_env`
+/// sets; the earlier edits no longer count (D-1908, D-1925).
+pub fn with_empty_env(spec: Command) -> Command {
+  Command { ..spec, clear_env: True, env: [] }
+}
+
+test "with_empty_env keeps only the variables set after it" {
+  let spec = command("/bin/sh", ["-c", "printf %s \"$CHEBY_KEPT|$CHEBY_GONE\""])
+    |> with_env(_, "CHEBY_GONE", "before")
+    |> with_empty_env
+    |> with_env(_, "CHEBY_KEPT", "after")
+  use captured <- result::try(output(spec))
+  assert captured.stdout == bytes::from_string("after|")
+  Ok(Nil)
+}
+
+/// Returns `spec` so that the child reads `data` on a pipe as its standard input, which is closed
+/// after the last byte. Of `with_input` and `with_stdin`, the later call wins. A child that stops
+/// reading early is not an error, and `with_child` rejects it as invalid input (D-1911, D-1912).
+pub fn with_input(spec: Command, data: bytes::Bytes) -> Command {
+  Command { ..spec, input: Fed(data) }
+}
+
+test "with_input reaches the child's standard input" {
+  let spec = command("cat", [])
+    |> with_input(_, bytes::from_string("one\ntwo\n"))
+  use captured <- result::try(output(spec))
+  assert captured.stdout == bytes::from_string("one\ntwo\n")
+  Ok(Nil)
+}
+
+test "the later of with_input and with_stdin wins" {
+  let dropped = command("cat", [])
+    |> with_input(_, bytes::from_string("lost"))
+    |> with_stdin(_, discarded())
+  use first <- result::try(output(dropped))
+  assert first.stdout == bytes::new()
+  let kept = command("cat", [])
+    |> with_stdin(_, discarded())
+    |> with_input(_, bytes::from_string("kept"))
+  use second <- result::try(output(kept))
+  assert second.stdout == bytes::from_string("kept")
+  Ok(Nil)
+}
+
+test "a child that stops reading its input is not an error" {
+  let data = bytes::from_string(string::repeat("x", 1_000_000))
+  let spec = command("true", [])
+    |> with_input(_, data)
+  assert run(spec) == Ok(Exited(0))
+}
+
+/// Returns `spec` with the child's standard input taken from `stream` (D-1909, D-1911).
+pub fn with_stdin(spec: Command, stream: Stream) -> Command {
+  Command { ..spec, input: InputFrom(stream) }
+}
+
+test "a file as standard input starts after what the program has read" {
+  use dir <- file::with_temp_dir()
+  let path = filepath::join(dir, "table.txt")
+  use _ <- result::try(io::write_file(path, "header\nrow 1\nrow 2\n"))
+  use source <- file::with_open(path)
+  assert file::read_line(source) == Ok(Some("header"))
+  let spec = command("cat", [])
+    |> with_stdin(_, to_file(source))
+  use captured <- result::try(output(spec))
+  assert captured.stdout == bytes::from_string("row 1\nrow 2\n")
+  Ok(Nil)
+}
+
+/// Returns `spec` with the child's standard output sent to `stream` (D-1909).
+pub fn with_stdout(spec: Command, stream: Stream) -> Command {
+  Command { ..spec, out: Some(stream) }
+}
+
+/// Returns `spec` with the child's standard error sent to `stream`. It undoes an earlier
+/// `with_stderr_to_stdout`, and a later one undoes it (D-1909).
+pub fn with_stderr(spec: Command, stream: Stream) -> Command {
+  Command { ..spec, errors: ErrorsTo(stream) }
+}
+
+test "with_stderr sends standard error elsewhere" {
+  let spec = command("sh", ["-c", "printf oops >&2"])
+    |> with_stderr(_, discarded())
+  use captured <- result::try(output(spec))
+  assert captured.status == Exited(0)
+  assert captured.stderr == bytes::new()
+  Ok(Nil)
+}
+
+/// Returns `spec` so that the child's standard error goes wherever its standard output goes, as
+/// `2>&1` does; `output` then returns both in `stdout` (D-1909).
+pub fn with_stderr_to_stdout(spec: Command) -> Command {
+  Command { ..spec, errors: ErrorsToOutput }
+}
+
+test "with_stderr_to_stdout merges the two streams" {
+  let spec = command("sh", ["-c", "printf a; printf b >&2; printf c"])
+    |> with_stderr_to_stdout
+  use captured <- result::try(output(spec))
+  assert captured.stdout == bytes::from_string("abc")
+  assert captured.stderr == bytes::new()
+  Ok(Nil)
+}
+
+// Streams
+
+/// One place for a child's stream: the program's own stream, the null device, a pipe, or an open
+/// file (D-1909). It is opaque, so more places can come later, and holds a handle only through
+/// `to_file` (D-1919).
+pub type Stream {
+  Inherited,
+  Discarded,
+  Piped,
+  ToFile(file::File),
+}
+
+/// The program's own stream. Under `cheby test` a child's inherited output goes to the test's
+/// capture (D-1918). As standard input it first gives back what the program's reader of standard
+/// input read ahead, where the descriptor can seek (D-1921).
+pub fn inherited() -> Stream {
+  Inherited
+}
+
+test "inherited gives the child the program's own stream" {
+  let spec = command("true", [])
+    |> with_stdin(_, inherited())
+  assert run(spec) == Ok(Exited(0))
+}
+
+/// The null device: as standard input the child reads its end at once, and what it writes there is
+/// dropped (D-1909).
+pub fn discarded() -> Stream {
+  Discarded
+}
+
+test "discarded drops what the child writes" {
+  let spec = command("printf", ["dropped"])
+    |> with_stdout(_, discarded())
+  use captured <- result::try(output(spec))
+  assert captured.status == Exited(0)
+  assert captured.stdout == bytes::new()
+  Ok(Nil)
+}
+
+/// A pipe between the program and the child, which `with_child`'s body reads and writes. `run`
+/// rejects it as invalid input, and so does `output` for standard input, while for standard output
+/// and error it is the capture that `output` makes anyway (D-1911, D-1924).
+pub fn piped() -> Stream {
+  Piped
+}
+
+test "piped is invalid input for run" {
+  let spec = command("true", [])
+    |> with_stdout(_, piped())
+  let assert Err(reason) = run(spec)
+  assert io::is_invalid_input(reason)
+}
+
+test "piped is the capture of output, and invalid input as its standard input" {
+  let capturing = command("printf", ["kept"])
+    |> with_stdout(_, piped())
+  use ran <- result::try(output(capturing))
+  assert ran.stdout == bytes::from_string("kept")
+  let fed = command("cat", [])
+    |> with_stdin(_, piped())
+  let assert Err(reason) = output(fed)
+  assert io::is_invalid_input(reason)
+  Ok(Nil)
+}
+
+/// The open file `handle`, whose position the program and the child share after the start. As
+/// standard input the child gets the bytes the handle has not given out yet. The handles of the
+/// standard streams act as `inherited` (D-1071, D-1909, D-1921, D-1924).
+pub fn to_file(handle: file::File) -> Stream {
+  ToFile(handle)
+}
+
+test "to_file sends a stream to an open file" {
+  use dir <- file::with_temp_dir()
+  let path = filepath::join(dir, "saved.txt")
+  use sink <- file::with_create(path)
+  let spec = command("printf", ["saved"])
+    |> with_stdout(_, to_file(sink))
+  assert run(spec) == Ok(Exited(0))
+  use text <- result::try(io::read_file(path))
+  assert text == "saved"
+  Ok(Nil)
+}
+
+test "a closed file is no stream" {
+  use dir <- file::with_temp_dir()
+  use sink <- result::try(file::create(filepath::join(dir, "closed.txt")))
+  use _ <- result::try(file::close(sink))
+  let spec = command("true", [])
+    |> with_stdout(_, to_file(sink))
+  let assert Err(reason) = run(spec)
+  assert io::is_closed(reason)
+  Ok(Nil)
+}
+
+test "a file in the wrong mode is invalid input" {
+  use dir <- file::with_temp_dir()
+  let path = filepath::join(dir, "input.txt")
+  use _ <- result::try(io::write_file(path, "text"))
+  use source <- file::with_open(path)
+  let written = command("printf", ["lost"])
+    |> with_stdout(_, to_file(source))
+  let assert Err(reason) = run(written)
+  assert io::is_invalid_input(reason)
+  use sink <- file::with_create(filepath::join(dir, "output.txt"))
+  let reading = command("cat", [])
+    |> with_stdin(_, to_file(sink))
+  let assert Err(backwards) = run(reading)
+  assert io::is_invalid_input(backwards)
+  Ok(Nil)
+}
+
+// Running
+
+/// How a child ended: an exit status from 0 to 255, or the number of the signal that ended it
+/// (D-1910, ADR-0051).
+pub exposed type Status {
+  Exited(Int),
+  Signaled(Int),
+}
+
+/// What `output` returns: the status, and the bytes the child wrote to its standard output and
+/// standard error (D-1910).
+pub exposed type Output {
+  status: Status,
+  stdout: bytes::Bytes,
+  stderr: bytes::Bytes,
+}
+
+/// A command's streams once a runner's defaults and rules are applied: `errors` is `None` when
+/// standard error goes where standard output goes, and `feed` holds what `with_input` gave.
+type Plan {
+  input: Stream,
+  out: Stream,
+  errors: Option<Stream>,
+  feed: Option<bytes::Bytes>,
+}
+
+/// Starts `spec` and waits for the child to end, then returns its status. By default the child
+/// inherits all three streams, and `piped()` is invalid input for any of them, since no code could
+/// read or write the pipe. The bytes of `with_input` are written by a fiber while `run` waits. A
+/// cancellation kills the child, and the runtime reaps it (D-1078, D-1909, D-1911).
+pub fn run(spec: Command) -> Result<Status, io::Error> {
+  use plan <- result::try(plan_of_run(spec))
+  use child <- result::try(start(spec, plan))
+  use ran <- result::try(communicate(child, plan))
+  Ok(ran.status)
+}
+
+test "run reports an exit status" {
+  assert run(command("true", [])) == Ok(Exited(0))
+  assert run(command("false", [])) == Ok(Exited(1))
+  assert run(command("sh", ["-c", "exit 3"])) == Ok(Exited(3))
+}
+
+test "run reports the signal that ended a child" {
+  let spec = command("sh", ["-c", "kill -9 $$"])
+  assert run(spec) == Ok(Signaled(9))
+}
+
+/// The plan of `run`: every stream inherited by default, and `piped()` invalid input (D-1909,
+/// D-1911).
+fn plan_of_run(spec: Command) -> Result<Plan, io::Error> {
+  let input = case spec.input {
+    DefaultInput => Ok((Inherited, None))
+    InputFrom(stream) => result::map(unpiped(stream), fn(given) { (given, None) })
+    Fed(data) => Ok((Piped, Some(data)))
+  }
+  let out = case spec.out {
+    None => Ok(Inherited)
+    Some(stream) => unpiped(stream)
+  }
+  let errors = case spec.errors {
+    DefaultErrors => Ok(Some(Inherited))
+    ErrorsTo(stream) => result::map(unpiped(stream), Some)
+    ErrorsToOutput => Ok(None)
+  }
+  plan_from(input, out, errors)
+}
+
+/// Starts `spec`, reads its standard output and standard error to their ends, and waits for the
+/// child; it returns once both ends and the exit have come. By default standard input is empty
+/// and the other two are captured; `piped()` for them is that capture, and for standard input it
+/// is invalid input. A cancellation kills the child, and the runtime reaps it (D-1909, D-1911,
+/// D-1924).
+pub fn output(spec: Command) -> Result<Output, io::Error> {
+  use plan <- result::try(plan_of_output(spec))
+  use child <- result::try(start(spec, plan))
+  communicate(child, plan)
+}
+
+test "output captures standard output and standard error" {
+  let spec = command("sh", ["-c", "printf out; printf err >&2; exit 4"])
+  use captured <- result::try(output(spec))
+  assert captured.status == Exited(4)
+  assert captured.stdout == bytes::from_string("out")
+  assert captured.stderr == bytes::from_string("err")
+  assert !is_success(captured.status)
+  Ok(Nil)
+}
+
+/// The plan of `output`: an empty standard input and both outputs captured by default (D-1909,
+/// D-1924).
+fn plan_of_output(spec: Command) -> Result<Plan, io::Error> {
+  let input = case spec.input {
+    DefaultInput => Ok((Discarded, None))
+    InputFrom(stream) => result::map(unpiped(stream), fn(given) { (given, None) })
+    Fed(data) => Ok((Piped, Some(data)))
+  }
+  let out = case spec.out {
+    None => Ok(Piped)
+    Some(stream) => Ok(stream)
+  }
+  let errors = case spec.errors {
+    DefaultErrors => Ok(Some(Piped))
+    ErrorsTo(stream) => Ok(Some(stream))
+    ErrorsToOutput => Ok(None)
+  }
+  plan_from(input, out, errors)
+}
+
+/// Starts `spec`, calls `body` with the child on the calling fiber, and returns what `body`
+/// returns, or the `Err` of the start. By default standard input and output are piped and
+/// standard error is inherited, and `with_input` is invalid input. When `body` returns, a child
+/// still running is killed, waited for and reaped, unless the system refuses the kill, when the
+/// reaper takes it and `with_child` returns at once (D-1928); when it unwinds, the release of the
+/// `Child` kills the child at once and the runtime reaps it. Every later operation on the child or
+/// its pipes fails with `io::is_closed` (D-1909, D-1912, ADR-0086).
+pub fn with_child<T>(
+  spec: Command,
+  body: fn(Child) -> Result<T, io::Error>,
+) -> Result<T, io::Error> {
+  use plan <- result::try(plan_of_child(spec))
+  use child <- result::try(start(spec, plan))
+  let outcome = body(child)
+  sys_finish(child)
+  outcome
+}
+
+test "with_child returns what its body returns" {
+  let spec = command("printf", ["first\nsecond\n"])
+  let found = with_child(spec, fn(child) { read_line(stdout(child)) })
+  assert found == Ok(Some("first"))
+}
+
+test "a child and its pipes print as placeholders" {
+  use child <- with_child(command("cat", []))
+  let reader = stdout(child)
+  let writer = stdin(child)
+  assert "{child:?}" == "<Child>"
+  assert "{reader:?}" == "<Reader>"
+  assert "{writer:?}" == "<Writer>"
+  close(writer)
+}
+
+test "a child is closed once with_child returns" {
+  let spec = command("cat", [])
+  use kept <- result::try(with_child(spec, fn(child) { Ok(child) }))
+  let assert Err(reason) = wait(kept)
+  assert io::is_closed(reason)
+  let assert Err(late) = read_line(stdout(kept))
+  assert io::is_closed(late)
+  Ok(Nil)
+}
+
+test "with_input is invalid input for with_child" {
+  let spec = command("cat", [])
+    |> with_input(_, bytes::from_string("x"))
+  let assert Err(reason) = with_child(spec, fn(_) { Ok(Nil) })
+  assert io::is_invalid_input(reason)
+}
+
+/// The plan of `with_child`: standard input and output piped and standard error inherited by
+/// default, and `with_input` invalid input (D-1909, D-1912).
+fn plan_of_child(spec: Command) -> Result<Plan, io::Error> {
+  let input = case spec.input {
+    DefaultInput => Ok((Piped, None))
+    InputFrom(stream) => Ok((stream, None))
+    Fed(_) => invalid_input()
+  }
+  let out = case spec.out {
+    None => Ok(Piped)
+    Some(stream) => Ok(stream)
+  }
+  let errors = case spec.errors {
+    DefaultErrors => Ok(Some(Inherited))
+    ErrorsTo(stream) => Ok(Some(stream))
+    ErrorsToOutput => Ok(None)
+  }
+  plan_from(input, out, errors)
+}
+
+/// The plan of the three resolved streams, or the first of their failures.
+fn plan_from(
+  input: Result<(Stream, Option<bytes::Bytes>), io::Error>,
+  out: Result<Stream, io::Error>,
+  errors: Result<Option<Stream>, io::Error>,
+) -> Result<Plan, io::Error> {
+  use (given, data) <- result::try(input)
+  use sent <- result::try(out)
+  use merged <- result::try(errors)
+  Ok(Plan { input: given, out: sent, errors: merged, feed: data })
+}
+
+/// `stream`, or invalid input when it is `piped()` in a place that no code reads or writes
+/// (D-1911, D-1924).
+fn unpiped(stream: Stream) -> Result<Stream, io::Error> {
+  case stream {
+    Piped => invalid_input()
+    Inherited | Discarded | ToFile(_) => Ok(stream)
+  }
+}
+
+/// The `Err` for which `io::is_invalid_input` holds.
+fn invalid_input<T>() -> Result<T, io::Error> {
+  io::lift(Err((13, "")))
+}
+
+/// The kernel's code and file of `stream`.
+fn place(stream: Stream) -> (Int, Option<file::File>) {
+  case stream {
+    Inherited => (0, None)
+    Discarded => (1, None)
+    Piped => (2, None)
+    ToFile(handle) => (3, Some(handle))
+  }
+}
+
+/// The kernel's form of an edit of the environment.
+fn env_pair(edit: EnvEdit) -> (String, Option<String>) {
+  case edit {
+    SetVar(name, value) => (name, Some(secret::expose(value)))
+    RemoveVar(name) => (name, None)
+  }
+}
+
+/// Starts `spec` with the streams of `plan`. The kernel checks the description, flushes standard
+/// output and starts the child on the blocking pool (D-1908, D-1916). A cancellation that arrives
+/// after the start releases the `Child`, which kills it (D-1919).
+fn start(spec: Command, plan: Plan) -> Result<Child, io::Error> {
+  let (in_code, in_file) = place(plan.input)
+  let (out_code, out_file) = place(plan.out)
+  let (err_code, err_file) = case plan.errors {
+    Some(stream) => place(stream)
+    None => (4, None)
+  }
+  let edits = list::map(spec.env, env_pair)
+  io::lift(
+    sys_start(
+      spec.program,
+      spec.args,
+      spec.dir,
+      spec.clear_env,
+      edits,
+      in_code,
+      in_file,
+      out_code,
+      out_file,
+      err_code,
+      err_file,
+    ),
+  )
+}
+
+/// Feeds the bytes of `with_input`, reads the piped standard output and error to their ends, each
+/// in a fiber of its own so that no pipe fills, waits for the child, and then finishes it
+/// (D-1911). A failure of one part kills the child, so that the others reach their ends. A panic
+/// of a fiber is raised again, so none is lost.
+fn communicate(child: Child, plan: Plan) -> Result<Output, io::Error> {
+  let outcome = fiber::scope(fn(owner) {
+    let feeder = fiber::spawn(owner, fn() { feed(child, plan.feed) })
+    let out_reader = fiber::spawn(owner, fn() { drain(child, 1, Some(plan.out)) })
+    let err_reader = fiber::spawn(owner, fn() { drain(child, 2, plan.errors) })
+    let waited = case wait(child) {
+      Ok(status) => Ok(status)
+      Err(reason) => {
+        let _ = sys_signal(child, 2)
+        Err(reason)
+      }
+    }
+    let fed = fiber::join(feeder)
+    let read_out = fiber::join(out_reader)
+    let read_err = fiber::join(err_reader)
+    use status <- result::try(waited)
+    use _ <- result::try(fed)
+    use written <- result::try(read_out)
+    use complained <- result::try(read_err)
+    Ok(Output { status, stdout: written, stderr: complained })
+  })
+  let ended = case outcome {
+    Ok(ran) => ran
+    Err(failure) => fiber::raise(failure)
+  }
+  sys_finish(child)
+  ended
+}
+
+/// Writes `data` to the child's standard input and closes it. A child that stops reading, so that
+/// the write meets a broken pipe, is not an error (D-1911, D-1915); any other failure kills the
+/// child.
+fn feed(child: Child, data: Option<bytes::Bytes>) -> Result<Nil, io::Error> {
+  case data {
+    None => Ok(Nil)
+    Some(given) => {
+      let writer = sys_stdin(child)
+      let written = case sys_write_bytes(writer, given) {
+        Ok(Nil) => sys_close(writer)
+        Err(failure) => Err(failure)
+      }
+      case written {
+        Ok(Nil) => Ok(Nil)
+        Err((14, _)) => Ok(Nil)
+        Err(failure) => {
+          let _ = sys_signal(child, 2)
+          io::lift(Err(failure))
+        }
+      }
+    }
+  }
+}
+
+/// Reads the child's standard output (1) or standard error (2) to its end when `stream` is
+/// `piped()`, and gives no bytes otherwise. A failure kills the child.
+fn drain(child: Child, which: Int, stream: Option<Stream>) -> Result<bytes::Bytes, io::Error> {
+  case stream {
+    Some(Piped) => case sys_read_all(sys_output(child, which)) {
+      Ok(data) => Ok(data)
+      Err(failure) => {
+        let _ = sys_signal(child, 2)
+        io::lift(Err(failure))
+      }
+    }
+    Some(Inherited) | Some(Discarded) | Some(ToFile(_)) | None => Ok(bytes::new())
+  }
+}
+
+/// Tells whether `status` is `Exited(0)`, the only status that Unix tools use for success
+/// (D-1910).
+pub fn is_success(status: Status) -> Bool {
+  case status {
+    Exited(0) => True
+    Exited(_) | Signaled(_) => False
+  }
+}
+
+test "is_success holds for an exit with status 0 only" {
+  assert is_success(Exited(0))
+  assert !is_success(Exited(1))
+  assert !is_success(Signaled(9))
+}
+
+// A child
+
+/// Waits on the runtime's poller until `child` ends, then reaps it and returns its status; a later
+/// `wait` returns the same status at once. It never closes the child's standard input, and a
+/// cancelled `wait` takes nothing: the child runs on (D-1913, D-1916).
+pub fn wait(child: Child) -> Result<Status, io::Error> {
+  case sys_wait(child) {
+    Ok((0, code)) => Ok(Exited(code))
+    Ok((_, number)) => Ok(Signaled(number))
+    Err(failure) => io::lift(Err(failure))
+  }
+}
+
+test "wait returns the same status again" {
+  use child <- with_child(command("sh", ["-c", "exit 7"]))
+  assert wait(child) == Ok(Exited(7))
+  assert wait(child) == Ok(Exited(7))
+  Ok(Nil)
+}
+
+/// Sends SIGINT to `child` only, never to a process group of its own, and returns `Ok(Nil)` also
+/// when the child has ended (D-1913).
+pub fn interrupt(child: Child) -> Result<Nil, io::Error> {
+  io::lift(sys_signal(child, 0))
+}
+
+test "a signal to a child that has ended is Ok" {
+  use child <- with_child(command("true", []))
+  assert wait(child) == Ok(Exited(0))
+  assert interrupt(child) == Ok(Nil)
+  assert terminate(child) == Ok(Nil)
+  assert kill(child) == Ok(Nil)
+  assert wait(child) == Ok(Exited(0))
+  Ok(Nil)
+}
+
+/// Sends SIGTERM to `child` only, and returns `Ok(Nil)` also when the child has ended (D-1913).
+pub fn terminate(child: Child) -> Result<Nil, io::Error> {
+  io::lift(sys_signal(child, 1))
+}
+
+test "terminate ends a child with SIGTERM" {
+  use child <- with_child(command("sleep", ["10"]))
+  use _ <- result::try(terminate(child))
+  assert wait(child) == Ok(Signaled(15))
+  Ok(Nil)
+}
+
+/// Sends SIGKILL to `child` only, and returns `Ok(Nil)` also when the child has ended (D-1913).
+pub fn kill(child: Child) -> Result<Nil, io::Error> {
+  io::lift(sys_signal(child, 2))
+}
+
+test "a cancelled wait takes nothing, and kill ends the child" {
+  use child <- with_child(command("sleep", ["10"]))
+  let waited = fiber::timeout(duration::milliseconds(20), fn() { wait(child) })
+  assert waited == Err(fiber::TimedOut)
+  use _ <- result::try(kill(child))
+  assert wait(child) == Ok(Signaled(9))
+  Ok(Nil)
+}
+
+/// The `Writer` of `child`'s standard input; every call returns a handle to the same pipe. Using
+/// it fails with `io::is_invalid_input` when standard input is not piped (D-1914).
+pub fn stdin(child: Child) -> Writer {
+  sys_stdin(child)
+}
+
+/// The `Reader` of `child`'s standard output; every call returns a handle to the same pipe and
+/// its read-ahead buffer. Using it fails with `io::is_invalid_input` when standard output is not
+/// piped (D-1914).
+pub fn stdout(child: Child) -> Reader {
+  sys_output(child, 1)
+}
+
+test "a stream that is not piped cannot be read" {
+  let spec = command("true", [])
+    |> with_stdout(_, discarded())
+  use child <- with_child(spec)
+  let assert Err(reason) = read_line(stdout(child))
+  assert io::is_invalid_input(reason)
+  Ok(Nil)
+}
+
+/// The `Reader` of `child`'s standard error, as `stdout` is for standard output (D-1914).
+pub fn stderr(child: Child) -> Reader {
+  sys_output(child, 2)
+}
+
+test "a piped standard error is read through stderr" {
+  let spec = command("sh", ["-c", "printf oops >&2"])
+    |> with_stderr(_, piped())
+  use child <- with_child(spec)
+  let errors = stderr(child)
+  assert read_line(errors) == Ok(Some("oops"))
+  assert read_line(errors) == Ok(None)
+  Ok(Nil)
+}
+
+// Pipes
+
+/// Waits until `reader` has data, then returns at least one and at most `limit` bytes of it, or
+/// `None` at the end of the stream. `limit` caps the result and never sizes an allocation: a read
+/// takes at most one block of 64 KiB. A cancelled `read_bytes` has taken nothing (D-1000, D-1062,
+/// D-1914).
+@std_clamped(limit)
+pub fn read_bytes(reader: Reader, limit: Int) -> Result<Option<bytes::Bytes>, io::Error> {
+  // No call may follow the kernel on success: a pending cancellation would drop the bytes just
+  // taken from the reader's buffer (D-1065).
+  case sys_read_bytes(reader, limit) {
+    Ok(read) => Ok(read)
+    Err(failure) => io::lift(Err(failure))
+  }
+}
+
+test "read_bytes returns at most its limit" {
+  use child <- with_child(command("printf", ["abc"]))
+  let reader = stdout(child)
+  assert read_bytes(reader, 0) == Ok(Some(bytes::from_string("a")))
+  fn collect(received) {
+    case read_bytes(reader, 2) {
+      Ok(Some(chunk)) => {
+        assert bytes::length(chunk) <= 2
+        collect(bytes::append(received, chunk))
+      }
+      Ok(None) => Ok(received)
+      Err(reason) => Err(reason)
+    }
+  }
+  use rest <- result::try(collect(bytes::new()))
+  assert rest == bytes::from_string("bc")
+  Ok(Nil)
+}
+
+test "a child's standard output is an io::Source" {
+  use dir <- file::with_temp_dir()
+  let path = filepath::join(dir, "copied.txt")
+  use sink <- file::with_create(path)
+  use child <- with_child(command("printf", ["copied"]))
+  use count <- result::try(io::copy(stdout(child), sink))
+  assert count == 6
+  use text <- result::try(io::read_file(path))
+  assert text == "copied"
+  Ok(Nil)
+}
+
+/// Reads the next line from `reader` without its ending, removing a final `\n` or `\r\n`, or
+/// `None` at the end of the stream. A line that is not valid UTF-8 is invalid data, and it is
+/// consumed (D-305, D-311, D-1914).
+pub fn read_line(reader: Reader) -> Result<Option<String>, io::Error> {
+  // As in `read_bytes`: no call follows the kernel on success.
+  case sys_read_line(reader) {
+    Ok(line) => Ok(line)
+    Err(failure) => io::lift(Err(failure))
+  }
+}
+
+test "read_line reads a child's output line by line" {
+  use child <- with_child(command("printf", ["one\r\ntwo\nthree"]))
+  let reader = stdout(child)
+  assert read_line(reader) == Ok(Some("one"))
+  assert read_line(reader) == Ok(Some("two"))
+  assert read_line(reader) == Ok(Some("three"))
+  assert read_line(reader) == Ok(None)
+  assert read_line(reader) == Ok(None)
+  assert wait(child) == Ok(Exited(0))
+  Ok(Nil)
+}
+
+/// Writes all of `data` to `writer`, waiting while the pipe is full, atomic with respect to other
+/// writes. A write to a child that closed its standard input or ended is a broken pipe, and a
+/// cancelled write may have written a prefix (D-1000, D-1001, D-1914, D-1915).
+pub fn write_bytes(writer: Writer, data: bytes::Bytes) -> Result<Nil, io::Error> {
+  io::lift(sys_write_bytes(writer, data))
+}
+
+test "writing to a child that has ended is a broken pipe" {
+  use child <- with_child(command("true", []))
+  assert wait(child) == Ok(Exited(0))
+  let assert Err(reason) = write_bytes(stdin(child), bytes::from_string("late"))
+  assert io::is_broken_pipe(reason)
+  assert "{reason}" == "broken pipe"
+  Ok(Nil)
+}
+
+/// Writes `text` to `writer` in UTF-8, as `write_bytes` writes bytes (D-1914).
+pub fn write(writer: Writer, text: String) -> Result<Nil, io::Error> {
+  io::lift(sys_write(writer, text))
+}
+
+test "write sends text without a line ending" {
+  use child <- with_child(command("cat", []))
+  let writer = stdin(child)
+  use _ <- result::try(write(writer, "to"))
+  use _ <- result::try(write(writer, "gether"))
+  use _ <- result::try(close(writer))
+  assert read_line(stdout(child)) == Ok(Some("together"))
+  Ok(Nil)
+}
+
+/// Writes `text` and then `\n` to `writer`, as one write (D-1914).
+pub fn write_line(writer: Writer, text: String) -> Result<Nil, io::Error> {
+  io::lift(sys_write(writer, "{text}\n"))
+}
+
+test "cat echoes the lines it was given once its input is closed" {
+  use child <- with_child(command("cat", []))
+  let writer = stdin(child)
+  let reader = stdout(child)
+  use _ <- result::try(write_line(writer, "hello"))
+  use _ <- result::try(write_line(writer, "world"))
+  use _ <- result::try(close(writer))
+  assert read_line(reader) == Ok(Some("hello"))
+  assert read_line(reader) == Ok(Some("world"))
+  assert read_line(reader) == Ok(None)
+  assert wait(child) == Ok(Exited(0))
+  Ok(Nil)
+}
+
+/// Closes the child's standard input now, so that the child reads its end. A fiber parked in a
+/// write wakes with `io::is_closed`, and so does every later write and close (D-1914).
+pub fn close(writer: Writer) -> Result<Nil, io::Error> {
+  io::lift(sys_close(writer))
+}
+
+test "closing standard input twice is closed" {
+  use child <- with_child(command("cat", []))
+  let writer = stdin(child)
+  use _ <- result::try(close(writer))
+  let assert Err(reason) = close(writer)
+  assert io::is_closed(reason)
+  let assert Err(late) = write(writer, "late")
+  assert io::is_closed(late)
+  Ok(Nil)
+}
+
+// Kernels of children (D-1907 to D-1919): each reports a failure as a kind code and the operating
+// system's message, which `io::lift` turns into an `io::Error` (D-981, D-1915). Stream codes: 0
+// inherited, 1 discarded, 2 piped, 3 a file (the `*_file` argument is `Some`), 4 the same as
+// standard output (standard error only).
+
+/// Starts a child after checking its description and flushing standard output.
+@std_context
+@external(native, "cheby_process_sys_start")
+@external(js, "./process.mjs", "sys_start")
+@async
+priv fn sys_start(
+  program: String,
+  args: List<String>,
+  dir: Option<String>,
+  clear_env: Bool,
+  env: List<(String, Option<String>)>,
+  in_code: Int,
+  in_file: Option<file::File>,
+  out_code: Int,
+  out_file: Option<file::File>,
+  err_code: Int,
+  err_file: Option<file::File>,
+) -> Result<Child, (Int, String)>
+
+/// Waits for a child to exit: `(0, code)` when it exited, `(1, signal)` when a signal ended it.
+@std_context
+@external(native, "cheby_process_sys_wait")
+@external(js, "./process.mjs", "sys_wait")
+@async
+priv fn sys_wait(child: Child) -> Result<(Int, Int), (Int, String)>
+
+/// Sends SIGINT (0), SIGTERM (1) or SIGKILL (2) to a child that was not reaped.
+@std_context
+@external(native, "cheby_process_sys_signal")
+@external(js, "./process.mjs", "sys_signal")
+priv fn sys_signal(child: Child, which: Int) -> Result<Nil, (Int, String)>
+
+/// The writer of a child's standard input.
+@std_context
+@external(native, "cheby_process_sys_stdin")
+@external(js, "./process.mjs", "sys_stdin")
+priv fn sys_stdin(child: Child) -> Writer
+
+/// The reader of a child's standard output (1) or standard error (2).
+@std_context
+@external(native, "cheby_process_sys_output")
+@external(js, "./process.mjs", "sys_output")
+priv fn sys_output(child: Child, which: Int) -> Reader
+
+/// Waits for data and reads at most `limit` bytes of it.
+@std_context
+@external(native, "cheby_process_sys_read_bytes")
+@external(js, "./process.mjs", "sys_read_bytes")
+@async
+priv fn sys_read_bytes(reader: Reader, limit: Int) -> Result<Option<bytes::Bytes>, (Int, String)>
+
+/// Reads the next line without its ending.
+@std_context
+@external(native, "cheby_process_sys_read_line")
+@external(js, "./process.mjs", "sys_read_line")
+@async
+priv fn sys_read_line(reader: Reader) -> Result<Option<String>, (Int, String)>
+
+/// Reads to the end of the stream.
+@std_context
+@external(native, "cheby_process_sys_read_all")
+@external(js, "./process.mjs", "sys_read_all")
+@async
+priv fn sys_read_all(reader: Reader) -> Result<bytes::Bytes, (Int, String)>
+
+/// Writes all of `data`, waiting while the pipe is full.
+@std_context
+@external(native, "cheby_process_sys_write_bytes")
+@external(js, "./process.mjs", "sys_write_bytes")
+@async
+priv fn sys_write_bytes(writer: Writer, data: bytes::Bytes) -> Result<Nil, (Int, String)>
+
+/// Writes the UTF-8 of `text`, waiting while the pipe is full.
+@std_context
+@external(native, "cheby_process_sys_write")
+@external(js, "./process.mjs", "sys_write")
+@async
+priv fn sys_write(writer: Writer, text: String) -> Result<Nil, (Int, String)>
+
+/// Closes a child's standard input now, waking the fibers that wait on it.
+@std_context
+@external(native, "cheby_process_sys_close")
+@external(js, "./process.mjs", "sys_close")
+priv fn sys_close(writer: Writer) -> Result<Nil, (Int, String)>
+
+/// Ends a child at the end of `with_child`'s body: kills it if it runs, waits for it, reaps it and
+/// closes its pipes.
+@std_context
+@external(native, "cheby_process_sys_finish")
+@external(js, "./process.mjs", "sys_finish")
+@async
+priv fn sys_finish(child: Child) -> Nil
+
+// Tests of `std::io` that need this module.
+
+test "a write to a child that has ended is a broken pipe" {
+  use child <- with_child(command("true", []))
+  use _ <- result::try(wait(child))
+  let assert Err(reason) = write(stdin(child), "late")
+  assert io::is_broken_pipe(reason)
+  assert !io::is_closed(reason)
+  assert "{reason}" == "broken pipe"
+  Ok(Nil)
 }

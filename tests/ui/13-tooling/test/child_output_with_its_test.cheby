@@ -1,0 +1,20 @@
+// @mode: run-pass
+// @command: test
+// @decisions: D-1918, D-723
+//! Under `cheby test` a child's inherited standard output goes to a temporary file, whose bytes
+//! join the test's captured output when the child is reaped, so they stay with their test (§13.6).
+//! Here `run` reaps the child before the test prints again.
+
+import std::io
+import std::process
+
+test "a child writes to its inherited standard output" {
+  io::println("the test prints first")
+  let spec = process::command("printf", ["the child prints\n"])
+  assert process::run(spec) == Ok(process::Exited(0))
+  io::println("the test prints last")
+}
+
+test "another test prints" {
+  io::println("the second test prints")
+}

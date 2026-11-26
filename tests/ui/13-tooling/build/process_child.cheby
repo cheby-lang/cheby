@@ -1,0 +1,21 @@
+// @mode: run-pass
+// @command: build
+// @milestone: M3
+// @decisions: D-1916, D-1911, D-1026
+//! An executable starts children as `cheby run` does: a child of `run` writes to the real standard
+//! output after what the program printed before, and `output` captures what a child writes.
+
+import std::io
+import std::process
+import std::result
+import std::string
+
+fn main() -> Result<Nil, io::Error> {
+  io::println("the executable starts a child")
+  use status <- result::try(process::run(process::command("printf", ["the child writes\n"])))
+  io::println("{status:?}")
+  use captured <- result::try(process::output(process::command("printf", ["captured"])))
+  let text = string::from_bytes_lossy(captured.stdout)
+  io::println("{text}, {captured.status:?}")
+  Ok(Nil)
+}

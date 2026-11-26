@@ -58,6 +58,12 @@ pub enum Chunk {
 pub struct Capture {
     /// The chunks written so far and not taken.
     chunks: Mutex<Vec<Chunk>>,
+    /// The temporary files of children's inherited output that no `wait`
+    /// or `finish` joined, because an unwinding body left the child to the
+    /// reaper (D-1922): their bytes follow the chunks when the host takes
+    /// them at the test's end. A leaf lock.
+    #[cfg(unix)]
+    pending: Mutex<Vec<(Stream, Arc<std::fs::File>)>>,
 }
 
 impl Capture {
@@ -68,15 +74,47 @@ impl Capture {
     }
 
     /// Takes the chunks written so far, in order; the host replays them.
+    /// The output of children that the reaper took follows them, each
+    /// file's bytes as one chunk (D-1922).
     #[must_use]
     pub fn take(&self) -> Vec<Chunk> {
-        std::mem::take(&mut *self.chunks.lock())
+        #[cfg_attr(not(unix), expect(unused_mut, reason = "only Unix keeps files"))]
+        let mut chunks = std::mem::take(&mut *self.chunks.lock());
+        #[cfg(unix)]
+        {
+            let pending = std::mem::take(&mut *self.pending.lock());
+            for (stream, file) in pending {
+                let bytes = file_contents(&file);
+                if !bytes.is_empty() {
+                    chunks.push(Chunk::Write(stream, bytes));
+                }
+            }
+        }
+        chunks
+    }
+
+    /// Keeps the temporary file of a child's inherited output on `stream`
+    /// until the host takes the chunks (D-1922).
+    #[cfg(unix)]
+    pub(crate) fn keep_output(&self, stream: Stream, file: Arc<std::fs::File>) {
+        self.pending.lock().push((stream, file));
     }
 
     /// Appends one write's bytes, the parts joined, as one chunk. The bytes
     /// are copied before the lock is taken, so the lock covers only a push.
     fn append(&self, stream: Stream, parts: &[&[u8]]) {
         let bytes = parts.concat();
+        if bytes.is_empty() {
+            return;
+        }
+        self.chunks.lock().push(Chunk::Write(stream, bytes));
+    }
+
+    /// Appends a child's captured output on `stream`, read from its
+    /// temporary file once the child was reaped, as one chunk (D-1918);
+    /// nothing when it is empty.
+    #[cfg(unix)]
+    pub(crate) fn append_output(&self, stream: Stream, bytes: Vec<u8>) {
         if bytes.is_empty() {
             return;
         }
@@ -93,10 +131,29 @@ impl Capture {
     }
 }
 
+/// Every byte of `file`, from its start, read without moving its
+/// position; what a read error leaves out is lost (D-1918).
+#[cfg(unix)]
+pub(crate) fn file_contents(file: &std::fs::File) -> Vec<u8> {
+    use std::os::unix::fs::FileExt;
+    let mut data = Vec::new();
+    let mut block = vec![0_u8; 64 << 10];
+    loop {
+        let offset = u64::try_from(data.len()).unwrap_or(u64::MAX);
+        match file.read_at(&mut block, offset) {
+            Ok(0) => return data,
+            Ok(count) => data.extend_from_slice(block.get(..count).unwrap_or_default()),
+            Err(error) if error.kind() == std::io::ErrorKind::Interrupted => {}
+            Err(_) => return data,
+        }
+    }
+}
+
 /// The capture of the running fiber's group: `None` on a host thread, on an
 /// isolated entry (which has no group) and on a fiber whose group has no
-/// capture.
-fn current() -> Option<Arc<Capture>> {
+/// capture. `std::process` keeps it for a child whose inherited output it
+/// captures (D-1918, `process.rs`).
+pub(crate) fn current() -> Option<Arc<Capture>> {
     let me = crate::entry::current_fiber()?;
     let group: Arc<DetachedGroup> = me.conc.group()?;
     group.capture().map(Arc::clone)

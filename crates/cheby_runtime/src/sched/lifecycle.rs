@@ -979,6 +979,9 @@ impl Shared {
     /// first wins), starts the halt and, if this call fixed the status,
     /// sends `Exited` with it to every host waiting for a root.
     fn terminate(&self, status: i32) {
+        // D-1917: this runtime's open children are killed at every end it
+        // controls; the kill waits for nothing.
+        crate::process::kill_children_of_shared(self);
         let won = self
             .exit_status
             .compare_exchange(
@@ -1045,7 +1048,8 @@ pub(crate) fn terminate(status: i32) -> ! {
         fatal(format_args!("a frozen fiber was resumed"))
     }
     // An isolated entry: its host learns of the termination and never
-    // joins this thread.
+    // joins this thread. It runs no scheduler, so it started no child
+    // (D-1919).
     if let Some(sender) = me.outcome() {
         sender.send(EntryOutcome::Exited(status)).ok();
     }

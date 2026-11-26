@@ -1,0 +1,14 @@
+1. a step that writes to the terminal
+   building cheby for native
+   ok
+2. a step whose output is captured
+   3 files: a.txt, b.txt, c.txt
+   warnings: ["one file skipped"]
+3. a helper that answers line by line
+   hello, Ada
+   hello, Grace
+   hello, Linus
+   the helper: ok
+4. a step that reads its input and fails
+   checking the input
+   failed: exit status 3

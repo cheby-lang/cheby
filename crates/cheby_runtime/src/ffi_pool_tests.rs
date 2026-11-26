@@ -1800,9 +1800,9 @@ fn ffi_pool_abandon_a_job_that_deferred_keeps_its_drop_unrun() {
 // read which thread a std handle's finalizer runs on, for each actor of a
 // `@blocking` call: `handles::handle_finalize` has no job test.
 
-/// The kinds with a payload, 40 to 43 and 45 to 47: every std handle that
+/// The kinds with a payload, 40 to 43, 45 to 47 and 49 to 51: every std handle that
 /// has a finalizer.
-const STD_KINDS: [HandleKind; 7] = [
+const STD_KINDS: [HandleKind; 10] = [
     HandleKind::Sender,
     HandleKind::Receiver,
     HandleKind::Fiber,
@@ -1810,6 +1810,9 @@ const STD_KINDS: [HandleKind; 7] = [
     HandleKind::File,
     HandleKind::Listener,
     HandleKind::Connection,
+    HandleKind::Child,
+    HandleKind::Reader,
+    HandleKind::Writer,
 ];
 
 /// A test payload for any of [`STD_KINDS`]. A real `Sender`'s finalizer

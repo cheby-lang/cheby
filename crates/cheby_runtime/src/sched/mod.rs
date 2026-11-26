@@ -225,8 +225,20 @@ pub(crate) enum Where {
     Global,
 }
 
+/// The next runtime's key in `std::process`'s registry of open children
+/// ([`Shared::child_owner`]).
+static NEXT_CHILD_OWNER: AtomicU64 = AtomicU64::new(1);
+
 /// What every thread of a runtime shares.
 pub(crate) struct Shared {
+    /// This runtime's key in `std::process`'s registry of open children
+    /// (D-1917, `process/registry.rs`): unique in the process, never
+    /// reused, so the end of one runtime's run is never another's.
+    #[cfg_attr(
+        not(unix),
+        expect(dead_code, reason = "children start on Unix only until M6 (D-1919)")
+    )]
+    pub(crate) child_owner: u64,
     /// The worker slots, by index (D-795).
     workers: Workers,
     /// The join handle of every worker thread started and not joined yet,
@@ -1140,6 +1152,7 @@ impl Runtime {
         }
         let driver = poll::Driver::new().map_err(RuntimeError::Spawn)?;
         let shared = Arc::new(Shared {
+            child_owner: NEXT_CHILD_OWNER.fetch_add(1, Ordering::Relaxed),
             workers: Workers::new(),
             threads: Mutex::new(Vec::with_capacity(threads)),
             injector: Injector::new(),

@@ -81,8 +81,9 @@ fn examples_check_cleanly() {
         }
         checked += 1;
     }
-    // 33 since 034 checks with `std::log` shipped (D-1614, D-1635).
-    assert_eq!(checked, 33);
+    // 33 since 034 checks with `std::log` shipped (D-1614, D-1635), and 34 with 036, which
+    // starts children with `std::process` (D-1920).
+    assert_eq!(checked, 34);
 }
 
 /// No example needs a std module of a later tier since `std::http` ships
@@ -290,7 +291,7 @@ fn lowering_reports_no_e0038() {
     let mut not_yet = 0_usize;
     for dir in examples() {
         let name = dir.file_name().unwrap().to_string_lossy().into_owned();
-        // 030, which is not one of the 33 below.
+        // 030, which is not one of the 34 below.
         if dependencies::not_yet_here(&dir) {
             continue;
         }
@@ -310,8 +311,8 @@ fn lowering_reports_no_e0038() {
             Err(e) => failures.push(format!("{name}: {e}")),
         }
     }
-    // 33 since 034 lowers with `std::log` shipped (D-1614, D-1635).
-    assert_eq!(lowered + not_yet, 33, "{}", failures.join("\n"));
+    // 33 since 034 lowers with `std::log` shipped (D-1614, D-1635), and 34 with 036 (D-1920).
+    assert_eq!(lowered + not_yet, 34, "{}", failures.join("\n"));
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/ui");
     let mut cases = Vec::new();
     collect_ui_tests(&root, &mut cases);

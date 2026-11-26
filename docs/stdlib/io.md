@@ -305,9 +305,9 @@ What the file functions and `read_line` do on a host without a file system or st
 
 ## Streams
 
-Two interfaces stand for streams of bytes, so that one function can take a file, a socket or a standard stream, as Go's `io.Reader` and `io.Writer` do (D-046, D-1072, ADR-0070).
+Two interfaces stand for streams of bytes, so that one function can take a file, a socket, a standard stream or a child's pipe, as Go's `io.Reader` and `io.Writer` do (D-046, D-1072, ADR-0070).
 
-- **Satisfied for free.** `file::File`, `net::Connection` and the standard-stream handles of `std::file` satisfy both interfaces through their modules' `read_bytes` and `write_bytes`, with no code of their own, because satisfaction looks only at the type's own module ([§8.2](../spec/08-interfaces.md#82-satisfaction), D-1062, D-1071). `std::io` imports neither `std::file` nor `std::net` (D-145).
+- **Satisfied for free.** `file::File`, `net::Connection` and the standard-stream handles of `std::file` satisfy both interfaces through their modules' `read_bytes` and `write_bytes`, and `process::Reader` satisfies `Source` and `process::Writer` satisfies `Sink` in the same way, with no code of their own, because satisfaction looks only at the type's own module ([§8.2](../spec/08-interfaces.md#82-satisfaction), D-1062, D-1071, D-1914). `std::io` imports none of `std::file`, `std::net` and `std::process` (D-145).
 - **`dyn`.** Both interfaces are `dyn`-safe, so a `dyn io::Source` holds any source ([§8.6](../spec/08-interfaces.md#86-dyn-values)).
 - **A program's own streams.** Values are immutable (D-017), so a type of the program satisfies `Source` only by wrapping something that has state, such as a handle or a channel. It reports a failure with an error built by [`other`](#other).
 - **Written in Cheby.** [`copy`](#copy) and [`other`](#other) are Cheby and add no kernel. `copy` counts bytes through a private binding of `bytes::length`'s own kernel, so that a program that uses `std::io` does not compile all of `std::bytes` (D-1072, D-1297).
@@ -396,20 +396,21 @@ test "other builds an error with its own text" {
 
 ## Errors
 
-Each kind of failure that has a predicate below has a fixed text, the same on every platform. Tier 1 has three of them, `is_not_found`, `is_permission_denied` and `is_invalid_data` (D-367). Tier 3 adds one for each kind that its functions cause (D-981, D-1062, D-1063, D-1066):
+Each kind of failure that has a predicate below has a fixed text, the same on every platform. Tier 1 has three of them, `is_not_found`, `is_permission_denied` and `is_invalid_data` (D-367). Tier 3 adds one for each kind that its functions cause (D-981, D-1062, D-1063, D-1066, D-1915):
 
-| Predicate                | Text                  | Caused by                                                                           |
-| ------------------------ | --------------------- | ----------------------------------------------------------------------------------- |
-| `is_already_exists`      | `already exists`      | `file::create_dir`, `create_dir_all`, `create_new` and `with_create_new`            |
-| `is_a_directory`         | `is a directory`      | `file::open`, `create`, `append` and `remove_file`                                  |
-| `is_not_a_directory`     | `not a directory`     | `file::list_dir`, `remove_dir`, and a path through a file                           |
-| `is_directory_not_empty` | `directory not empty` | `file::remove_dir`                                                                  |
-| `is_connection_refused`  | `connection refused`  | `net::connect`, `http::get` and `http::send`                                        |
-| `is_connection_reset`    | `connection reset`    | `net::read_bytes`, `write_bytes` and `shutdown_write`, `http::get` and `http::send` |
-| `is_address_in_use`      | `address in use`      | `net::listen` and `http::serve`                                                     |
-| `is_host_not_found`      | `host not found`      | `net::listen`, `net::connect`, `http::get` and `http::send`                         |
-| `is_closed`              | `closed`              | all `std::file` functions on a handle, `std::net` ones on a socket but `local_port` |
-| `is_invalid_input`       | `invalid input`       | `std::file`, `std::net`, `http::serve` and this module's file functions             |
+| Predicate                | Text                  | Caused by                                                                                                                     |
+| ------------------------ | --------------------- | ----------------------------------------------------------------------------------------------------------------------------- |
+| `is_already_exists`      | `already exists`      | `file::create_dir`, `create_dir_all`, `create_new` and `with_create_new`                                                      |
+| `is_a_directory`         | `is a directory`      | `file::open`, `create`, `append` and `remove_file`                                                                            |
+| `is_not_a_directory`     | `not a directory`     | `file::list_dir`, `remove_dir`, and a path through a file                                                                     |
+| `is_directory_not_empty` | `directory not empty` | `file::remove_dir`                                                                                                            |
+| `is_connection_refused`  | `connection refused`  | `net::connect`, `http::get` and `http::send`                                                                                  |
+| `is_connection_reset`    | `connection reset`    | `net::read_bytes`, `write_bytes` and `shutdown_write`, `http::get` and `http::send`                                           |
+| `is_address_in_use`      | `address in use`      | `net::listen` and `http::serve`                                                                                               |
+| `is_host_not_found`      | `host not found`      | `net::listen`, `net::connect`, `http::get` and `http::send`                                                                   |
+| `is_closed`              | `closed`              | all `std::file` functions on a handle, `std::net` ones on a socket but `local_port`, `std::process` ones on a child or a pipe |
+| `is_invalid_input`       | `invalid input`       | `std::file`, `std::net`, `http::serve`, `std::process` and this module's file functions                                       |
+| `is_broken_pipe`         | `broken pipe`         | `process::write_bytes`, `write` and `write_line`                                                                              |
 
 `std::http` returns these through `http::io_error` (D-1016). Every other failure keeps the operating system's own message, or the text given to [`other`](#other) (D-1072).
 
@@ -432,7 +433,7 @@ test "a missing file is not found" {
 }
 ```
 
-These three are the predicates of tier 1 (D-367). The ten after [`is_invalid_data`](#is_invalid_data) came with the tier-3 functions that can cause them (D-981). Every other kind is reached through `show`.
+These three are the predicates of tier 1 (D-367). The eleven after [`is_invalid_data`](#is_invalid_data) came with the tier-3 functions that can cause them (D-981). Every other kind is reached through `show`.
 
 ### `is_permission_denied`
 
@@ -667,7 +668,7 @@ The _Example_ of [`net::connect`](net.md#connect) uses it.
 pub fn is_closed(error: Error) -> Bool
 ```
 
-Tells whether `error` means that a handle was used after it was closed: a `file::File` after `file::close`, or after the `file::with_*` call that opened it returned (D-993), and a `net::Connection` or `net::Listener` after `net::close` or `net::close_listener`. A fiber parked in `net::accept`, `net::read_bytes` or `net::write_bytes` on a socket that another fiber closes wakes with this error too (D-1063). Its text is `closed` (D-981).
+Tells whether `error` means that a handle was used after it was closed: a `file::File` after `file::close`, or after the `file::with_*` call that opened it returned (D-993), a `net::Connection` or `net::Listener` after `net::close` or `net::close_listener`, and a `process::Child` or one of its pipes after its `process::with_child` returned, or a `process::Writer` after `process::close` (D-1912, D-1914). A fiber parked in `net::accept`, `net::read_bytes` or `net::write_bytes` on a socket that another fiber closes wakes with this error too, and so does one parked in a write on a `process::Writer` that another fiber closes (D-1063, D-1914). Its text is `closed` (D-981).
 
 - **Cost:** O(1). Informative.
 
@@ -693,11 +694,35 @@ The tests of [`net::close`](net.md#close) and [`net::close_listener`](net.md#clo
 pub fn is_invalid_input(error: Error) -> Bool
 ```
 
-Tells whether `error` means that an argument could not be used: a path that contains U+0000, a port outside 0 to 65535, or a `file::File` used in a mode it was not opened for, such as writing to a file opened for reading. Its text is `invalid input` (D-981).
+Tells whether `error` means that an argument could not be used: a path that contains U+0000, a port outside 0 to 65535, a `file::File` used in a mode it was not opened for, such as writing to a file opened for reading, a `process::Command` that the runners reject before the start, and a pipe of a child's stream that is not piped (D-1908, D-1914). Its text is `invalid input` (D-981).
 
 - **Cost:** O(1). Informative.
 
 The tests of [`file::open`](file.md#open) and [`net::listen`](net.md#listen) use it.
+
+### `is_broken_pipe`
+
+```cheby
+pub fn is_broken_pipe(error: Error) -> Bool
+```
+
+Tells whether `error` means that a write went to a pipe whose reading end is closed: a write to a `process::Writer` whose child closed its standard input or ended. Only `std::process`'s writes cause it. A socket whose peer is gone gives `is_connection_reset` instead (D-981, D-1915). Its text is `broken pipe`.
+
+- **Cost:** O(1). Informative.
+
+```cheby
+test "a write to a child that has ended is a broken pipe" {
+  use child <- process::with_child(process::command("true", []))
+  use _ <- result::try(process::wait(child))
+  let assert Err(reason) = process::write(process::stdin(child), "late")
+  assert io::is_broken_pipe(reason)
+  assert !io::is_closed(reason)
+  assert "{reason}" == "broken pipe"
+  Ok(Nil)
+}
+```
+
+The test of [`process::write_bytes`](process.md#write_bytes) shows it too.
 
 ### `show`
 

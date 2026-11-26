@@ -5,8 +5,10 @@
 //!   its `Poll` ([`IoShared`]), outside the poller's lock, so a fiber
 //!   registers a socket while a worker blocks in `poll`. A socket is
 //!   registered once ([`IoHandle::register`]), when it is created, for
-//!   reading and writing, edge-triggered (`mio` is edge-triggered on every
-//!   platform), and its finalizer deregisters it
+//!   reading and writing (a child's pipe end or exit descriptor in its one
+//!   direction, [`IoHandle::register_for`], D-1916), edge-triggered
+//!   (`mio` is edge-triggered on every platform), and its finalizer
+//!   deregisters it
 //!   ([`IoHandle::deregister`]), which never waits (D-703).
 //! - **Entries.** Each socket has a reference-counted heap entry
 //!   ([`IoEntry`]) with its token, readiness bits per direction and one
@@ -498,20 +500,41 @@ impl IoHandle {
         runtime: &Shared,
         source: &mut dyn mio::event::Source,
     ) -> io::Result<IoHandle> {
+        Self::register_for(
+            runtime,
+            source,
+            mio::Interest::READABLE | mio::Interest::WRITABLE,
+        )
+    }
+
+    /// [`IoHandle::register`] for `interest` only: a descriptor that is
+    /// only ever read or only ever written (D-1916: a child's pipe end,
+    /// whose other direction a kqueue may refuse, and a child's exit
+    /// descriptor, which is only readable). A wait in the other direction
+    /// never wakes.
+    ///
+    /// # Errors
+    ///
+    /// As for [`IoHandle::register`].
+    pub(crate) fn register_for(
+        runtime: &Shared,
+        source: &mut dyn mio::event::Source,
+        interest: mio::Interest,
+    ) -> io::Result<IoHandle> {
         let Some(io) = runtime.driver.io() else {
             return Err(io::Error::other("the runtime has no system poller"));
         };
-        Self::register_on(io, source)
+        Self::register_on(io, source, interest)
     }
 
-    /// [`IoHandle::register`] on the shared part `io`.
-    fn register_on(io: &Arc<IoShared>, source: &mut dyn mio::event::Source) -> io::Result<Self> {
+    /// [`IoHandle::register_for`] on the shared part `io`.
+    fn register_on(
+        io: &Arc<IoShared>,
+        source: &mut dyn mio::event::Source,
+        interest: mio::Interest,
+    ) -> io::Result<Self> {
         let entry = io.insert()?;
-        if let Err(error) = io.registry.register(
-            source,
-            entry.token,
-            mio::Interest::READABLE | mio::Interest::WRITABLE,
-        ) {
+        if let Err(error) = io.registry.register(source, entry.token, interest) {
             io.remove(&entry);
             return Err(error);
         }

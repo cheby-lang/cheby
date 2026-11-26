@@ -1,0 +1,27 @@
+// @mode: run-pass
+// @decisions: D-1917
+//! When `main` returns while a detached fiber holds a child, the child is killed (§10.10). The
+//! child inherits standard output, which the harness reads to its end, so a child left running
+//! would keep the test waiting for ten minutes.
+
+import std::channel
+import std::duration
+import std::fiber
+import std::io
+import std::process
+import std::time
+
+fn main() {
+  let (ready_tx, ready) = channel::new::<Nil>(1)
+  fiber::spawn_detached(fn() {
+    let spec = process::command("sleep", ["600"])
+      |> process::with_stdout(_, process::inherited())
+    process::with_child(spec, fn(_) {
+      let _ = channel::send(ready_tx, Nil)
+      time::sleep(duration::hours(1))
+      Ok(Nil)
+    })
+  })
+  let _ = channel::receive(ready)
+  io::println("main returns while a child runs")
+}

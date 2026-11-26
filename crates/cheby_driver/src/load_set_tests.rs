@@ -111,7 +111,7 @@ fn load_set_equals_the_thir_walk_on_every_example() {
         assert_same(&front, &format!("{what}: constants"), &roots, &starts);
         checked += 1;
     }
-    // 34 examples, 030 and 031 aside.
+    // 35 examples, 030 and 031 aside.
     assert!(checked >= 30, "{checked}");
 }
 

@@ -1,0 +1,3 @@
+the program read Some("first")
+the child read 0 bytes
+the program read Some("second")

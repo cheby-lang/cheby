@@ -1,0 +1,4 @@
+the program writes first, into its buffer
+the child writes second
+the program again, after Exited(0)
+then Exited(3)

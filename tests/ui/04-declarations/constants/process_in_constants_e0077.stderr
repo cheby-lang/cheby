@@ -1,0 +1,24 @@
+error[E0077]: evaluating the constant `by_run` reached an effect
+  --> tests/ui/04-declarations/constants/process_in_constants_e0077.cheby:16:7
+   |
+16 | const by_run: Int = ran()
+   |       ^^^^^^ this constant is computed at compile time
+   |
+   = note: it reached the external function `cheby_process_sys_start`; only the kernels of `std::list`, `std::map`, `std::set`, `std::string`, `std::bytes` and the numeric modules run at compile time
+
+error[E0077]: evaluating the constant `by_output` reached an effect
+  --> tests/ui/04-declarations/constants/process_in_constants_e0077.cheby:25:7
+   |
+25 | const by_output: Int = captured()
+   |       ^^^^^^^^^ this constant is computed at compile time
+   |
+   = note: it reached the external function `cheby_process_sys_start`; only the kernels of `std::list`, `std::map`, `std::set`, `std::string`, `std::bytes` and the numeric modules run at compile time
+
+error[E0077]: evaluating the constant `by_with_child` reached an effect
+  --> tests/ui/04-declarations/constants/process_in_constants_e0077.cheby:34:7
+   |
+34 | const by_with_child: Int = started()
+   |       ^^^^^^^^^^^^^ this constant is computed at compile time
+   |
+   = note: it reached the external function `cheby_process_sys_start`; only the kernels of `std::list`, `std::map`, `std::set`, `std::string`, `std::bytes` and the numeric modules run at compile time
+

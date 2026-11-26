@@ -1,0 +1,4 @@
+<Child> <Reader> <Writer>
+("cat", <Child>)
+Pipes(<Reader>, <Writer>)
+Some(<Reader>)

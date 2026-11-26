@@ -1,0 +1,10 @@
+the test prints first
+the test prints second
+the child prints
+test ui_test "a body that fails while its child runs" ... FAILED
+
+---- ui_test "a body that fails while its child runs" ----
+panicked at tests/ui/13-tooling/test/child_output_of_a_failed_test.cheby:22:5:
+the body fails
+
+test result: FAILED. 0 passed; 1 failed; 0 filtered out

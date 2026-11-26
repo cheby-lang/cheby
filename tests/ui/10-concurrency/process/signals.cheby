@@ -1,0 +1,30 @@
+// @mode: run-pass
+// @decisions: D-1913, D-1910
+//! `terminate` and `kill` reach the child, and `wait` reports the signal; a later `wait` returns
+//! the same status. A cancelled `wait` takes nothing, so the child runs on. A signal to a child that
+//! has ended is `Ok(Nil)` (§10.8).
+
+import std::duration
+import std::fiber
+import std::io
+import std::process
+import std::result
+
+fn main() -> Result<Nil, io::Error> {
+  use first <- result::try(process::with_child(process::command("sleep", ["600"]), fn(child) {
+    let waited = fiber::timeout(duration::milliseconds(20), fn() { process::wait(child) })
+    io::println("a wait under a timeout: {waited:?}")
+    use _ <- result::try(process::terminate(child))
+    process::wait(child)
+  }))
+  io::println("terminate: {first:?}")
+  use second <- result::try(process::with_child(process::command("sleep", ["600"]), fn(child) {
+    use _ <- result::try(process::kill(child))
+    use status <- result::try(process::wait(child))
+    use again <- result::try(process::wait(child))
+    use late <- result::try(process::terminate(child))
+    Ok((status, again, late))
+  }))
+  io::println("kill: {second:?}")
+  Ok(Nil)
+}

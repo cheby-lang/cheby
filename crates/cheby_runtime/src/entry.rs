@@ -773,6 +773,10 @@ impl Default for RunConfig {
 /// With `CHEBY_RT_STATS=1` it first prints `main`'s wall time and the
 /// domain's counters to standard error ([`stats::report`]).
 ///
+/// Once `main` has ended, however it ended, every child process of the run
+/// still open is killed with SIGKILL, waiting for none (D-1917,
+/// [`crate::process::kill_children_of`]).
+///
 /// # Errors
 ///
 /// [`RuntimeError`] if the runtime cannot start (an invalid
@@ -834,6 +838,12 @@ pub unsafe fn run_main(entry: EntryFn, config: RunConfig) -> Result<i32, Runtime
         // SAFETY: as above, for `run_entry`.
         None => unsafe { run_entry(entry, &entry_config) },
     };
+    // D-1917: `main` ended, returning, failing, panicking, deadlocked or
+    // terminated: every child of this run still open is killed, without
+    // waiting, before the exit sequence tears the other fibers down.
+    if let Some(runtime) = &runtime {
+        crate::process::kill_children_of(runtime);
+    }
     // A termination (D-709): the program ends with its status at once.
     // The world is halted (the thread backend's entry thread is parked
     // for good), nothing more is printed, and there are no stats and no

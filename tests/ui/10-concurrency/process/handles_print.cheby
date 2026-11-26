@@ -1,0 +1,25 @@
+// @mode: run-pass
+// @decisions: D-1919, D-647
+//! A child and its pipes are handles: they debug-print as `<Child>`, `<Reader>` and `<Writer>`,
+//! alone and inside other values, and never show what they hold (§9.5, §12.5.3).
+
+import std::io
+import std::process
+
+pub type Pipes {
+  Pipes(process::Reader, process::Writer),
+}
+
+fn main() -> Result<Nil, io::Error> {
+  use child <- process::with_child(process::command("cat", []))
+  let reader = process::stdout(child)
+  let writer = process::stdin(child)
+  io::println("{child:?} {reader:?} {writer:?}")
+  let pair = ("cat", child)
+  io::println("{pair:?}")
+  let pipes = Pipes(reader, writer)
+  io::println("{pipes:?}")
+  let maybe = Some(reader)
+  io::println("{maybe:?}")
+  process::close(writer)
+}

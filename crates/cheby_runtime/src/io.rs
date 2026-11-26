@@ -171,16 +171,25 @@ pub unsafe extern "C" fn cheby_io_eprintln(text: Word) {
 
 /// The kind code of a failure with no predicate (D-484: any code but 1, 2
 /// and 3).
-const KIND_OTHER: i64 = 0;
+pub(crate) const KIND_OTHER: i64 = 0;
 /// The kind code of `io::is_not_found`.
-const KIND_NOT_FOUND: i64 = 1;
+pub(crate) const KIND_NOT_FOUND: i64 = 1;
 /// The kind code of `io::is_permission_denied`.
-const KIND_PERMISSION_DENIED: i64 = 2;
+pub(crate) const KIND_PERMISSION_DENIED: i64 = 2;
 /// The kind code of `io::is_invalid_data` (D-311).
 pub(crate) const KIND_INVALID_DATA: i64 = 3;
+/// The kind code of `io::is_closed` (D-981, D-1063): `std::process`'s
+/// handles after `finish` or `close` (D-1912, D-1914).
+#[cfg(unix)]
+pub(crate) const KIND_CLOSED: i64 = 12;
 /// The kind code of `io::is_invalid_input`: a path that contains U+0000
 /// (D-981).
-const KIND_INVALID_INPUT: i64 = 13;
+pub(crate) const KIND_INVALID_INPUT: i64 = 13;
+/// The kind code of `io::is_broken_pipe` (D-1915): a write to a child's
+/// pipe whose reading end is closed. Only `std::process`'s writes give it
+/// (`process.rs`); a socket's `EPIPE` stays kind 9 (D-981).
+#[cfg(unix)]
+pub(crate) const KIND_BROKEN_PIPE: i64 = 14;
 
 /// The failure of a whole-file kernel whose `path` contains U+0000, which
 /// cannot name a file: kind 13, checked on the fiber before any job
@@ -720,9 +729,10 @@ pub fn flush_stdout() -> io::Result<()> {
     }
 }
 
-/// Flushes standard output before standard input is read (D-346), ending
-/// the program with status 1 when it cannot (D-306, D-709).
-fn flush_before_read() {
+/// Flushes standard output before standard input is read (D-346), and
+/// before a child starts (D-1916, `process.rs`), ending the program with
+/// status 1 when it cannot (D-306, D-709).
+pub(crate) fn flush_before_read() {
     if flush_stdout().is_err() {
         terminate(abi::status::ERR);
     }
@@ -737,6 +747,37 @@ fn flush_before_read() {
 /// ([`serve_buffered`]), so no worker waits on it and no guard lives
 /// across a switch.
 static STDIN: Mutex<LineReader> = Mutex::new(LineReader::new());
+
+/// D-1921: gives a child that inherits standard input the bytes that
+/// [`STDIN`] read ahead and did not take: the descriptor moves back over
+/// them and the reader drops them, where descriptor 0 can seek. Where it
+/// cannot (a pipe, a terminal), or while a refill holds the reader, the
+/// bytes stay with the program. Called on the blocking pool, right before
+/// the child starts (`process.rs`); it never waits for the reader.
+#[cfg(unix)]
+pub(crate) fn give_back_stdin() {
+    let Some(mut reader) = STDIN.try_lock() else {
+        return;
+    };
+    let buffered = reader.buffered_len();
+    let Ok(back) = libc::off_t::try_from(buffered) else {
+        return;
+    };
+    if back == 0 {
+        return;
+    }
+    // SAFETY: `lseek` on descriptor 0 takes no pointer; a descriptor that
+    // cannot seek fails with `ESPIPE` and is left as it was.
+    if unsafe { libc::lseek(0, back.saturating_neg(), libc::SEEK_CUR) } >= 0 {
+        reader.discard();
+    }
+}
+
+/// Standard input's reader, for tests that fill it.
+#[cfg(all(test, unix))]
+pub(crate) fn stdin_reader() -> &'static Mutex<LineReader> {
+    &STDIN
+}
 
 /// The reads of standard input that wait for [`STDIN`] to give them a
 /// line: a refill submitted to the blocking pool whose read has not yet
@@ -849,7 +890,7 @@ impl LineReader {
     /// its ending (D-305), else the kept end: the unfinished line at the
     /// end of input, or `Ok(None)` when nothing is buffered, or the kept
     /// failure. `None` when a read must fill the reader first.
-    fn take_line(&mut self) -> Option<io::Result<Option<Vec<u8>>>> {
+    pub(crate) fn take_line(&mut self) -> Option<io::Result<Option<Vec<u8>>>> {
         if let Some(line) = self.buffered_line() {
             return Some(Ok(Some(line)));
         }
@@ -921,7 +962,7 @@ impl LineReader {
     /// At least one and at most `max(limit, 1)` buffered bytes (D-298),
     /// else the kept end: `Ok(None)` at the end of input, or the failure.
     /// `None` when a read must fill the reader first.
-    fn take_bytes(&mut self, limit: usize) -> Option<io::Result<Option<Vec<u8>>>> {
+    pub(crate) fn take_bytes(&mut self, limit: usize) -> Option<io::Result<Option<Vec<u8>>>> {
         let rest = self.data.get(self.start..).unwrap_or_default();
         if rest.is_empty() {
             return Some(self.take_end()?.map(|()| None));
@@ -960,6 +1001,73 @@ impl LineReader {
             }
             self.fill_line(input);
         }
+    }
+
+    /// Everything buffered, once the end of input is kept, and the end
+    /// taken; the kept failure instead, when the input failed. `None` while
+    /// no end is kept: a read must fill the reader first (`process::read_all`,
+    /// D-1911).
+    #[cfg(unix)]
+    pub(crate) fn take_all(&mut self) -> Option<io::Result<Vec<u8>>> {
+        self.end.as_ref()?;
+        Some(self.take_end()?.map(|()| {
+            // The buffer is moved out, not copied, and its memory goes
+            // with it (a review measured three copies of `output`'s bytes).
+            let mut rest = std::mem::take(&mut self.data);
+            rest.drain(..self.start.min(rest.len()));
+            self.start = 0;
+            self.scanned = 0;
+            rest
+        }))
+    }
+
+    /// One read of a non-blocking `input` (a child's pipe, `process.rs`,
+    /// D-1914) into the buffer's end, of [`STDIN_CHUNK`] bytes at most:
+    /// `Ok` after some bytes, or at the end of input, which is kept; the
+    /// read's error otherwise, `WouldBlock` and `Interrupted` included,
+    /// with nothing kept, so the caller waits or reads again.
+    #[cfg(unix)]
+    pub(crate) fn read_available(&mut self, input: &mut impl Read) -> io::Result<()> {
+        self.data.drain(..self.start.min(self.data.len()));
+        self.start = 0;
+        let filled = self.data.len();
+        self.data.resize(filled.saturating_add(STDIN_CHUNK), 0);
+        let read = match self.data.get_mut(filled..) {
+            Some(free) => input.read(free),
+            None => Ok(0),
+        };
+        match read {
+            Ok(count) => {
+                self.data.truncate(filled.saturating_add(count));
+                if count == 0 {
+                    self.end = Some(End::Input);
+                }
+                Ok(())
+            }
+            Err(error) => {
+                self.data.truncate(filled);
+                Err(error)
+            }
+        }
+    }
+
+    /// How many bytes the reader holds and has not returned: those a child
+    /// given the reader's file as its standard input would miss (D-1909,
+    /// `file.rs`).
+    #[cfg(unix)]
+    pub(crate) fn buffered_len(&self) -> usize {
+        self.data.len().saturating_sub(self.start)
+    }
+
+    /// Drops every buffered byte and a kept end, after the file's
+    /// descriptor was moved back over those bytes for a child (D-1909): the
+    /// next read reads the file again, from where the child left it.
+    #[cfg(unix)]
+    pub(crate) fn discard(&mut self) {
+        self.data.clear();
+        self.start = 0;
+        self.scanned = 0;
+        self.end = None;
     }
 
     /// At least one and at most `max(limit, 1)` bytes the reader holds,

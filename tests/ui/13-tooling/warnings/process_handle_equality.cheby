@@ -1,0 +1,30 @@
+// @mode: check-pass
+// @decisions: D-1919, D-518
+//! `==` on a type that can reach a `Child`, `Reader` or `Writer` warns, as on any handle. So
+//! does `==` on a `Command`, which holds a `file::File` through `process::to_file` (§3.13).
+
+import std::process
+
+pub type Job {
+  Job(process::Child, String),
+}
+
+pub fn same_job(a: Job, b: Job) -> Bool {
+  a == b
+}
+
+pub fn same_writer(a: Option<process::Writer>, b: Option<process::Writer>) -> Bool {
+  a == b
+}
+
+pub fn same_readers(a: List<process::Reader>, b: List<process::Reader>) -> Bool {
+  a != b
+}
+
+pub fn same_command(a: process::Command, b: process::Command) -> Bool {
+  a == b
+}
+
+pub fn same_status(a: process::Status, b: process::Status) -> Bool {
+  a == b
+}
