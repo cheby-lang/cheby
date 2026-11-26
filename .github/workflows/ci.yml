@@ -202,6 +202,10 @@ jobs:
           archive: false
       - name: D-number coverage
         run: cargo xtask coverage
+      # Once: the log and the citations are the same on every platform.
+      - name: The decision log's form and citations, and ADR numbers (D-1942, D-1943)
+        if: matrix.name == 'linux-x86_64'
+        run: cargo xtask decisions lint
       - name: The runtime archive's system libraries
         if: runner.os != 'Windows'
         run: cargo xtask check-native-libs

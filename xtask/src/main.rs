@@ -26,6 +26,9 @@
 //!   test's header (`src/main.cheby` of a package test), from each
 //!   transcript's header (D-638) and from each test under `tests/lsp/`
 //!   (D-1352).
+//! - `decisions`: `show`, `search`, `next-id` and `lint` for the decision
+//!   log, and `next-adr` for the ADRs; CI runs `lint` (D-1940, D-1941,
+//!   D-1942, D-1943; [`decisions`]).
 //! - `cross-check`: parses examples and UI tests with `tree-sitter-cheby`
 //!   at the pinned commit and with the compiler parser, and fails if they
 //!   disagree (D-272).
@@ -59,6 +62,7 @@ mod bench_oqp11;
 mod bench_run;
 mod cache;
 mod cross_check;
+mod decisions;
 mod determinism;
 mod examples;
 mod junit;
@@ -72,7 +76,7 @@ use std::process::{Command, ExitCode};
 use std::time::Instant;
 
 use cheby_bench_gen::{Config, Shape};
-use cheby_test_support::{decisions, repo_root, ui};
+use cheby_test_support::{decisions as numbers, repo_root, ui};
 use clap::{Parser, Subcommand};
 
 #[derive(Debug, Parser)]
@@ -134,6 +138,9 @@ enum Cmd {
     CheckNativeLibs,
     /// List decisions cited in the spec that no test names
     Coverage,
+    /// Read, number and check the decision log, and number ADRs (D-1940,
+    /// D-1943)
+    Decisions(decisions::Args),
     /// Parse examples and UI tests with tree-sitter-cheby at the pinned
     /// commit and with the compiler parser, and compare
     CrossCheck(cross_check::Args),
@@ -189,6 +196,7 @@ fn main() -> ExitCode {
         Cmd::CheckExamples => examples::run(&root),
         Cmd::CheckNativeLibs => native_libs::run(&root),
         Cmd::Coverage => coverage(&root),
+        Cmd::Decisions(args) => decisions::run(&root, &args),
         Cmd::CrossCheck(args) => cross_check::run(&root, &args),
         Cmd::TestStd { filter, release } => test_std(filter.as_deref(), release),
         Cmd::BenchCompile(args) => bench::run(&root, &args),
@@ -372,7 +380,7 @@ fn coverage(root: &Path) -> Result<(), String> {
     for file in spec {
         let text =
             std::fs::read_to_string(&file).map_err(|e| format!("{}: {e}", file.display()))?;
-        cited.extend(decisions::mentioned_in(&text));
+        cited.extend(numbers::mentioned_in(&text));
     }
     let mut covered = std::collections::BTreeSet::new();
     for test in ui::all(root)? {
@@ -413,7 +421,7 @@ fn print_wrapped(label: &str, numbers: &[u32]) {
     }
     println!("{label} ({}):", numbers.len());
     for chunk in numbers.chunks(12) {
-        let line: Vec<_> = chunk.iter().map(|&n| decisions::format(n)).collect();
+        let line: Vec<_> = chunk.iter().map(|&n| numbers::format(n)).collect();
         println!("  {}", line.join(" "));
     }
 }

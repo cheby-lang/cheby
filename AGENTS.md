@@ -42,11 +42,12 @@ Never change language behavior in the spec, the examples or the compiler without
 ## Decision log and ADRs
 
 - The log is append-only. New decisions go under a new `## YYYY-MM-DD: <topic>` session heading at the end, with a one-line `Goal:`.
-- Entry format: `- **D-NNN Title**: decision. Why: reason.` IDs are sequential across the whole file and never reused. Mention rejected alternatives in the "Why" when they matter.
+- Entry format: `- **D-NNN Title**: decision. Why: reason.` IDs come from one sequence and are never reused. Take the next one from `cargo xtask decisions next-id`, which reads the log of every branch and worktree (D-1941). Mention rejected alternatives in the "Why" when they matter.
 - Superseding: strike the old entry through (`~~…~~`) and append `Superseded by D-NNN.`, and end the new entry with `Supersedes D-NNN.` Use `Refines D-NNN.` or `Extends D-NNN.` for narrower changes. Update the old ADR's `status` line only, never its body.
 - Each session has an `Open:` list. Settled items are struck through with `→ D-NNN` or `Done: …`, not deleted.
-- An ADR is written only for decisions that are hard to reverse, surprising without context, and a real trade-off. Use frontmatter `status`, `date` and `log`, then a short body, optionally followed by `## Considered options` and `## Consequences`. Link it from the log entry with `→ [ADR-NNNN](../adr/…)`.
+- An ADR is written only for decisions that are hard to reverse, surprising without context, and a real trade-off. Use frontmatter `status`, `date` and `log`, then a short body, optionally followed by `## Considered options` and `## Consequences`. Link it from the log entry with `→ [ADR-NNNN](../adr/…)`. Take its number from `cargo xtask decisions next-adr` (D-1943).
 - Plan-level decisions also go in the decision table of `docs/plan/README.md`.
+- The log is too long to read whole. `cargo xtask decisions show D-244` prints an entry with the decisions it names, the entries that name it, and where the spec, the tests and the code cite it. `cargo xtask decisions search WORD…` lists the entries that have every word. `cargo xtask decisions lint` checks the log's form, that every `D-NNN` in the repository is an entry, and that an ADR number has one file (D-1940, D-1942, D-1943).
 - Design sessions follow the `grilling` skill if it is available.
 
 ## Spec conventions
@@ -125,6 +126,7 @@ cargo clippy --workspace --all-targets --locked
 cargo fmt --all --check
 cargo xtask test                  # every test under cargo-nextest, the harnesses included
 cargo xtask coverage              # decisions cited in the spec that no test names
+cargo xtask decisions lint        # the decision log's form, every D-NNN names an entry, ADR numbers
 cargo xtask cross-check           # compiler parser against tree-sitter
 cargo xtask test-std              # std's own test blocks, one module at a time
 cargo xtask check-examples        # cheby check in every example

@@ -508,6 +508,7 @@ Logged in [`../decisions/LOG.md`](../decisions/LOG.md#2026-10-04-implementation-
 | D-1899    | A library's build reads and writes `cheby run`'s code records; every module is checked              |
 | D-1900    | The dev profile optimizes every crate at level 1; the LSP harness waits after a refused move        |
 | D-1901    | `std::secret` is a tier-4 module in Cheby with no kernels, and ships on native before M4            |
+| D-1940    | `cargo xtask decisions`: `show`, `search`, `next-id` over every branch, and `lint` in CI            |
 
 ## Open questions
 
