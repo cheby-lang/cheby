@@ -3376,3 +3376,16 @@ Open:
 - The note says "syntax errors" for every phase-A error of a module, a file that is not UTF-8 included.
 
 Spec: §13.8. No new diagnostic code. Tree-sitter: no grammar change.
+
+## 2026-11-26: A guide for coding agents
+
+Goal: give an agent that has never seen Cheby the rules and the commands it needs, with the toolchain and in every new package.
+
+- **D-1952 The toolchain ships a guide for coding agents**: `docs/guide/agents.md` is embedded in `cheby`, as the explanations of D-420 are. `cheby guide` prints it to standard output, and `cheby new` writes it as the package's `AGENTS.md`, the file name coding agents read their instructions from, unless `--no-guide` is given. The guide says what differs in Cheby from the languages a model has seen, shows two small programs, lists habits with their Cheby forms, and names the commands that answer a question: `check --fix`, `--format json`, `cheby doc <path>`, `cheby explain` and the single-file forms (D-1944, D-1945, D-1947, D-1949). It names nothing of this repository and no decision. It cannot go stale unseen: a test checks every `cheby` code block of it as a single file with no diagnostic, requires `cheby fmt`'s form, and runs the tests in it, and another parses every `cheby …` command of its shell blocks and of its text with the command line's own parser. Its text is informative and changes with the toolchain. This repository's AGENTS.md no longer lists the language rules: it points to the guide, and keeps what is about this repository. Why: no model has Cheby in its training, so an agent in a user's package wrote Rust or Gleam from habit and found the rules one diagnostic at a time, while the same rules sat in this repository's AGENTS.md, where only contributors' agents read them. The user chose `cheby new` with the command over the command alone and over an opt-in flag, so that a new package has the guide without anyone remembering it; checked code blocks and commands over blocks that only parse; and one text over the rules in two places. `cheby new` now writes four files, which refines the user's answer of D-1214. Refines D-1032, D-1214.
+
+Open:
+
+- An existing package's `AGENTS.md` does not follow the toolchain: `cheby guide > AGENTS.md` replaces it by hand, and nothing says when the shipped guide has changed (D-1952).
+- The guide's table of habits and its prose are not checked, only its code blocks and commands.
+
+Spec: §13.1. No new diagnostic code. Tree-sitter: no grammar change.

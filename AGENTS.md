@@ -15,6 +15,7 @@ Design documents:
 - `docs/plan/`: the implementation plan, milestones M0-M6. Each milestone file has a `Status` section.
 - `docs/examples/`: 35 example programs with their goldens, the conformance suite (D-275).
 - `docs/diagnostics/`: one explanation per diagnostic code, `E0001.md` and `W0001.md` onward (D-420).
+- `docs/guide/agents.md`: the guide for coding agents that `cheby guide` prints and `cheby new` writes as `AGENTS.md` (D-1952).
 
 Implementation:
 
@@ -66,21 +67,11 @@ Never change language behavior in the spec, the examples or the compiler without
 
 ## Writing Cheby code
 
-Code in the spec, the ADRs, the examples, `std/` and the tests must be valid Cheby in the form `cheby fmt` will produce: two-space indentation, no semicolons, trailing commas in multi-line lists, a width of 100 columns, type bodies and pipelines always broken with one variant, field or stage per line, an arm's body on the arm's line with one space before `=>`, and `_` between groups of three digits in a decimal number of five or more digits. Agents often get these rules wrong:
+Code in the spec, the ADRs, the examples, `std/` and the tests must be valid Cheby in the form `cheby fmt` will produce: two-space indentation, no semicolons, trailing commas in multi-line lists, a width of 100 columns, type bodies and pipelines always broken with one variant, field or stage per line, an arm's body on the arm's line with one space before `=>`, and `_` between groups of three digits in a decimal number of five or more digits.
 
-- No `for`, `while`, `loop` or `if` (D-002). Iterate with recursion, often through a local `fn`, and branch with `case`, including subjectless `case { cond => … }` and multi-subject `case a, b { … }`. Arm guards use `when`.
-- No `return` (D-1340). Leave a block early with `guard cond else { … }` or `let guard p = e else { … }`, whose `else` block's value becomes the block's. A non-empty `else` block is always broken over lines (D-1343).
-- No mutation and no shadowing (D-017, D-051). Every `let` introduces a new name.
-- No methods or `impl` (D-061). Call module functions: `list::map(xs, f)`. Paths use `::`.
-- Pipes need an explicit hole (D-244): `xs |> list::map(_, f)`. Only one-parameter functions are piped bare: `xs |> list::length`. `f(_)` is an error everywhere (D-245).
-- No positional tuple access such as `t.0` (D-241). Destructure with a pattern instead: `let (a, b) = t` or `fn((x, y)) { … }`.
-- Errors use `Result`, `Option` and `use x <- result::try(…)`. There is no `?` and no `null` (D-018, D-091).
-- Top-level functions need full signatures, and types are inferred only inside bodies (D-011).
-- Comments are `//` only, with no block comments (D-078). `///` documents an item and `//!` documents a module.
-- Imports look like `import std::io`, and strings interpolate with `"{name}"`.
-- Put `test "…" { assert … }` blocks next to the code they test.
+The rules that differ from the languages a model knows are in [`docs/guide/agents.md`](docs/guide/agents.md), the guide the toolchain ships: `cheby guide` prints it, and `cheby new` writes it as a package's `AGENTS.md` (D-1952). Read it before writing Cheby. A test checks, formats and runs every code block of it, and parses every command it shows, so it does not go stale. Here its commands are run as `cargo run -p cheby_cli -- <command>`, such as `cargo run -p cheby_cli -- doc list::map` or `cargo run -p cheby_cli -- check probe.cheby`.
 
-When unsure, find a similar construct in `docs/examples/` or `std/` and check the relevant spec chapter. `cargo run -p cheby_cli -- doc list::map` prints the signature and the doc comment of a std function, `doc std::list` a module's items, and `doc std` the modules (D-1947). `cargo run -p cheby_cli -- check` in a package directory confirms that the code checks. `check --fix` applies the fixes the compiler is sure of, and `--format json` gives the diagnostics, and the results of `cheby test`, as one JSON object per line (D-1944, D-1945, D-1946). A lone file needs no package: `check probe.cheby`, `run probe.cheby` and `test probe.cheby` take it as it is, and `check -` and `run -` read the source from standard input (D-1949).
+When unsure, find a similar construct in `docs/examples/` or `std/` and check the relevant spec chapter.
 
 ## Examples
 

@@ -46,6 +46,7 @@ use cheby_doc as _; // M5
 
 mod build_id;
 mod color;
+mod guide;
 mod new;
 mod single;
 
@@ -123,6 +124,9 @@ enum Command {
         /// Create a library, which other packages can depend on (D-1872)
         #[arg(long)]
         library: bool,
+        /// Leave out `AGENTS.md`, the guide for coding agents (D-1952)
+        #[arg(long)]
+        no_guide: bool,
     },
     /// Type-check the package without producing artifacts (D-282)
     Check {
@@ -254,6 +258,8 @@ enum Command {
     Update,
     /// Download what the lockfile names (§13.4)
     Fetch,
+    /// Print the guide for coding agents, which `cheby new` writes as `AGENTS.md` (D-1952)
+    Guide,
     /// Explain a diagnostic code such as `E0012` (D-420)
     Explain {
         /// Diagnostic code, such as `E0012` or `W0003`
@@ -378,7 +384,12 @@ fn run_command() -> ExitCode {
         return out.error(e.message());
     }
     match cli.command {
-        Command::New { name, library } => new(out, &name, kind(library)),
+        Command::New {
+            name,
+            library,
+            no_guide,
+        } => new(out, &name, kind(library), !no_guide),
+        Command::Guide => guide(),
         Command::Check {
             file,
             target,
@@ -933,8 +944,8 @@ fn doc(out: Out, query: &str) -> ExitCode {
 /// the working directory and prints nothing. An invalid name and an
 /// existing path are tool errors that write nothing, the first with a
 /// `help:` line when a valid name is close (D-464).
-fn new(out: Out, name: &str, kind: cheby_driver::Kind) -> ExitCode {
-    match new::new_package(std::path::Path::new(""), name, kind) {
+fn new(out: Out, name: &str, kind: cheby_driver::Kind, guide: bool) -> ExitCode {
+    match new::new_package(std::path::Path::new(""), name, kind, guide) {
         Ok(()) => ExitCode::SUCCESS,
         Err(e) => {
             let code = out.error(&e.message());
@@ -943,6 +954,20 @@ fn new(out: Out, name: &str, kind: cheby_driver::Kind) -> ExitCode {
             }
             code
         }
+    }
+}
+
+/// `cheby guide` (D-1952): prints the guide for coding agents, the text of
+/// `docs/guide/agents.md`, which `cheby new` writes as `AGENTS.md`.
+fn guide() -> ExitCode {
+    if std::io::stdout()
+        .lock()
+        .write_all(guide::GUIDE.as_bytes())
+        .is_ok()
+    {
+        ExitCode::SUCCESS
+    } else {
+        ExitCode::FAILURE
     }
 }
 
@@ -1542,7 +1567,9 @@ mod tests {
     #[test]
     fn cheby_new_parses_one_name() {
         let cli = Cli::try_parse_from(["cheby", "new", "my_app"]).unwrap();
-        assert!(matches!(cli.command, Command::New { name, library: false } if name == "my_app"));
+        assert!(
+            matches!(cli.command, Command::New { name, library: false, no_guide: false } if name == "my_app")
+        );
         assert!(Cli::try_parse_from(["cheby", "new"]).is_err());
         assert!(Cli::try_parse_from(["cheby", "new", "a", "b"]).is_err());
     }

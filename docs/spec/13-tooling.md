@@ -17,6 +17,7 @@ Cheby ships as one `cheby` binary that contains the compiler, runtime, REPL, tes
 | `cheby doc [path]`                         | look an API up, or generate HTML ([§13.10](#1310-documentation))   | D-078, D-1947       |
 | `cheby add`, `cheby update`, `cheby fetch` | manage dependencies ([§13.4](#134-dependencies-and-lockfile))      | D-044, D-097        |
 | `cheby explain <code>`                     | explain a diagnostic code ([§13.8](#138-diagnostics-and-warnings)) | D-420               |
+| `cheby guide`                              | print the guide for coding agents                                  | D-1952              |
 
 `cheby build --target native` produces an executable. Object files from Cranelift are linked with the system linker in early versions (`cc` or `link.exe`), and with a linker bundled in the `cheby` binary before 1.0 (D-088). `cheby build --target js` produces a directory of ES modules (D-074).
 
@@ -40,6 +41,8 @@ A file under the `src/` directory of a package is a module of that package and i
 
 `cheby explain` prints the long explanation of a diagnostic code such as `E0012`, with examples and fixes ([§13.8](#138-diagnostics-and-warnings)) (D-420).
 
+`cheby guide` prints the guide for coding agents to standard output: what differs in Cheby from the languages a language model has seen, two small programs, and the commands that answer a question, such as `cheby check --fix` and `cheby doc <path>`. `cheby new` writes the same text as `AGENTS.md`. The guide's text is informative, and it changes with the toolchain (D-1952).
+
 Every command takes a global `--color=auto|always|never` flag, which says whether diagnostics and other errors are colored ([§13.8](#138-diagnostics-and-warnings)) (D-467).
 
 Every command also takes a global `--format=text|json` flag. With `json`, diagnostics and other errors are written as JSON, one object per line ([§13.8.1](#1381-json-output)), and `cheby test` writes its results that way too ([§13.6](#136-tests)). `text` is the default (D-1944, D-1946).
@@ -56,7 +59,7 @@ The report is written after the warnings and before anything runs. Its places ar
 
 `cheby run` and `cheby repl` produce no output files: they run code in memory with the JIT (D-007, D-019). Like every command, they may read and write the build cache ([§13.12.4](#13124-build-cache-and-standard-library)), and the JIT runs the same compiled code that `cheby build` links into an executable (D-254, D-255, D-914).
 
-`cheby new <name>` creates a directory `<name>` with a `cheby.toml` that has the name and version `0.1.0`, a `src/main.cheby` whose `main` prints a greeting, and a `.gitignore` that lists `build/`. It prints nothing on success. With `--library`, the manifest also has `kind = "library"`, and `src/main.cheby` has one `pub` function and a test instead of `main` (D-1872). A name that is not a valid package name, `std` included, which [§7.1](07-modules-and-packages.md#71-packages) reserves, or a path that already exists, is a tool error that writes nothing, and a write that fails removes what the command created (D-1032, D-1214, D-1215).
+`cheby new <name>` creates a directory `<name>` with a `cheby.toml` that has the name and version `0.1.0`, a `src/main.cheby` whose `main` prints a greeting, a `.gitignore` that lists `build/`, and an `AGENTS.md` with the toolchain's guide for coding agents, which `--no-guide` leaves out (D-1952). It prints nothing on success. With `--library`, the manifest also has `kind = "library"`, and `src/main.cheby` has one `pub` function and a test instead of `main` (D-1872). A name that is not a valid package name, `std` included, which [§7.1](07-modules-and-packages.md#71-packages) reserves, or a path that already exists, is a tool error that writes nothing, and a write that fails removes what the command created (D-1032, D-1214, D-1215).
 
 ## 13.2 Project layout
 

@@ -39,6 +39,7 @@ pub(crate) const CLI_TESTS: &[(&str, &[&str])] = &[
     ("fmt", &["cheby_fmt"]),
     ("format", TOOLCHAIN),
     ("git_dependencies", TOOLCHAIN),
+    ("guide", TOOLCHAIN),
     ("http_fixture", TOOLCHAIN),
     ("interrupt", TOOLCHAIN),
     ("later_phases", TOOLCHAIN),
@@ -508,6 +509,12 @@ impl Rules<'_> {
                 "binary_id(cheby_cli::lsp)".to_owned(),
                 "\\] golden\\/explain\\/".to_owned(),
             );
+        } else if path.starts_with("docs/guide/") {
+            // The guide is embedded in `cheby`, and its blocks are checked
+            // (D-1952).
+            for binary in ["guide", "new", "bin/cheby"] {
+                plan.all_of(path, format!("binary_id(cheby_cli::{binary})"));
+            }
         } else if path.starts_with("docs/spec/") {
             plan.ask(Check::Coverage, path);
         } else if path.starts_with(".github/") {
@@ -1110,6 +1117,13 @@ mod tests {
         let manifest = commands(&["crates/cheby_fmt/Cargo.toml"]);
         assert!(manifest.contains(&"taplo fmt --check".to_owned()));
         assert!(manifest.contains(&"cargo deny --locked check".to_owned()));
+        assert_eq!(
+            planned(&["docs/guide/agents.md"]).filter().as_deref(),
+            Some(
+                "binary_id(cheby_cli::bin/cheby) | binary_id(cheby_cli::guide) | \
+                 binary_id(cheby_cli::new)"
+            )
+        );
         let diagnostics = planned(&["docs/diagnostics/E0042.md"]).filter().unwrap();
         assert!(diagnostics.contains("package(cheby_diag)"), "{diagnostics}");
         assert!(
