@@ -74,6 +74,7 @@ mod backend;
 mod borrowing;
 pub mod cache;
 mod code_cache;
+pub mod completion;
 pub mod dependencies;
 mod fix;
 mod frontend;

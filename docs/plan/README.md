@@ -523,6 +523,9 @@ Logged in [`../decisions/LOG.md`](../decisions/LOG.md#2026-10-04-implementation-
 | D-1955    | `cargo xtask test-std` fails on a warning in a std module, whatever the filter                      |
 | D-1956    | CI runs on pushes to `main`; on other branches only by hand (`workflow_dispatch`)                   |
 | D-1957    | Std's self-test runs W0005 over std: a package-visible std item nothing in std uses fails it        |
+| D-1958    | `cheby completions <shell>`: a script that asks `cheby`, on `clap_complete`'s unstable engine       |
+| D-1959    | Completion of diagnostic codes, module paths, `.cheby` files, test names and `cheby doc` paths      |
+| D-1960    | Bash's completion script and answers are `cheby`'s own, for `::` paths and names with spaces        |
 
 ## Open questions
 

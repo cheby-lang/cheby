@@ -31,6 +31,7 @@ pub(crate) const CLI_TESTS: &[(&str, &[&str])] = &[
     ("closed_streams", TOOLCHAIN),
     ("code_cache", TOOLCHAIN),
     ("color", &["cheby_driver"]),
+    ("completions", &["cheby_doc"]),
     ("conformance", TOOLCHAIN),
     ("const_cache", TOOLCHAIN),
     ("dependency_cache", TOOLCHAIN),
@@ -921,7 +922,10 @@ mod tests {
         let doc = planned(&["crates/cheby_doc/src/lib.rs"]);
         assert_eq!(
             doc.filter().as_deref(),
-            Some("package(cheby_doc) | binary_id(cheby_cli::doc)")
+            Some(
+                "package(cheby_doc) | binary_id(cheby_cli::completions) | \
+                 binary_id(cheby_cli::doc)"
+            )
         );
         let syntax = planned(&["crates/cheby_syntax/src/parser/mod.rs"]);
         let filter = syntax.filter().unwrap();

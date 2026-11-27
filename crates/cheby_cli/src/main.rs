@@ -27,6 +27,10 @@
 //!   0 after `shutdown` and 1 before it (D-1377). A hidden `--stdio` flag
 //!   is accepted and ignored, since clients add it.
 //!
+//! - `cheby completions <shell>` prints the script that turns completion
+//!   of `cheby` on in a shell, and the script runs `cheby` for the
+//!   candidates of each Tab (D-1958, [`complete`]).
+//!
 //! Diagnostics go to stderr in the layout of D-418. Errors that are not
 //! about the program, such as a missing `cheby.toml`, are `error:` lines
 //! without a code (D-442). Exit status: 0 on success, 1 on any
@@ -46,6 +50,7 @@ use cheby_doc as _; // M5
 
 mod build_id;
 mod color;
+mod complete;
 mod guide;
 mod new;
 mod single;
@@ -132,7 +137,7 @@ enum Command {
     Check {
         /// A `.cheby` file to check without a package, or `-` for the source on standard
         /// input (D-1949)
-        #[arg(value_name = "FILE")]
+        #[arg(value_name = "FILE", add = clap_complete::ArgValueCompleter::new(complete::files))]
         file: Option<String>,
         /// Check the code as it runs on this target only (D-550)
         #[arg(long, value_enum)]
@@ -148,6 +153,7 @@ enum Command {
     /// Compile a module's `main` into an executable for `native` (AOT) or `js` (D-006, D-937)
     Build {
         /// Module path, such as `my_app::tools::migrate`; defaults to the root module
+        #[arg(add = clap_complete::ArgValueCandidates::new(complete::modules))]
         module_path: Option<String>,
         /// Target to build for; `native` when the manifest allows it
         #[arg(long, value_enum)]
@@ -168,7 +174,7 @@ enum Command {
         /// Module path, such as `my_app::tools::migrate`; defaults to the root module. A
         /// `.cheby` file, or `-` for the source on standard input, runs without a package
         /// (D-1949)
-        #[arg(value_name = "MODULE_PATH|FILE")]
+        #[arg(value_name = "MODULE_PATH|FILE", add = clap_complete::ArgValueCompleter::new(complete::modules_or_files))]
         module_path: Option<String>,
         /// Treat every warning as an error and run nothing after one (D-549)
         #[arg(long)]
@@ -194,13 +200,17 @@ enum Command {
         /// Only run tests whose full name, `<module path> "<test name>"`, contains this text.
         /// A `.cheby` file runs its own tests without a package, and the filter may follow it
         /// (D-1949)
-        #[arg(value_name = "FILTER|FILE")]
+        #[arg(value_name = "FILTER|FILE", add = clap_complete::ArgValueCompleter::new(complete::tests_or_files))]
         filter: Option<String>,
         /// The filter, after a file
-        #[arg(value_name = "FILTER")]
+        #[arg(value_name = "FILTER", add = clap_complete::ArgValueCompleter::new(complete::file_tests))]
         file_filter: Option<String>,
         /// Only run the tests of this module and its submodules, such as `my_app::util`
-        #[arg(long, value_name = "PATH")]
+        #[arg(
+            long,
+            value_name = "PATH",
+            add = clap_complete::ArgValueCandidates::new(complete::modules)
+        )]
         module: Option<String>,
         /// Treat every warning as an error and run no test after one (D-549)
         #[arg(long)]
@@ -225,7 +235,7 @@ enum Command {
         check: bool,
         /// Files to format, `-` for standard input to standard output; by default every
         /// `.cheby` file under the package's `src/`
-        #[arg(value_name = "PATH")]
+        #[arg(value_name = "PATH", add = clap_complete::ArgValueCompleter::new(complete::files))]
         paths: Vec<std::path::PathBuf>,
     },
     /// Run the language server over stdio (§13.11)
@@ -238,6 +248,7 @@ enum Command {
     Doc {
         /// A module, such as `std::list`, an item, such as `list::map`, or a name to search
         /// for, in std, the package and its dependencies (D-1947)
+        #[arg(add = clap_complete::ArgValueCompleter::new(complete::doc_paths))]
         path: Option<String>,
     },
     /// Add a git dependency to the manifest and lockfile (§13.4)
@@ -263,7 +274,23 @@ enum Command {
     /// Explain a diagnostic code such as `E0012` (D-420)
     Explain {
         /// Diagnostic code, such as `E0012` or `W0003`
+        #[arg(add = clap_complete::ArgValueCandidates::new(complete::codes))]
         code: String,
+    },
+    /// Print the script that turns on completion of `cheby` in a shell (D-1958)
+    ///
+    /// Source the script when the shell starts, so that it always fits this `cheby`:
+    ///
+    ///   bash        eval "$(cheby completions bash)"
+    ///   zsh         source <(cheby completions zsh)
+    ///   fish        cheby completions fish | source
+    ///   elvish      eval (cheby completions elvish | slurp)
+    ///   powershell  cheby completions powershell | Out-String | Invoke-Expression
+    #[command(verbatim_doc_comment)]
+    Completions {
+        /// The shell to print the script for
+        #[arg(value_enum)]
+        shell: complete::Shell,
     },
     // The language server's child process (D-1349, D-1410): back-end facts
     // as one JSON document on stdout. Hidden, and not a stable interface:
@@ -350,6 +377,9 @@ fn main() -> ExitCode {
     reason = "one arm per command, each moving its arguments into its options"
 )]
 fn run_command() -> ExitCode {
+    // A shell's request for candidates is answered before anything else,
+    // and ends the run (D-1958).
+    complete::answer(Cli::command);
     let env = |name: &str| std::env::var_os(name);
     // clap prints help and usage errors while it parses, so its color is
     // set from a scan of the raw arguments first.
@@ -514,6 +544,7 @@ fn run_command() -> ExitCode {
         Command::Update => dependencies(out, &cheby_pkg::commands::update),
         Command::Fetch => dependencies(out, &cheby_pkg::commands::fetch),
         Command::Explain { code } => explain(out, &code),
+        Command::Completions { shell } => completions(out, shell),
         Command::Backend(args) => cheby_lsp::child::main(args.into()),
     }
 }
@@ -971,6 +1002,20 @@ fn guide() -> ExitCode {
     }
 }
 
+/// `cheby completions <shell>` (D-1958): prints the script that turns
+/// completion of `cheby` on in `shell`.
+fn completions(out: Out, shell: complete::Shell) -> ExitCode {
+    let script = match complete::registration(shell) {
+        Ok(script) => script,
+        Err(e) => return out.error(&format!("cannot write the script: {e}")),
+    };
+    if std::io::stdout().lock().write_all(&script).is_ok() {
+        ExitCode::SUCCESS
+    } else {
+        ExitCode::FAILURE
+    }
+}
+
 /// `cheby explain <code>` (D-420): prints the code's explanation, the
 /// text of `docs/diagnostics/<code>.md`, never colored.
 fn explain(out: Out, code: &str) -> ExitCode {
@@ -1412,6 +1457,26 @@ mod tests {
             Cli::try_parse_from(["cheby", "__backend", "--root", "/pkg", "--want", "x"]).is_err(),
             "`--schema` is required"
         );
+    }
+
+    /// `cheby completions <shell>` takes one of the five shells (D-1958).
+    #[test]
+    fn parses_the_completions_shell() {
+        for (name, shell) in [
+            ("bash", super::complete::Shell::Bash),
+            ("elvish", super::complete::Shell::Elvish),
+            ("fish", super::complete::Shell::Fish),
+            ("powershell", super::complete::Shell::Powershell),
+            ("zsh", super::complete::Shell::Zsh),
+        ] {
+            let cli = Cli::try_parse_from(["cheby", "completions", name]).unwrap();
+            assert!(
+                matches!(cli.command, Command::Completions { shell: parsed } if parsed == shell),
+                "{name}"
+            );
+        }
+        assert!(Cli::try_parse_from(["cheby", "completions"]).is_err());
+        assert!(Cli::try_parse_from(["cheby", "completions", "tcsh"]).is_err());
     }
 
     /// `__backend` is hidden: `--help` does not list it (D-1410).

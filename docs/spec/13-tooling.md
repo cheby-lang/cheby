@@ -18,6 +18,7 @@ Cheby ships as one `cheby` binary that contains the compiler, runtime, REPL, tes
 | `cheby add`, `cheby update`, `cheby fetch` | manage dependencies ([§13.4](#134-dependencies-and-lockfile))      | D-044, D-097        |
 | `cheby explain <code>`                     | explain a diagnostic code ([§13.8](#138-diagnostics-and-warnings)) | D-420               |
 | `cheby guide`                              | print the guide for coding agents                                  | D-1952              |
+| `cheby completions <shell>`                | print the script that turns completion on in a shell               | D-1958, D-1959      |
 
 `cheby build --target native` produces an executable. Object files from Cranelift are linked with the system linker in early versions (`cc` or `link.exe`), and with a linker bundled in the `cheby` binary before 1.0 (D-088). `cheby build --target js` produces a directory of ES modules (D-074).
 
@@ -42,6 +43,18 @@ A file under the `src/` directory of a package is a module of that package and i
 `cheby explain` prints the long explanation of a diagnostic code such as `E0012`, with examples and fixes ([§13.8](#138-diagnostics-and-warnings)) (D-420).
 
 `cheby guide` prints the guide for coding agents to standard output: what differs in Cheby from the languages a language model has seen, two small programs, and the commands that answer a question, such as `cheby check --fix` and `cheby doc <path>`. `cheby new` writes the same text as `AGENTS.md`. The guide's text is informative, and it changes with the toolchain (D-1952).
+
+`cheby completions <shell>` prints to standard output a script that turns completion of the `cheby` command on in `bash`, `elvish`, `fish`, `powershell` or `zsh`. The script holds no list of commands: it asks `cheby` for the candidates each time. A shell should therefore run the command and source its output when it starts, and keep no copy, since the script and the way it asks are not specified and change with the toolchain (D-1958).
+
+Completion offers the commands, their flags and the values a flag lists. It also offers, from the working directory (D-1959):
+
+- for `cheby explain`, the diagnostic codes;
+- for `cheby build`, `cheby run` and `cheby test --module`, the module paths of the package;
+- for `cheby check`, `cheby run`, `cheby test` and `cheby fmt`, the `.cheby` files and the directories;
+- for `cheby test`, the names of the package's tests, and after a file the names of that file's tests, since a test's name is a filter that selects it ([§13.6](#136-tests));
+- for `cheby doc`, the modules and the items its lookup finds ([§13.10](#1310-documentation)).
+
+A completion reports no error. When the package cannot be read, it offers nothing. In bash, a path with `::` and a name with spaces complete as in the other shells (D-1960).
 
 Every command takes a global `--color=auto|always|never` flag, which says whether diagnostics and other errors are colored ([§13.8](#138-diagnostics-and-warnings)) (D-467).
 
