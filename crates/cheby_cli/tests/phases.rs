@@ -28,9 +28,10 @@ const TIMEOUT: Duration = Duration::from_secs(300);
 /// The root: `main` calls the other two modules.
 const MAIN: &str = "//! Root.
 
+import std::io
+
 import app::other
 import app::util
-import std::io
 
 fn main() {
   let ok = util::check(\"x\")

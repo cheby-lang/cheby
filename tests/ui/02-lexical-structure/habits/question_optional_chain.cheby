@@ -1,0 +1,13 @@
+// @mode: parse-fail
+// @decisions: D-1930
+//! `?.` gets the help to call `option::map`.
+
+type User {
+  name: String,
+}
+
+fn main() {
+  let user = Some(User { name: "a" })
+  let name = user?.name
+  assert name == Some("a")
+}

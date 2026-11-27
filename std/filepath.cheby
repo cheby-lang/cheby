@@ -22,10 +22,8 @@ import std::string
 /// where a `..` climbs out of it. An empty `base` is `.` (D-1077, D-1435).
 pub fn join(base: String, relative: String) -> String {
   let start = read(base)
-  render(Path {
-    root: start.root,
-    names: resolve(is_rooted(start.root), list::append(start.names, parts_of(relative))),
-  })
+  let joined = list::append(start.names, parts_of(relative))
+  render(Path { root: start.root, names: resolve(is_rooted(start.root), joined) })
 }
 
 test "join keeps an absolute second argument under its base" {
@@ -427,13 +425,13 @@ pub fn relative_to(path: String, base: String) -> Option<String> {
   let common = shared(0)
   let climbed = list::drop(from.names, common)
   case target.root == from.root && !list::contains(climbed, "..") {
-    True => Some(render(Path {
-      root: NoRoot,
-      names: list::append(
-        list::repeat("..", list::length(climbed)),
-        list::drop(target.names, common),
-      ),
-    }))
+    True => {
+      let ups = list::repeat("..", list::length(climbed))
+      Some(render(Path {
+        root: NoRoot,
+        names: list::append(ups, list::drop(target.names, common)),
+      }))
+    }
     False => None
   }
 }

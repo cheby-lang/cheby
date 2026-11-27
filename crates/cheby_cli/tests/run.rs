@@ -127,7 +127,7 @@ fn a_masked_slot_and_a_nested_module_item_both_run() {
             MANIFEST,
             (
                 "src/main.cheby",
-                "//! Calls both functions.\n\nimport app::m\nimport app::m::f\nimport std::io\n\n\
+                "//! Calls both functions.\n\nimport std::io\n\nimport app::m\nimport app::m::f\n\n\
                  fn main() {\n  let a = m::f(m::Circle(2))\n  let b = f::b1(40)\n  \
                  io::println(\"{a} {b}\")\n}\n",
             ),
@@ -212,7 +212,7 @@ fn unsupported_constructs_reached_from_main_exit_with_one() {
             MANIFEST,
             (
                 "src/main.cheby",
-                "//! Back-end gate.\n\nimport app::pick\nimport std::io\n\nfn main() {\n  io::println(\"never\")\n  let _ = pick::pick(\"a\")\n}\n",
+                "//! Back-end gate.\n\nimport std::io\n\nimport app::pick\n\nfn main() {\n  io::println(\"never\")\n  let _ = pick::pick(\"a\")\n}\n",
             ),
             (
                 "src/pick.cheby",
@@ -2617,6 +2617,7 @@ const TWO_MODULES: &str = "//! Calls the helpers of `app::util`.
 
 import std::io
 import std::list
+
 import app::util
 
 fn main() {
@@ -2883,8 +2884,8 @@ fn a_panic_unwinds_through_a_raw_result_clone() {
 /// edges of their types, a literal one and a computed `Bool`.
 const FOLDED_CONSTANTS_UTIL: &str = "//! Constants that `app` reads.
 
-import std::float
 import std::f32
+import std::float
 import std::i8
 import std::int
 import std::u64
@@ -2917,12 +2918,13 @@ pub const flag: Bool = 1 < 2
 /// element, where its slot's word is kept.
 const FOLDED_CONSTANTS: &str = "//! Prints constants of another module.
 
-import std::float
 import std::f32
+import std::float
 import std::i8
 import std::int
 import std::io
 import std::u64
+
 import app::util
 
 const own_mass: Float = util::solar_mass * 2.0

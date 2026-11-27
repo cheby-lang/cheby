@@ -1,0 +1,10 @@
+error[E0058]: `String` has no field `shout`
+  --> tests/ui/05-expressions/habits/method_call_unknown.cheby:10:12
+   |
+10 |   assert s.shout() == "ABC"
+   |          - ^^^^^ unknown field
+   |          |
+   |          this has type `String`
+   |
+   = help: Cheby has no methods; the functions of `String` are in `std::string`
+

@@ -1,0 +1,8 @@
+error[E0003]: unexpected character `?`
+ --> tests/ui/02-lexical-structure/habits/question_nullish.cheby:7:16
+  |
+7 |   let n = None ?? 1
+  |                ^
+  |
+  = help: Cheby has no `??`; call `option::unwrap_or(o, default)`
+

@@ -22,10 +22,11 @@
 //! the counts and the lines so far, and each request hands the next one
 //! the cache that `cache::get` or `cache::put_with_eviction` returned.
 
-import lru_cache::cache
 import std::io
 import std::list
 import std::string
+
+import lru_cache::cache
 
 /// How many prices the cache holds.
 const cache_capacity: Int = 3

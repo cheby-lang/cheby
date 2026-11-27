@@ -1,8 +1,10 @@
 //! Text edits: line diffs and `cheby fmt`'s form (X §1.5, "Edits").
 //!
 //! Formatting goes through the formatter `cheby fmt` runs,
-//! [`cheby_fmt::format_source`] at [`cheby_fmt::WIDTH`], with no options
-//! (D-079), and reaches the client as a line diff of the text against the
+//! [`cheby_fmt::format_source_in`] at [`cheby_fmt::WIDTH`], with no options
+//! (D-079) and the name of the document's package, which `cheby fmt` reads
+//! from the nearest `cheby.toml` and which tells the package's own imports
+//! from other packages' (D-1953). It reaches the client as a line diff of the text against the
 //! formatter's output, so cursors and marks outside the changed lines stay
 //! put. Range formatting keeps the hunks that touch the range (D-1399),
 //! widened to their neighbours until what it leaves out only reformats,
@@ -49,21 +51,22 @@ pub(crate) struct TextChange {
     pub text: String,
 }
 
-/// `text` in `cheby fmt`'s form, with LF line breaks. `None` when the
-/// text has a grammar error, which the formatter refuses (§13.7).
+/// `text`, a file of the package named `package`, in `cheby fmt`'s form,
+/// with LF line breaks (D-1953). `None` when the text has a grammar
+/// error, which the formatter refuses (§13.7).
 #[must_use]
-pub(crate) fn formatted(text: &str) -> Option<String> {
-    cheby_fmt::format_source(text, cheby_fmt::WIDTH).ok()
+pub(crate) fn formatted(text: &str, package: Option<&str>) -> Option<String> {
+    cheby_fmt::format_source_in(text, cheby_fmt::WIDTH, package).ok()
 }
 
 /// The edits that bring `text` to [`formatted`]'s form, one per hunk of
 /// the line diff, ascending. Empty when the text is formatted, `None` when
 /// it has a grammar error.
 #[must_use]
-pub(crate) fn format_edits(text: &str) -> Option<Vec<TextChange>> {
+pub(crate) fn format_edits(text: &str, package: Option<&str>) -> Option<Vec<TextChange>> {
     // Every hunk touches the whole range, so the set is closed at once and
     // nothing can be cancelled or capped.
-    touching(text, &[TextRange::new(0, size(text.len()))], None)
+    touching(text, package, &[TextRange::new(0, size(text.len()))], None)
         .ok()
         .flatten()
 }
@@ -88,8 +91,19 @@ pub(crate) enum AtCap {
 /// [`format_touching_with`] with every hunk at the cap, and no cancel.
 #[cfg(test)]
 #[must_use]
-pub(crate) fn format_touching(text: &str, touched: &[TextRange]) -> Option<Vec<TextChange>> {
-    format_touching_with(text, touched, AtCap::KeepEvery, &CancelToken::new()).ok()?
+pub(crate) fn format_touching(
+    text: &str,
+    package: Option<&str>,
+    touched: &[TextRange],
+) -> Option<Vec<TextChange>> {
+    format_touching_with(
+        text,
+        package,
+        touched,
+        AtCap::KeepEvery,
+        &CancelToken::new(),
+    )
+    .ok()?
 }
 
 /// The hunks of [`format_edits`] that touch the lines of a range in
@@ -104,10 +118,13 @@ pub(crate) fn format_touching(text: &str, touched: &[TextRange]) -> Option<Vec<T
 /// code. A set that is not widens, round by round, to the hunks next to
 /// its own, until it is (D-1738).
 ///
-/// The formatter sorts the imports of a block (D-1148), and a diff shows a
-/// moved import as one hunk that deletes it and another that inserts it.
-/// Either alone would drop the import or write it twice, so a kept hunk
-/// keeps every hunk that deletes or inserts one of its import lines.
+/// The formatter puts the imports in their blocks and order (D-1953), and
+/// a diff shows a moved import as one hunk that deletes it and another
+/// that inserts it. Either alone would drop the import or write it twice,
+/// so a kept hunk keeps every hunk that deletes or inserts one of its
+/// import lines. The comments that travel with a moved import, and the
+/// blank lines between blocks, are lines of their own, which the closure
+/// check below covers like any other.
 ///
 /// Lines are compared with a CR before their LF ignored, and a kept hunk
 /// is written with CRLF when the lines it replaces end in CRLF, so range
@@ -121,22 +138,24 @@ pub(crate) fn format_touching(text: &str, touched: &[TextRange]) -> Option<Vec<T
 /// round.
 pub(crate) fn format_touching_with(
     text: &str,
+    package: Option<&str>,
     touched: &[TextRange],
     at_cap: AtCap,
     cancel: &CancelToken,
 ) -> Result<Option<Vec<TextChange>>, RequestError> {
-    touching(text, touched, Some((at_cap, cancel)))
+    touching(text, package, touched, Some((at_cap, cancel)))
 }
 
 /// [`format_touching_with`], or with no `capped` the whole-file rule of
 /// [`format_edits`], which keeps every hunk and brings every line to LF.
 fn touching(
     text: &str,
+    package: Option<&str>,
     touched: &[TextRange],
     capped: Option<(AtCap, &CancelToken)>,
 ) -> Result<Option<Vec<TextChange>>, RequestError> {
     let keep_crlf = capped.is_some();
-    let Some(new) = formatted(text) else {
+    let Some(new) = formatted(text, package) else {
         return Ok(None);
     };
     let starts = line_starts(text);
@@ -161,7 +180,7 @@ fn touching(
     // string or comment, as in a `"\r\r\n"` there.
     let old_formatted;
     let target = if normalized {
-        old_formatted = formatted(old);
+        old_formatted = formatted(old, package);
         old_formatted.as_deref()
     } else {
         Some(new.as_str())
@@ -171,7 +190,7 @@ fn touching(
     // independent, since the line diff may match a line of one statement
     // with the same line of another, and then one hunk deletes a statement
     // that a later one writes back; the first alone would lose it. Each
-    // round keeps the imports' partners (D-1148), then widens to the
+    // round keeps the imports' partners (D-1953), then widens to the
     // neighbouring hunks until the set is closed. An empty set changes
     // nothing and so loses nothing, and every hunk is the whole format, so
     // either ends the loop; a round that keeps nothing new ends it too.
@@ -181,7 +200,7 @@ fn touching(
         close_imports(&hunks, &mut keep, old, &new);
         if !keep.iter().any(|&kept| kept)
             || keep.iter().all(|&kept| kept)
-            || closed(&hunks, &keep, old, &new, target)
+            || closed(&hunks, &keep, old, &new, target, package)
         {
             break;
         }
@@ -232,7 +251,7 @@ fn touching(
 }
 
 /// Keeps, beside the kept hunks of `keep`, every hunk that deletes or
-/// inserts one of their import lines, until no more join (D-1148).
+/// inserts one of their import lines, until no more join (D-1953).
 fn close_imports(hunks: &[Hunk], keep: &mut [bool], old: &str, new: &str) {
     loop {
         let moved: BTreeSet<&str> = hunks
@@ -258,7 +277,14 @@ fn close_imports(hunks: &[Hunk], keep: &mut [bool], old: &str, new: &str) {
 /// taken from `new`, formats to `target`, the formatter's output for all
 /// of `old`: then the hunks left out only reformat, and lose no code.
 /// False when `target` is `None`, since `old` then does not format.
-fn closed(hunks: &[Hunk], keep: &[bool], old: &str, new: &str, target: Option<&str>) -> bool {
+fn closed(
+    hunks: &[Hunk],
+    keep: &[bool],
+    old: &str,
+    new: &str,
+    target: Option<&str>,
+    package: Option<&str>,
+) -> bool {
     let Some(target) = target else {
         return false;
     };
@@ -282,7 +308,7 @@ fn closed(hunks: &[Hunk], keep: &[bool], old: &str, new: &str, target: Option<&s
         return false;
     };
     out.push_str(rest);
-    formatted(&out).is_some_and(|again| again == target)
+    formatted(&out, package).is_some_and(|again| again == target)
 }
 
 /// Whether the first line that `lines` replaces in `text` ends in CRLF; for
@@ -543,18 +569,18 @@ mod tests {
     #[test]
     fn kept_hunks_lose_no_statement() {
         let text = "fn main() {\n  let n = add(1, // one\n    2)\n  let m = add(\n    1,\n    2\n  )\n  assert n == m\n}\n";
-        let whole = formatted(text).expect("the text parses");
+        let whole = formatted(text, None).expect("the text parses");
         let mut start = 0_u32;
         for line in text.split_inclusive('\n') {
             let end = start
                 .checked_add(u32::try_from(line.len()).expect("a short line"))
                 .expect("a short text");
-            let changes =
-                format_touching(text, &[TextRange::new(start, end)]).expect("the text parses");
+            let changes = format_touching(text, None, &[TextRange::new(start, end)])
+                .expect("the text parses");
             let after = apply(text, &changes);
             assert!(after.contains("let m = add("), "{line:?}: {after}");
             assert_eq!(
-                formatted(&after).as_deref(),
+                formatted(&after, None).as_deref(),
                 Some(whole.as_str()),
                 "{line:?}"
             );
@@ -569,13 +595,13 @@ mod tests {
     #[test]
     fn crlf_closure_ends_beside_a_carriage_return_in_a_string() {
         let text = "fn main() {\r\n  let s = \"a\r\r\nb\"\r\n  let t = 1\r\n  let u =   1\r\n  assert s == s && t == u\r\n}\r\n";
-        assert!(formatted(text).is_some(), "the text formats");
+        assert!(formatted(text, None).is_some(), "the text formats");
         let line = |needle: &str| {
             let at = text.find(needle).expect("the line");
             TextRange::empty(u32::try_from(at).expect("a short text"))
         };
-        assert_eq!(format_touching(text, &[line("let t")]), Some(vec![]));
-        let edits = format_touching(text, &[line("let u")]).expect("the text parses");
+        assert_eq!(format_touching(text, None, &[line("let t")]), Some(vec![]));
+        let edits = format_touching(text, None, &[line("let u")]).expect("the text parses");
         let after = apply(text, &edits);
         assert!(after.contains("  let u = 1\r\n"), "{after:?}");
         assert!(after.contains("\"a\r\r\nb\""), "{after:?}");
@@ -602,22 +628,22 @@ mod tests {
     #[test]
     fn widening_stops_at_the_cap() {
         let text = chained(MAX_ROUNDS.checked_mul(3).unwrap());
-        let whole = formatted(&text).expect("the text parses");
+        let whole = formatted(&text, None).expect("the text parses");
         let at = text.find("let n0").unwrap();
         let first = [TextRange::empty(u32::try_from(at).unwrap())];
         let cancel = CancelToken::new();
-        let every = format_touching_with(&text, &first, AtCap::KeepEvery, &cancel)
+        let every = format_touching_with(&text, None, &first, AtCap::KeepEvery, &cancel)
             .unwrap()
             .expect("the text parses");
         assert_eq!(apply(&text, &every), whole);
         assert_eq!(
-            format_touching_with(&text, &first, AtCap::GiveUp, &cancel),
+            format_touching_with(&text, None, &first, AtCap::GiveUp, &cancel),
             Ok(None)
         );
         let short = chained(2);
         let at = short.find("let n0").unwrap();
         let first = [TextRange::empty(u32::try_from(at).unwrap())];
-        let kept = format_touching_with(&short, &first, AtCap::GiveUp, &cancel)
+        let kept = format_touching_with(&short, None, &first, AtCap::GiveUp, &cancel)
             .unwrap()
             .expect("closed within the cap");
         assert!(
@@ -627,7 +653,7 @@ mod tests {
         );
         cancel.cancel();
         assert_eq!(
-            format_touching_with(&text, &first, AtCap::GiveUp, &cancel),
+            format_touching_with(&text, None, &first, AtCap::GiveUp, &cancel),
             Err(RequestError::Cancelled)
         );
     }
@@ -709,16 +735,19 @@ mod tests {
     #[test]
     fn format_edits_reach_cheby_fmt_byte_for_byte() {
         let want = cheby_fmt::format_source(MESSY, cheby_fmt::WIDTH).expect("formats");
-        let edits = format_edits(MESSY).expect("formats");
+        let edits = format_edits(MESSY, None).expect("formats");
         assert_ne!(edits.len(), 0);
         assert_eq!(apply(MESSY, &edits), want);
-        assert_eq!(format_edits(&want), Some(vec![]));
+        assert_eq!(format_edits(&want, None), Some(vec![]));
     }
 
     #[test]
     fn a_grammar_error_gives_none() {
-        assert_eq!(format_edits("fn f() {\n  x.\n}\n"), None);
-        assert_eq!(format_touching("fn f( {\n", &[TextRange::new(0, 1)]), None);
+        assert_eq!(format_edits("fn f() {\n  x.\n}\n", None), None);
+        assert_eq!(
+            format_touching("fn f( {\n", None, &[TextRange::new(0, 1)]),
+            None
+        );
     }
 
     /// X §5.4: CRLF is converted, as `cheby fmt` converts it.
@@ -726,13 +755,13 @@ mod tests {
     fn crlf_text_is_converted() {
         let crlf = MESSY.replace('\n', "\r\n");
         let want = cheby_fmt::format_source(MESSY, cheby_fmt::WIDTH).expect("formats");
-        let edits = format_edits(&crlf).expect("formats");
+        let edits = format_edits(&crlf, None).expect("formats");
         for edit in &edits {
             assert!(!edit.text.contains('\r'), "{edit:?}");
         }
         assert_eq!(apply(&crlf, &edits), want);
         let formatted_crlf = want.replace('\n', "\r\n");
-        let edits = format_edits(&formatted_crlf).expect("formats");
+        let edits = format_edits(&formatted_crlf, None).expect("formats");
         assert_ne!(edits, vec![]);
         assert_eq!(apply(&formatted_crlf, &edits), want);
     }
@@ -740,14 +769,14 @@ mod tests {
     #[test]
     fn a_mixed_text_formats_to_lf() {
         let mixed = "fn main() {\r\n  1\n}\r\n";
-        let edits = format_edits(mixed).expect("formats");
+        let edits = format_edits(mixed, None).expect("formats");
         assert_eq!(apply(mixed, &edits), "fn main() {\n  1\n}\n");
     }
 
     #[test]
     fn non_ascii_text_formats() {
         let text = "fn main() {\n  let s =  \"é🙂\"\n  s\n}\n";
-        let edits = format_edits(text).expect("formats");
+        let edits = format_edits(text, None).expect("formats");
         assert_eq!(
             apply(text, &edits),
             "fn main() {\n  let s = \"é🙂\"\n  s\n}\n"
@@ -759,10 +788,10 @@ mod tests {
         let text = "fn a() {  1 }\n\nfn b() {  2 }\n\nfn c() {  3 }\n";
         let line_b = TextRange::new(15, 20);
         assert_eq!(line_b.slice(text), Some("fn b("));
-        let edits = format_touching(text, &[line_b]).expect("formats");
+        let edits = format_touching(text, None, &[line_b]).expect("formats");
         let got = apply(text, &edits);
         assert_eq!(got, "fn a() {  1 }\n\nfn b() {\n  2\n}\n\nfn c() {  3 }\n");
-        let whole = formatted(text).expect("formats");
+        let whole = formatted(text, None).expect("formats");
         assert_ne!(got, whole);
     }
 
@@ -770,39 +799,39 @@ mod tests {
     fn a_range_ending_at_a_line_start_leaves_that_line() {
         let text = "fn a() {  1 }\n\nfn b() {  2 }\n";
         let first_line = TextRange::new(0, 14);
-        let edits = format_touching(text, &[first_line]).expect("formats");
+        let edits = format_touching(text, None, &[first_line]).expect("formats");
         assert_eq!(edits.len(), 1);
         assert_eq!(edits.first().map(|e| e.range), Some(first_line));
         let blank_line = TextRange::empty(14);
-        assert_eq!(format_touching(text, &[blank_line]), Some(vec![]));
+        assert_eq!(format_touching(text, None, &[blank_line]), Some(vec![]));
     }
 
     #[test]
     fn a_moved_import_keeps_both_halves() {
         let text = "import std::list\nimport std::io\n\nfn main() {\n  1\n}\n";
         let want = "import std::io\nimport std::list\n\nfn main() {\n  1\n}\n";
-        assert_eq!(formatted(text).as_deref(), Some(want));
+        assert_eq!(formatted(text, None).as_deref(), Some(want));
         for line in [0, 1] {
             let range = TextRange::empty(if line == 0 { 0 } else { 17 });
-            let edits = format_touching(text, &[range]).expect("formats");
+            let edits = format_touching(text, None, &[range]).expect("formats");
             assert_eq!(apply(text, &edits), want, "line {line}");
         }
         let body = TextRange::empty(40);
-        assert_eq!(format_touching(text, &[body]), Some(vec![]));
+        assert_eq!(format_touching(text, None, &[body]), Some(vec![]));
     }
 
     #[test]
     fn crlf_range_formatting_stays_local() {
         let text = "fn a() {  1 }\r\n\r\nfn b() {  2 }\r\n";
         let line_b = TextRange::empty(17);
-        let edits = format_touching(text, &[line_b]).expect("formats");
+        let edits = format_touching(text, None, &[line_b]).expect("formats");
         assert_eq!(edits.len(), 1, "{edits:?}");
         assert_eq!(
             apply(text, &edits),
             "fn a() {  1 }\r\n\r\nfn b() {\r\n  2\r\n}\r\n"
         );
         // Whole-file formatting still converts to LF (X §5.4).
-        let whole = format_edits(text).expect("formats");
+        let whole = format_edits(text, None).expect("formats");
         assert_eq!(
             apply(text, &whole),
             "fn a() {\n  1\n}\n\nfn b() {\n  2\n}\n"

@@ -1,0 +1,7 @@
+// @mode: parse-fail
+// @decisions: D-1930
+//! `throw` gets the help to return an `Err` or to `panic`.
+
+fn main() {
+  throw "bad"
+}

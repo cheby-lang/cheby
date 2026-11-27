@@ -321,10 +321,11 @@ fn main() {
     assert_eq!(organize.edit, Some(Vec::new()));
 }
 
-/// Two names of one list, the last among them, are cut as one, and every
-/// block of imports is sorted on its own (D-1148).
+/// Two names of one list, the last among them, are cut as one, and the
+/// standard library's imports come in one block, with no blank line
+/// inside it (D-1953).
 #[test]
-fn organize_cuts_names_and_keeps_blocks() {
+fn organize_cuts_names_and_joins_a_block() {
     let text = "\
 import std::list::{length, map, reverse}
 import std::int
@@ -347,9 +348,66 @@ fn main() {
     assert_eq!(
         run.applied(organize),
         text.replace(
-            "import std::list::{length, map, reverse}\nimport std::int\n",
-            "import std::int\nimport std::list::{length}\n"
+            "import std::list::{length, map, reverse}\nimport std::int\n\nimport std::io\n",
+            "import std::int\nimport std::io\nimport std::list::{length}\n"
         )
+    );
+}
+
+/// D-1953: organize imports puts the section in `cheby fmt`'s blocks,
+/// each import with the comments that travel with it, and keeps a header
+/// that a blank line sets apart. It writes what W0014's quick fix writes,
+/// the help's edit through the H rows.
+#[test]
+fn organize_moves_comments_and_agrees_with_w0014() {
+    let text = "\
+//! Root.
+
+// header
+
+import app::util // mine
+// about io
+import std::io
+
+fn main() {
+  io::println(util::name())
+}
+";
+    let util = (
+        "util.cheby",
+        "//! Util.\n\npub fn name() -> String {\n  \"n\"\n}\n",
+    );
+    let run = Run::package("organize_comments", text, &[util]);
+    let want = text.replace(
+        "import app::util // mine\n// about io\nimport std::io\n",
+        "// about io\nimport std::io\n\nimport app::util // mine\n",
+    );
+    let listed = run.listed("fn main", None, false);
+    assert_eq!(run.applied(titled(&listed, ORGANIZE)), want);
+    let warning = run
+        .diagnostics()
+        .iter()
+        .position(|d| d.code == codes::IMPORT_ORDER)
+        .expect("W0014");
+    let quick = run.with_cx(false, |cx| {
+        let diagnostics = [(warning, &run.diagnostics()[warning])];
+        crate::features::ide::actions::generic::provide(cx, TextRange::empty(0), &diagnostics)
+    });
+    let [fix] = quick.as_slice() else {
+        panic!("one fix: {:?}", titles(&quick));
+    };
+    assert_eq!(fix.kind, ActionKind::QuickFix);
+    assert!(fix.preferred && !fix.removes);
+    assert_eq!(run.applied(fix), want);
+    // In order: nothing to do, and no W0014.
+    let sorted = Run::package("organize_comments_sorted", &want, &[util]);
+    let listed = sorted.listed("fn main", None, false);
+    assert_eq!(titled(&listed, ORGANIZE).edit, Some(Vec::new()));
+    assert!(
+        !sorted
+            .diagnostics()
+            .iter()
+            .any(|d| d.code == codes::IMPORT_ORDER)
     );
 }
 
@@ -391,9 +449,10 @@ fn main() {
         .filter(|t| t.starts_with("Import"))
         .collect();
     assert_eq!(imports, ["Import `app::list`", "Import `std::list`"]);
+    // The package's own module starts a block after std's (D-1953).
     assert_eq!(
         run.applied(titled(&listed, "Import `app::list`")),
-        text.replace("import std::io\n", "import app::list\nimport std::io\n")
+        text.replace("import std::io\n", "import std::io\n\nimport app::list\n")
     );
     assert_eq!(
         run.applied(titled(&listed, "Import `std::list`")),
@@ -664,6 +723,51 @@ import std::io
 
 fn main() {
   io::println(int::show(1))
+}
+
+"
+    );
+}
+
+/// D-1953: the imports after an item go into the blocks of their classes,
+/// a block that the file lacks starting at its place, so a section in
+/// `cheby fmt`'s order stays in it.
+#[test]
+fn moved_imports_go_into_their_blocks() {
+    let util = (
+        "util.cheby",
+        "//! Util.\n\npub fn name() -> String {\n  \"n\"\n}\n",
+    );
+    let text = "\
+//! Root.
+
+// about list
+import std::list
+
+fn main() {
+  io::println(util::name() + int::show(list::length([1])))
+}
+
+import app::util
+import std::io
+import std::int
+";
+    let run = Run::package("move_blocks", text, &[util]);
+    let listed = run.listed("import app::util", None, false);
+    assert_eq!(
+        run.applied(titled(&listed, MOVE_IMPORTS)),
+        "\
+//! Root.
+
+import std::int
+import std::io
+// about list
+import std::list
+
+import app::util
+
+fn main() {
+  io::println(util::name() + int::show(list::length([1])))
 }
 
 "

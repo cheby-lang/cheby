@@ -1,0 +1,66 @@
+error[E0042]: there is no value `upper` in module `std::string`
+  --> tests/ui/07-modules-and-packages/habits/std_foreign_names.cheby:13:19
+   |
+13 |   let a = string::upper("a")
+   |           ------  ^^^^^ not found
+   |           |
+   |           `std::string`
+   |
+   = help: did you mean `uppercase`?
+
+error[E0042]: there is no value `to_upper` in module `std::string`
+  --> tests/ui/07-modules-and-packages/habits/std_foreign_names.cheby:14:19
+   |
+14 |   let b = string::to_upper("a")
+   |           ------  ^^^^^^^^ not found
+   |           |
+   |           `std::string`
+   |
+   = help: did you mean `uppercase`?
+
+warning[W0002]: unused binding `c`
+  --> tests/ui/07-modules-and-packages/habits/std_foreign_names.cheby:15:7
+   |
+15 |   let c = map::len(map::new())
+   |       ^ never used
+   |
+   = help: if this is intentional, start the name with an underscore: `_c`
+
+error[E0042]: there is no value `len` in module `std::map`
+  --> tests/ui/07-modules-and-packages/habits/std_foreign_names.cheby:15:16
+   |
+15 |   let c = map::len(map::new())
+   |           ---  ^^^ not found
+   |           |
+   |           `std::map`
+   |
+   = help: did you mean `size`?
+
+error[E0042]: there is no value `for_each` in module `std::list`
+  --> tests/ui/07-modules-and-packages/habits/std_foreign_names.cheby:16:9
+   |
+16 |   list::for_each([1], fn(x) { assert x == 1 })
+   |   ----  ^^^^^^^^ not found
+   |   |
+   |   `std::list`
+   |
+   = help: did you mean `each`?
+
+warning[W0002]: unused binding `d`
+  --> tests/ui/07-modules-and-packages/habits/std_foreign_names.cheby:17:7
+   |
+17 |   let d = int::to_str(1)
+   |       ^ never used
+   |
+   = help: if this is intentional, start the name with an underscore: `_d`
+
+error[E0042]: there is no value `to_str` in module `std::int`
+  --> tests/ui/07-modules-and-packages/habits/std_foreign_names.cheby:17:16
+   |
+17 |   let d = int::to_str(1)
+   |           ---  ^^^^^^ not found
+   |           |
+   |           `std::int`
+   |
+   = help: did you mean `show`?
+

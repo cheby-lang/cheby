@@ -1,0 +1,11 @@
+// @mode: parse-fail
+// @decisions: D-1930
+//! `x as Float` in an argument gets the help to convert with a function.
+
+import std::float
+
+fn main() {
+  let x = 1
+  let s = float::show(x as Float)
+  assert s == "1.0"
+}

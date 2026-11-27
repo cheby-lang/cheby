@@ -812,6 +812,335 @@ fn reserved_words_explain_grammar_errors() {
     assert_eq!(codes_of(&in_fn("  let go = 1\n  go")), Vec::<String>::new());
 }
 
+/// The text after the edits of the first help that has edits, applied
+/// the way a client applies one fix.
+fn fixed_by_help(text: &str) -> String {
+    let (_, _, errors) = parse_text("test.cheby", text);
+    let mut edits: Vec<(usize, usize, String)> = errors
+        .iter()
+        .flat_map(|d| d.helps.iter())
+        .find(|h| !h.edits.is_empty())
+        .map_or_else(
+            || panic!("no help with an edit: {text}"),
+            |h| {
+                h.edits
+                    .iter()
+                    .map(|e| {
+                        let start = usize::try_from(e.span.range.start()).unwrap();
+                        let end = usize::try_from(e.span.range.end()).unwrap();
+                        (start, end, e.replacement.clone())
+                    })
+                    .collect()
+            },
+        );
+    edits.sort_by_key(|&(start, _, _)| std::cmp::Reverse(start));
+    let mut out = text.to_owned();
+    for (start, end, replacement) in edits {
+        out.replace_range(start..end, &replacement);
+    }
+    out
+}
+
+/// Whether any help of the errors of `text` has an edit.
+fn has_edit(text: &str) -> bool {
+    let (_, _, errors) = parse_text("test.cheby", text);
+    errors
+        .iter()
+        .flat_map(|d| d.helps.iter())
+        .any(|h| !h.edits.is_empty())
+}
+
+/// Habits from other languages that end in a grammar error get one help
+/// that names the Cheby form (D-1930, D-1932). A help with an edit rewrites
+/// one token, and the text with it applied parses (D-1931). An error that
+/// only follows from the habit on the same line is dropped (D-1933).
+#[test]
+fn habits_with_an_edit_fix_the_grammar_error() {
+    let edited = [
+        (in_fn("  var x = 1"), "Cheby has no `var`; write `let`"),
+        (in_fn("  val x = 1"), "Cheby has no `val`; write `let`"),
+        (
+            in_fn("  const x = 1"),
+            "a `const` belongs at the top level; inside a body write `let`",
+        ),
+        (in_fn("  let x = not y"), "Cheby has no `not`; write `!`"),
+        (in_fn("  let x = a and b"), "Cheby has no `and`; write `&&`"),
+        (in_fn("  let x = a or b"), "Cheby has no `or`; write `||`"),
+        (in_fn("  let x = a === b"), "Cheby has no `===`; write `==`"),
+        (in_fn("  let x = a !== b"), "Cheby has no `!==`; write `!=`"),
+        (
+            in_fn("  let y = &x"),
+            "Cheby has no references; write the value without `&`",
+        ),
+        (
+            in_fn("  let y = *x"),
+            "Cheby has no pointers; write the value without `*`",
+        ),
+        (
+            in_fn("  let ys = [...xs, 2]"),
+            "a spread is written `..xs`; write `..`",
+        ),
+        (
+            in_fn("  g(f\"{c}\")"),
+            "Cheby strings interpolate without a prefix; remove the `f`",
+        ),
+        (
+            in_fn("  case x {\n    1 -> 2\n  }"),
+            "a `case` arm uses `=>`; write `=>`",
+        ),
+        (
+            in_fn("  case x {\n    1: 2\n  }"),
+            "a `case` arm uses `=>`; write `=>`",
+        ),
+        (
+            "fn f(x: Int): Int {\n  x\n}\n".to_owned(),
+            "a return type follows `->`; write `->`",
+        ),
+        (
+            "def f(x: Int) -> Int {\n  x\n}\n".to_owned(),
+            "Cheby has no `def`; write `fn`",
+        ),
+        (
+            "func f(x: Int) -> Int {\n  x\n}\n".to_owned(),
+            "Cheby has no `func`; write `fn`",
+        ),
+        (
+            in_fn("  def g(x: Int) -> Int {\n    x\n  }"),
+            "Cheby has no `def`; write `fn`",
+        ),
+        (
+            "use std::io\n".to_owned(),
+            "Cheby imports a module with `import`; write `import`",
+        ),
+        (
+            "import std.io\n".to_owned(),
+            "module paths use `::`; write `::`",
+        ),
+        (
+            "fn f(x: i32) -> Int {\n  1\n}\n".to_owned(),
+            "type names start with an upper-case letter; write `I32`",
+        ),
+        (
+            "fn f(x: usize) -> Int {\n  1\n}\n".to_owned(),
+            "type names start with an upper-case letter; write `Int`",
+        ),
+        (
+            "fn f(x: int) -> Int {\n  1\n}\n".to_owned(),
+            "type names start with an upper-case letter; write `Int`",
+        ),
+    ];
+    for (text, help) in edited {
+        assert_eq!(helps_of(&text), [help], "{text}");
+        let fixed = fixed_by_help(&text);
+        assert_eq!(codes_of(&fixed), Vec::<String>::new(), "{fixed}");
+    }
+}
+
+/// Each of `cases` has one help, the given one, with no edit (D-1931).
+fn assert_text_helps(cases: &[(String, &str)]) {
+    for (text, help) in cases {
+        assert_eq!(helps_of(text), [*help], "{text}");
+        assert!(!has_edit(text), "{text}");
+    }
+}
+
+/// The habits of D-1930 whose fix is more than one token get a help with
+/// no edit: assignments, operators and indexing.
+#[test]
+fn habits_of_values_and_operators_explain_grammar_errors() {
+    let immutable = "values are immutable; bind a new name, such as `let x_2 = …`";
+    let cases = [
+        (in_fn("  let x = 1\n  x = 2"), immutable),
+        (
+            in_fn("  total = 2"),
+            "a name is bound with `let`; write `let total = …`",
+        ),
+        (
+            in_fn("  ys: List<Int> = [1]"),
+            "a name is bound with `let`; write `let ys: List<Int> = …`",
+        ),
+        (in_fn("  let x = 1\n  x += 2"), immutable),
+        (in_fn("  let x = 1\n  x++"), immutable),
+        (in_fn("  let x = 1\n  x--"), immutable),
+        (
+            in_fn("  let b = a <> c"),
+            "Cheby has no `<>`; write `!=` to compare, or `+` to join strings",
+        ),
+        (
+            in_fn("  let b = 2 ** 3"),
+            "Cheby has no `**`; call `int::pow(a, b)` or `float::pow(a, b)`",
+        ),
+        (
+            in_fn("  let y = xs[0]"),
+            "Cheby has no indexing; call `list::get(xs, i)` or `map::get(m, key)`, which \
+             return an `Option`",
+        ),
+        (
+            "fn f(xs: Int[]) -> Int {\n  1\n}\n".to_owned(),
+            "a list type is written `List<T>`, such as `List<Int>`",
+        ),
+        (
+            "fn f(xs: List<Int>) -> [Int] {\n  xs\n}\n".to_owned(),
+            "a list type is written `List<T>`, such as `List<Int>`",
+        ),
+        (
+            in_fn("  let ys = 0..10"),
+            "Cheby has no range operator; call `list::range(start, end)`, which stops \
+             before `end`",
+        ),
+        (
+            in_fn("  case n {\n    1..5 => 1\n  }"),
+            "Cheby has no range patterns; match with a guard, such as \
+             `k when k >= 1 && k < 5 =>`",
+        ),
+        (
+            in_fn("  let x = o!"),
+            "Cheby has no postfix `!`; take the value apart with `case`, or call \
+             `option::expect` or `result::expect`",
+        ),
+        (
+            in_fn("  println!(\"a\")"),
+            "Cheby has no macros; call `io::println(…)`",
+        ),
+        (
+            in_fn("  panic!(\"a\")"),
+            "Cheby has no macros; write `panic as \"message\"`",
+        ),
+    ];
+    assert_text_helps(&cases);
+}
+
+/// The habits of D-1930 in closures, statements, items and types get a
+/// help with no edit, when their fix is more than one token.
+#[test]
+fn habits_of_closures_and_statements_explain_grammar_errors() {
+    let closure = "a closure is written `fn(x) { x + 1 }`";
+    let cases = [
+        (in_fn("  g(|x| x + 1)"), closure),
+        (in_fn("  g(|| 1)"), closure),
+        (in_fn("  g(x => x + 1)"), closure),
+        (in_fn("  g((x) => x + 1)"), closure),
+        (in_fn("  let h = x => x + 1"), closure),
+        (in_fn("  g(lambda x: x + 1)"), closure),
+        (
+            in_fn("  g(x as Float)"),
+            "Cheby has no casts; convert with a function, such as `float::from_int(x)`",
+        ),
+        (
+            in_fn("  switch x {\n    1 => 2\n  }"),
+            "Cheby has no `switch`; use `case`",
+        ),
+        (
+            in_fn("  elif x {\n    1\n  }"),
+            "Cheby has no `elif`; use `case`",
+        ),
+        (
+            in_fn("  do {\n    1\n  }"),
+            "Cheby has no `do`; use recursion, often through a local `fn`",
+        ),
+        (
+            in_fn("  try {\n    1\n  }"),
+            "Cheby has no `try`; a failure is an `Err` value, handled with `case` or \
+             `use x <- result::try(…)`",
+        ),
+        (
+            in_fn("  throw \"bad\""),
+            "Cheby has no `throw`; return an `Err`, or stop with `panic as \"message\"`",
+        ),
+        (
+            "class P {\n  x: Int\n}\n".to_owned(),
+            "Cheby has no `class`; use `type`",
+        ),
+        (
+            "from std import io\n".to_owned(),
+            "Cheby imports a module with `import`, such as `import std::io`",
+        ),
+        (
+            "fn f(x: point) -> Int {\n  1\n}\n".to_owned(),
+            "type names start with an upper-case letter, such as `Point`",
+        ),
+    ];
+    assert_text_helps(&cases);
+}
+
+/// The words of the habits stay names (D-1930), and shapes close to a
+/// habit get no help (D-1932): an empty list of type arguments is no
+/// `<>`, a record subject's field is no arm, and a name before `:` is no
+/// type.
+#[test]
+fn habit_words_stay_names() {
+    for word in [
+        "var", "val", "not", "and", "or", "def", "func", "function", "fun", "class", "switch",
+        "lambda", "elif", "unless", "try", "throw", "raise", "do", "until", "from", "package",
+    ] {
+        assert_ok(&in_fn(&format!("  let {word} = 1\n  {word} + 1")));
+        assert_ok(&format!("fn {word}() -> Int {{\n  1\n}}\n"));
+    }
+    assert_eq!(
+        helps_of("fn f(y: List<>) -> Int {\n  1\n}\n"),
+        Vec::<String>::new()
+    );
+    let record_subject = in_fn("  case Point { x: 0 } {\n    Point { x } => x\n  }");
+    assert_eq!(helps_of(&record_subject), Vec::<String>::new());
+    assert_eq!(helps_of("type P {\n  P(x: Int)\n}\n"), Vec::<String>::new());
+    // An argument of a call broken over lines is no assignment, nor a
+    // binding with a type.
+    assert_eq!(
+        helps_of(&in_fn("  g(\n    x = 1,\n  )")),
+        Vec::<String>::new()
+    );
+    assert_eq!(
+        helps_of(&in_fn("  g(\n    x: Int = 1,\n  )")),
+        Vec::<String>::new()
+    );
+    // `try(…)` may call an imported `result::try`.
+    assert_eq!(helps_of(&in_fn("  try(r, f) x")), Vec::<String>::new());
+}
+
+/// The lexer's habits keep E0003 and get a help (D-1930): `?` after an
+/// expression, `??`, whose second `?` adds no error, `?.`, `? :`, a
+/// backtick, and `#`, whose comment is one error token with an edit to `//`
+/// (D-1931, D-1933).
+#[test]
+fn lexer_habits_explain_unexpected_characters() {
+    for (text, help) in [
+        (
+            in_fn("  let x = f()?"),
+            "Cheby has no `?` operator; unwrap a `Result` with `use x <- result::try(…)`",
+        ),
+        (
+            in_fn("  let x = a ?? 1"),
+            "Cheby has no `??`; call `option::unwrap_or(o, default)`",
+        ),
+        (
+            in_fn("  let x = a?.b"),
+            "Cheby has no `?.`; call `option::map(o, f)`, or take the value apart with `case`",
+        ),
+        (
+            in_fn("  let x = a ? 1 : 2"),
+            "Cheby has no `? :`; use `case`",
+        ),
+        (
+            in_fn("  let s = `a`"),
+            "strings use double quotes, such as \"text\"",
+        ),
+    ] {
+        assert_eq!(
+            helps_of(&text).first().map(String::as_str),
+            Some(help),
+            "{text}"
+        );
+    }
+    assert_eq!(codes_of(&in_fn("  let x = a ?? 1")), ["E0003"]);
+    let hash = in_fn("  # it's a comment, (with) \"quotes\"\n  1");
+    assert_eq!(codes_of(&hash), ["E0003"]);
+    assert_eq!(helps_of(&hash), ["comments start with `//`; write `//`"]);
+    let fixed = fixed_by_help(&hash);
+    assert_eq!(codes_of(&fixed), Vec::<String>::new(), "{fixed}");
+    // Rust's attribute is no comment.
+    assert_eq!(helps_of("#[derive(Debug)]\n"), Vec::<String>::new());
+}
+
 /// Two pattern habits from other languages keep E0013 and get a help:
 /// Gleam's string prefix `"L" <> rest` and Rust's `.._` (D-1657). The rest
 /// of the arm or `let` adds no error.

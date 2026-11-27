@@ -1,0 +1,11 @@
+// @mode: parse-fail
+// @decisions: D-1930
+//! `println!(…)`, `print!(…)`, `eprintln!(…)` and `eprint!(…)` get the help
+//! to call the function of `std::io`.
+
+fn main() {
+  println!("a")
+  print!("b")
+  eprintln!("c")
+  eprint!("d")
+}

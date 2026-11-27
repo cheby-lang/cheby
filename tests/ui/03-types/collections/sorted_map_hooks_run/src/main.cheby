@@ -8,9 +8,10 @@
 //! debug text would show the tree's nodes instead of
 //! `sorted_map::from_list([…])`.
 
-import app::scores
 import std::io
 import std::set
+
+import app::scores
 
 fn main() {
   let listed = scores::listed()

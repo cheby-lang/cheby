@@ -2269,6 +2269,10 @@ impl<'c> Gen<'c> {
             }
         }
         if names("helpers") {
+            // The package's own module is a block of its own (D-1953).
+            if !out.is_empty() {
+                out.push('\n');
+            }
             out.push_str("import progen::helpers\n");
         }
         if !out.is_empty() {

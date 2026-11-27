@@ -207,6 +207,7 @@ dependencies = [
  "libtest-mimic",
  "object",
  "rustls",
+ "serde_json",
  "siphasher",
 ]
 
@@ -249,6 +250,7 @@ dependencies = [
 name = "cheby_doc"
 version = "0.0.0"
 dependencies = [
+ "cheby_diag",
  "cheby_driver",
 ]
 

@@ -1,6 +1,7 @@
 //! Prints a greeting several times.
 
 import std::io
+
 import app::greet
 
 fn main() {

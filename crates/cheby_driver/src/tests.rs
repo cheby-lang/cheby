@@ -1227,9 +1227,16 @@ fn validation_of_files_with_grammar_errors() {
     assert!(rendered.contains("error[E0011]"), "{rendered}");
     // E0030 is a shape check, so it is not.
     assert!(!rendered.contains("E0030"), "{rendered}");
-    // Naming (E0006) is checked by name resolution, which a package with
-    // phase-A errors does not reach (D-452), in either file.
-    assert!(!rendered.contains("E0006"), "{rendered}");
+    // Naming (E0006) is checked by name resolution, which does not reach
+    // the file with phase-A errors (D-452). The other file imports
+    // nothing, so it is checked (D-1951).
+    assert_eq!(rendered.matches("E0006").count(), 1, "{rendered}");
+    assert!(
+        rendered
+            .contains("error[E0006]: name `myValue` is not in snake_case\n --> src/ok.cheby:2:7"),
+        "{rendered}"
+    );
+    assert!(out.unchecked.is_empty(), "{:?}", out.unchecked);
     std::fs::remove_dir_all(&dir).unwrap();
 }
 
@@ -1448,6 +1455,8 @@ fn tests_are_selected_and_counted() {
 fn std_self_test_runs_a_selection() {
     let report = test_std(Some("std::bool ")).unwrap();
     assert!(report.success(), "{}", report.render());
+    // Std has no warning, whatever the filter (D-1955).
+    assert!(report.warnings.is_empty(), "{}", report.render());
     assert_eq!(report.modules.len(), 1, "{}", report.render());
     assert_eq!(report.modules[0].path, "std::bool");
     assert!(report.counts().passed >= 1);
@@ -1480,6 +1489,30 @@ fn std_bytes_builds_and_passes() {
     assert!(report.success(), "{text}");
     assert!(report.counts().passed >= 19, "{text}");
     assert!(text.contains("  std::bytes: "), "{text}");
+}
+
+/// A warning in a std module fails the std self-test: the report shows it
+/// first and counts it in the summary (D-1955).
+#[test]
+fn std_warnings_fail_the_self_test() {
+    let warning = "warning[W0002]: unused binding `y`\n --> std/bool.cheby:3:7\n".to_owned();
+    let report = TestReport {
+        warnings: vec![warning.clone()],
+        ..TestReport::default()
+    };
+    assert!(!report.success());
+    assert_eq!(report.exit_status(), 1);
+    let text = report.render();
+    assert!(text.starts_with(&format!("{warning}\n")), "{text}");
+    assert!(
+        text.ends_with("test result: FAILED. 0 passed; 0 failed; 1 warning; 0 filtered out\n"),
+        "{text}"
+    );
+    let two = TestReport {
+        warnings: vec![warning.clone(), warning],
+        ..TestReport::default()
+    };
+    assert!(two.render().ends_with("2 warnings; 0 filtered out\n"));
 }
 
 // ---------------------------------------------------------------------
@@ -1833,5 +1866,74 @@ fn iface_roundtrip_types_of_any_depth() {
         .unwrap();
     assert!(!out.has_errors(), "{}", out.render());
     assert!(roundtrip_all(&front).iter().any(|path| path == "deep"));
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+/// D-1951: the note names the modules that were not checked, up to six.
+#[test]
+fn the_note_names_unchecked_modules() {
+    let with = |names: &[&str]| CheckOutput {
+        unchecked: names.iter().map(|&name| name.to_owned()).collect(),
+        ..CheckOutput::default()
+    };
+    assert_eq!(with(&[]).unchecked_note(), None);
+    assert_eq!(
+        with(&["app"]).unchecked_note().as_deref(),
+        Some(
+            "note: 1 module was not checked, because it imports a module with syntax errors: app\n"
+        )
+    );
+    assert_eq!(
+        with(&["a", "b", "c", "d", "e", "f", "g", "h"])
+            .unchecked_note()
+            .as_deref(),
+        Some(
+            "note: 8 modules were not checked, because they import a module with syntax errors: a, \
+             b, c, d, e, f and 2 more\n"
+        )
+    );
+}
+
+/// D-1951, D-464: an internal error in the run that checks the modules a
+/// syntax error does not reach is kept beside the phase-A errors, which are
+/// still reported; nothing of that run is. The body named `ice_by_test` is
+/// the front end's test hook for an internal error.
+#[test]
+fn an_internal_error_past_a_syntax_error_is_kept() {
+    let dir = package(
+        "later_ice",
+        &[
+            MANIFEST,
+            ("src/main.cheby", b"fn main() {\n  let x = (1\n}\n"),
+            (
+                "src/util.cheby",
+                b"fn ice_by_test() -> Int {\n  1\n}\n\nfn flag() -> Bool {\n  true\n}\n",
+            ),
+        ],
+    );
+    let out = check(&dir).unwrap();
+    let rendered = out.render();
+    assert!(
+        rendered.contains("error[E0015]: unclosed `(`"),
+        "{rendered}"
+    );
+    assert!(!rendered.contains("E0042"), "{rendered}");
+    assert!(
+        out.internal
+            .as_deref()
+            .is_some_and(|message| message.starts_with("internal compiler error: ")),
+        "{:?}",
+        out.internal
+    );
+    assert_eq!(out.unchecked, Vec::<String>::new());
+    // Without the hook's body, the same package reports `util`.
+    std::fs::write(
+        dir.join("src/util.cheby"),
+        "fn flag() -> Bool {\n  true\n}\n",
+    )
+    .unwrap();
+    let out = check(&dir).unwrap();
+    assert!(out.render().contains("E0042"), "{}", out.render());
+    assert_eq!(out.internal, None);
     std::fs::remove_dir_all(&dir).unwrap();
 }

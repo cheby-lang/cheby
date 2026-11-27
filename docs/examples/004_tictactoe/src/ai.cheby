@@ -4,6 +4,7 @@
 //! computer never loses.
 
 import std::list
+
 import tictactoe::board
 import tictactoe::player
 

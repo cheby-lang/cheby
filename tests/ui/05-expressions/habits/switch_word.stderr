@@ -1,0 +1,8 @@
+error[E0013]: expected a line break or `}`, found identifier
+ --> tests/ui/05-expressions/habits/switch_word.cheby:7:10
+  |
+7 |   switch x {
+  |          ^
+  |
+  = help: Cheby has no `switch`; use `case`
+

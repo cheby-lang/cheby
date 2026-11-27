@@ -1337,11 +1337,11 @@ fn a_fix_that_lengthens_a_full_line_is_formatted() {
         }
         out
     };
-    let done = formatted(&text, &path, fix.clone(), false, &cancel);
+    let done = formatted(&text, &path, None, fix.clone(), false, &cancel);
     let after = apply(&done);
     assert_eq!(
         Some(after.clone()),
-        crate::features::ide::edits::formatted(&after),
+        crate::features::ide::edits::formatted(&after, None),
         "{after}"
     );
     assert!(
@@ -1351,10 +1351,16 @@ fn a_fix_that_lengthens_a_full_line_is_formatted() {
     assert_ne!(done, fix);
     // A fix that renames, E0044's or E0006's, is rename's writer, never
     // formatted (D-1668, D-1735, D-1741).
-    assert_eq!(formatted(&text, &path, fix.clone(), true, &cancel), fix);
+    assert_eq!(
+        formatted(&text, &path, None, fix.clone(), true, &cancel),
+        fix
+    );
     // A file with a grammar error keeps the raw edits.
     let broken = format!("{text}fn broken() {{\n  let = 1\n}}\n");
-    assert_eq!(formatted(&broken, &path, fix.clone(), false, &cancel), fix);
+    assert_eq!(
+        formatted(&broken, &path, None, fix.clone(), false, &cancel),
+        fix
+    );
     // An edit already in form stays as it is.
     let short = vec![PlainEdit {
         path: path.clone(),
@@ -1364,7 +1370,7 @@ fn a_fix_that_lengthens_a_full_line_is_formatted() {
         ),
         replacement: "_total".to_owned(),
     }];
-    let kept = formatted(&text, &path, short.clone(), false, &cancel);
+    let kept = formatted(&text, &path, None, short.clone(), false, &cancel);
     assert_eq!(kept, short);
     // D-1738: past the cap of the widening, the fix keeps its raw edits.
     // In this text each `let n` hunk deletes a line that the next `let m`
@@ -1398,12 +1404,12 @@ fn a_fix_that_lengthens_a_full_line_is_formatted() {
             .unwrap(),
     );
     assert_eq!(
-        formatted(&long, &path, raw_at(&long), false, &cancel),
+        formatted(&long, &path, None, raw_at(&long), false, &cancel),
         raw_at(&long)
     );
     let short = chain(2);
     assert_ne!(
-        formatted(&short, &path, raw_at(&short), false, &cancel),
+        formatted(&short, &path, None, raw_at(&short), false, &cancel),
         raw_at(&short)
     );
 }

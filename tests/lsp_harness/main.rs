@@ -4521,9 +4521,11 @@ fn check_formatting(
 
 /// `features.md` §5.4, D-1399: every edit of a `rangeFormatting` answer
 /// touches the lines of the range, here the marker's one `line` of `text`.
-/// An edit that only removes and inserts `import` lines is exempt: the
-/// formatter sorts imports, and the other half of a moved import is kept
-/// with the half the range touches.
+/// An edit that only removes and inserts `import` lines, comment lines and
+/// blank lines is exempt: the formatter puts the imports in their blocks
+/// and order, each with the comments that travel with it and a blank line
+/// between two blocks (D-1953), and the other half of a moved import is
+/// kept with the half the range touches.
 fn check_range_formatting(answer: &Value, text: &str, line: usize) -> Result<(), String> {
     let Some(edits) = answer.as_array() else {
         return Ok(());
@@ -4548,7 +4550,8 @@ fn check_range_formatting(answer: &Value, text: &str, line: usize) -> Result<(),
             .iter()
             .copied()
             .chain(inserted.lines())
-            .all(|l| l.trim_start().starts_with("import "));
+            .map(str::trim_start)
+            .all(|l| l.starts_with("import ") || l.starts_with("//") || l.is_empty());
         if imports_only {
             continue;
         }

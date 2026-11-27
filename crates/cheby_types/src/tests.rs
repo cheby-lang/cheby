@@ -530,7 +530,7 @@ fn uses_of_erroneous_items_are_silent() {
 #[test]
 fn cross_module_calls_use_the_dependency_interface() {
     let util = "//! Test.\n\nimport std::io\n\npub fn shout(text: String) -> String {\n  text\n}\n\nfn helper() {\n  io::println(\"x\")\n}\n";
-    let main = "//! Test.\n\nimport std::io\nimport app::util\n\nfn main() {\n  io::println(util::shout(\"hi\"))\n  util::helper()\n}\n";
+    let main = "//! Test.\n\nimport std::io\n\nimport app::util\n\nfn main() {\n  io::println(util::shout(\"hi\"))\n  util::helper()\n}\n";
     let b = build(&[("", main), ("util", util)]);
     assert!(b.diags.is_empty(), "{:?}", b.messages());
     let shout = b.def("app::util", "shout");
@@ -1576,7 +1576,7 @@ fn use_binders_match_the_callback() {
 
 #[test]
 fn captures_evaluate_their_arguments_once() {
-    let src = "import std::list\nimport std::int\n\nfn next_id() -> Int {\n  1\n}\n\nfn f(numbers: List<Int>) -> List<Int> {\n  let add_next = int::add(next_id(), _)\n  list::map(numbers, int::add(1, _))\n}\n";
+    let src = "import std::int\nimport std::list\n\nfn next_id() -> Int {\n  1\n}\n\nfn f(numbers: List<Int>) -> List<Int> {\n  let add_next = int::add(next_id(), _)\n  list::map(numbers, int::add(1, _))\n}\n";
     let b = clean(src);
     let body = body(&b, "f");
     // `next_id()` is bound to a synthetic local before the closure.

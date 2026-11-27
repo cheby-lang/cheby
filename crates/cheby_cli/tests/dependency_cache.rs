@@ -84,7 +84,7 @@ impl World {
         );
         world.write(
             "prime/src/main.cheby",
-            "//! P.\n\nimport std::io\nimport std::list\nimport std::int\n\nfn main() {\n  io::println(int::show(list::length([1])))\n}\n\ntest \"t\" {\n  assert 1 == 1\n}\n",
+            "//! P.\n\nimport std::int\nimport std::io\nimport std::list\n\nfn main() {\n  io::println(int::show(list::length([1])))\n}\n\ntest \"t\" {\n  assert 1 == 1\n}\n",
         );
         for &args in COMMANDS {
             let out = world.cheby("prime", args, world.primed.path());
@@ -253,9 +253,10 @@ const APP: &str = "name = \"app\"\nversion = \"0.1.0\"\ntargets = [\"native\"]\n
 
 const MAIN: &str = r#"//! App.
 
+import std::io
+
 import geo
 import geo::shape
-import std::io
 
 fn main() {
   let a = shape::area(shape::square(2))
@@ -288,6 +289,7 @@ pub fn unit() -> Int {
 const SHAPE: &str = r#"//! Shapes.
 
 import std::list
+
 import u
 import u::parts
 
@@ -913,7 +915,7 @@ fn edits_of_the_set_of_modules() {
     world.edit(
         "app/src/main.cheby",
         "import std::io\n",
-        "import std::io\nimport u\n",
+        "import std::io\n\nimport u\n",
     );
     world.edit(
         "app/src/main.cheby",

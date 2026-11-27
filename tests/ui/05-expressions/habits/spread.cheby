@@ -1,0 +1,9 @@
+// @mode: parse-fail
+// @decisions: D-1930, D-1931, D-1933
+//! JavaScript's spread `[...xs]` gets the help to write `..`, with an edit.
+
+fn main() {
+  let xs = [1]
+  let ys = [...xs, 2]
+  assert ys == [1, 2]
+}

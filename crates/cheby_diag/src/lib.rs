@@ -11,15 +11,19 @@
 //! - [`render()`] and [`render_all`]: the plain-text layout of D-418, which
 //!   the UI-test goldens pin. [`render_with`] and [`render_all_with`] add
 //!   color escapes for a terminal, and [`strip_colors`] removes them again.
+//! - [`render_json`]: a diagnostic as one line of JSON, for `--format json`
+//!   (D-1944).
 
 pub mod codes;
 mod diagnostic;
+mod json;
 mod render;
 mod source;
 mod text;
 
 pub use codes::{Code, CodeInfo};
 pub use diagnostic::{Diagnostic, Edit, Help, Label, LabelStyle, Severity};
+pub use json::{json_string, render_json, render_json_message, render_json_object};
 pub use render::{
     Colors, render, render_all, render_all_with, render_tool_error, render_tool_help, render_with,
     strip_colors,

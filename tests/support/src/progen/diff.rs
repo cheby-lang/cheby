@@ -262,6 +262,29 @@ fn not_evaluated(e: &EvalError) -> DiffError {
     )
 }
 
+/// `stderr` without the warnings about calls nested too deep (W0015,
+/// D-1954): each from its `warning[W0015]` line to the blank line that
+/// ends it. A generated program nests calls as its random shape says, and
+/// the limit is about code a person reads, so the checks of generated
+/// programs do not hold them to it.
+#[must_use]
+pub fn without_nesting_warnings(stderr: &str) -> String {
+    let mut out = String::with_capacity(stderr.len());
+    let mut skipping = false;
+    for line in stderr.split_inclusive('\n') {
+        if line.starts_with("warning[W0015]") {
+            skipping = true;
+        }
+        if !skipping {
+            out.push_str(line);
+        }
+        if line.trim_end().is_empty() {
+            skipping = false;
+        }
+    }
+    out
+}
+
 /// `Err(Oracle)` naming the first difference between the run the modes
 /// agreed on and the evaluator's [`Expected`]: the status, then standard
 /// output, then standard error where the evaluator predicts it
@@ -298,6 +321,7 @@ fn against_oracle(
             ),
         ));
     }
+    let stderr = &without_nesting_warnings(stderr);
     if let Some(want) = &expected.stderr
         && stderr != want
     {

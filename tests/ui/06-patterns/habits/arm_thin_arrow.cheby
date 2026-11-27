@@ -1,0 +1,15 @@
+// @mode: parse-fail
+// @decisions: D-1932, D-1931
+//! An arm written with `->` gets the help to write `=>`, with an edit, at
+//! each arm.
+
+fn sign(n: Int) -> Int {
+  case n {
+    0 -> 0
+    _ -> 1
+  }
+}
+
+fn main() {
+  assert sign(1) == 1
+}

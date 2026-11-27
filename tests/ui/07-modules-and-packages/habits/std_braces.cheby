@@ -1,0 +1,10 @@
+// @mode: check-fail
+// @decisions: D-1936
+//! `import std::{io, list}` names a module `std`, which is a package, and
+//! the help says to import each module on its own line.
+
+import std::{io, list}
+
+fn main() {
+  assert 1 == 1
+}

@@ -1,0 +1,24 @@
+error[E0042]: cannot find value `pass` in this scope
+ --> tests/ui/05-expressions/habits/pass_and_this.cheby:6:3
+  |
+6 |   pass
+  |   ^^^^ not found
+  |
+  = help: Cheby has no `pass`; a body with nothing to do is `Nil`
+
+warning[W0002]: unused binding `me`
+  --> tests/ui/05-expressions/habits/pass_and_this.cheby:10:7
+   |
+10 |   let me = this
+   |       ^^ never used
+   |
+   = help: if this is intentional, start the name with an underscore: `_me`
+
+error[E0042]: cannot find value `this` in this scope
+  --> tests/ui/05-expressions/habits/pass_and_this.cheby:10:12
+   |
+10 |   let me = this
+   |            ^^^^ not found
+   |
+   = help: Cheby has no `this`; pass the value as a parameter
+

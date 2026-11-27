@@ -1,0 +1,11 @@
+// @mode: parse-fail
+// @decisions: D-1930
+//! `try { … } catch` gets the help that a failure is an `Err` value.
+
+fn main() {
+  try {
+    assert True
+  } catch e {
+    assert False
+  }
+}

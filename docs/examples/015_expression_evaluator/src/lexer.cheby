@@ -9,10 +9,11 @@
 //! The parser therefore always has a token to look at, and an error at
 //! the end of a line still has a position.
 
-import expression_evaluator::expr
 import std::int
 import std::list
 import std::string
+
+import expression_evaluator::expr
 
 /// A token and the position where it starts.
 type Token {

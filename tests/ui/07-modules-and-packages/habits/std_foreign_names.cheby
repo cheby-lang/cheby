@@ -1,0 +1,19 @@
+// @mode: check-fail
+// @decisions: D-1937
+//! Names of Rust, Python, JavaScript and Go for what std has point to the
+//! std name: `string::upper`, `string::to_upper`, `map::len`,
+//! `list::for_each` and `int::to_str`.
+
+import std::int
+import std::list
+import std::map
+import std::string
+
+fn main() {
+  let a = string::upper("a")
+  let b = string::to_upper("a")
+  let c = map::len(map::new())
+  list::for_each([1], fn(x) { assert x == 1 })
+  let d = int::to_str(1)
+  assert a == b
+}

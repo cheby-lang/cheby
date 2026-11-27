@@ -1,0 +1,10 @@
+// @mode: parse-fail
+// @decisions: D-1930, D-1932
+//! An arrow function `(x) => x + 1` gets the closure help.
+
+import std::list
+
+fn main() {
+  let ys = list::map([1], (x) => x + 1)
+  assert ys == [2]
+}

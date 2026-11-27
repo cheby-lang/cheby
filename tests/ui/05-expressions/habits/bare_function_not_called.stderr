@@ -1,0 +1,6 @@
+error[E0042]: cannot find value `len` in this scope
+ --> tests/ui/05-expressions/habits/bare_function_not_called.cheby:7:11
+  |
+7 |   let n = len + 1
+  |           ^^^ not found
+

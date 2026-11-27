@@ -10,10 +10,11 @@
 //! checks for zero itself and uses the checked functions of `std::int`,
 //! which return `Err(Nil)` instead of panicking.
 
-import expression_evaluator::expr
 import std::int
 import std::map
 import std::result
+
+import expression_evaluator::expr
 
 /// The variables defined so far and their values. A map is immutable,
 /// so defining a variable builds a new map, and the old one stays as it

@@ -93,7 +93,8 @@ fn rebuild<A, B>(
         Leaf(converted) => step(rest, list::push(done, converted))
         Items(items) => {
           let visits = list::reverse(list::map(items, Visit))
-          step(list::append(list::push(rest, BuildArray(list::length(items))), visits), done)
+          let build = BuildArray(list::length(items))
+          step(list::append(list::push(rest, build), visits), done)
         }
         Members(members) => {
           let keys = list::map(members, fn((key, _)) { key })
@@ -107,7 +108,8 @@ fn rebuild<A, B>(
       }
       [..rest, BuildObject(keys)] => {
         let (kept, values) = list::split_at(done, list::length(done) - list::length(keys))
-        step(rest, list::push(kept, object(list::zip(keys, values))))
+        let built = object(list::zip(keys, values))
+        step(rest, list::push(kept, built))
       }
     }
   }

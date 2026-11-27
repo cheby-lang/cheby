@@ -124,10 +124,12 @@ Any module of the current package, of a dependency or of `std` may be imported. 
 A path without braces always names a module, never an item. The root module is imported by the first segment alone: the package's own name inside the package, as in `import my_app`, and the dependency key in other packages ([§7.1](#71-packages)).
 
 ```cheby
-import json::decode as json_decode
-import my_app::web::router
 import std::io
 import std::list
+
+import json::decode as json_decode
+
+import my_app::web::router
 
 fn main() {
   // error: `int` is not imported

@@ -43,8 +43,6 @@
 //!   `"Array"` or `"Null"`, D-323) and the `path` to it, with keys and list
 //!   indexes as strings, such as `["books", "1", "format"]`.
 
-import json_codec::book
-import json_codec::format
 import std::env
 import std::io
 import std::json
@@ -52,13 +50,16 @@ import std::json::decode
 import std::list
 import std::result
 
+import json_codec::book
+import json_codec::format
+
 fn main() -> Result<Nil, AppError> {
   // Each `use` stops at the first `Err` and returns it from `main`, after
   // `result::map_error` has wrapped it in an `AppError`.
   use path <- result::try(parse_args(env::args()))
   use text <- result::try(result::map_error(io::read_file(path), ReadFailed(path, _)))
-  use books <-
-    result::try(result::map_error(json::parse(text, library_decoder()), InvalidLibrary(path, _)))
+  let parsed = json::parse(text, library_decoder())
+  use books <- result::try(result::map_error(parsed, InvalidLibrary(path, _)))
   books
   |> list::map(_, summary)
   |> list::each(_, io::println)

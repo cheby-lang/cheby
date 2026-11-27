@@ -1,0 +1,8 @@
+error[E0013]: expected a line break or `}`, found identifier
+ --> tests/ui/04-declarations/habits/local_def_keyword.cheby:6:7
+  |
+6 |   def twice(n: Int) -> Int {
+  |       ^^^^^
+  |
+  = help: Cheby has no `def`; write `fn`
+

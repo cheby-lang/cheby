@@ -15,8 +15,9 @@
 //! | W0011 | `==` on a type with a function or a handle   | `body.rs`       |
 //! | W0012 | use of a `@deprecated` item                  | `deprecated.rs` |
 //! | W0013 | negative literal for a clamped std count     | `body.rs`       |
+//! | W0014 | imports out of `cheby fmt`'s order           | `order.rs`      |
 //!
-//! W0001 is phase A's, W0007 name resolution's, W0008 and W0010 the
+//! W0001 and W0015 are phase A's, W0007 name resolution's, W0008 and W0010 the
 //! exhaustiveness checker's.
 //!
 //! Unused-code warnings (W0002-W0005) need every use. Uses come from
@@ -41,6 +42,7 @@ mod deprecated;
 mod imports;
 mod items;
 mod locals;
+mod order;
 mod uses;
 
 #[cfg(test)]
@@ -64,8 +66,8 @@ pub struct PackageModule<'a> {
 
 /// The module-local warnings: unused bindings, imports and `priv` items,
 /// discarded `Result`s, `todo`, `==` on functions and handles, uses of
-/// `@deprecated` items, negative count literals (W0002-W0004, W0006,
-/// W0009, W0011-W0013). Called by [`crate::check_bodies`] after every
+/// `@deprecated` items, negative count literals, imports out of order
+/// (W0002-W0004, W0006, W0009, W0011-W0014). Called by [`crate::check_bodies`] after every
 /// item is checked. The result is sorted by position.
 ///
 /// # Errors
@@ -87,6 +89,7 @@ pub(crate) fn module_warnings(
         let refs = items::item_refs(input, &paths, &thir_refs, &hooks);
         out.extend(items::unused_private(input, own, &refs));
     }
+    out.extend(order::import_order(input));
     out.extend(deprecated::deprecated_uses(input, own, &paths));
     out.extend(body::body_warnings(input, own, thir)?);
     sort(&mut out);

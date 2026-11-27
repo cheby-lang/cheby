@@ -141,7 +141,27 @@ impl PathCx<'_> {
         let constructor =
             ns == Namespace::Value && text.starts_with(|c: char| c.is_ascii_uppercase());
         if constructor && let Some((target, help)) = self.foreign_constructor(text) {
-            return diag.with_suggestion(help, span, target);
+            return diag.with_fix(help, span, target);
+        }
+        let foreign = match ns {
+            Namespace::Value if !constructor => foreign_value(text, self.next_char(span)),
+            Namespace::Type => foreign_type(text),
+            Namespace::Value => None,
+        };
+        if let Some((help, target)) = foreign {
+            // The edit writes a prelude name only where it means the
+            // prelude's item, not one the module declares or imports in its
+            // place (D-1678).
+            let in_scope = target.filter(|target| {
+                let name = self.input.globals.names.intern(target);
+                self.scope.get(ns, name).is_some_and(
+                    |entry| matches!(entry.res, Res::Def(def) if builtin::is_prelude(def)),
+                )
+            });
+            return match in_scope {
+                Some(target) => diag.with_fix(help, span, target),
+                None => diag.with_help(help),
+            };
         }
         let mut candidates: Vec<&str> = self
             .items
@@ -179,6 +199,18 @@ impl PathCx<'_> {
             diag = diag.with_help(help);
         }
         diag
+    }
+
+    /// The first character after `span` other than a space, if any.
+    fn next_char(&self, span: Span) -> Option<char> {
+        let end = usize::try_from(span.range.end()).ok()?;
+        self.input
+            .tree
+            .text()
+            .get(end..)?
+            .trim_start_matches(' ')
+            .chars()
+            .next()
     }
 
     /// The constructor of the prelude that another language's name means,
@@ -651,4 +683,125 @@ enum Found {
     /// Something already reported is in the way.
     Silent,
     None,
+}
+
+/// The help for an unknown lower-case value name that another language
+/// uses, such as `true`, `null` or `len`, and the prelude name its edit
+/// writes, if any (D-1935). `null`, `nil` and `none` get no edit, since
+/// the language server rewrites them itself and `nil` may mean `None` or
+/// `Nil` (D-1737, D-1931). A
+/// name that is also a common local name, such as `len` or `ok`, gets its
+/// help only where it is called, followed by `next` = `(`, and `console`
+/// only before a `.`.
+fn foreign_value(text: &str, next: Option<char>) -> Option<(String, Option<&'static str>)> {
+    let called = next == Some('(');
+    let needs_call = matches!(
+        text,
+        "println"
+            | "print"
+            | "eprintln"
+            | "eprint"
+            | "printf"
+            | "puts"
+            | "len"
+            | "str"
+            | "range"
+            | "some"
+            | "ok"
+            | "err"
+    );
+    if (needs_call && !called) || (text == "console" && next != Some('.')) {
+        return None;
+    }
+    let (help, target) = match text {
+        "true" | "false" => {
+            let to = if text == "true" { "True" } else { "False" };
+            (
+                format!("`Bool`'s constructors are `True` and `False`; write `{to}`"),
+                Some(to),
+            )
+        }
+        "null" | "none" => ("the absent case of `Option` is `None`".to_owned(), None),
+        "undefined" => (
+            "the absent case of `Option` is `None`".to_owned(),
+            Some("None"),
+        ),
+        "nil" => (
+            "the absent case of `Option` is `None`, and the value that carries no \
+             information is `Nil`"
+                .to_owned(),
+            None,
+        ),
+        "some" => (
+            "the present case of `Option` is `Some`".to_owned(),
+            Some("Some"),
+        ),
+        "ok" => (
+            "the success case of `Result` is `Ok`".to_owned(),
+            Some("Ok"),
+        ),
+        "err" => (
+            "the failure case of `Result` is `Err`".to_owned(),
+            Some("Err"),
+        ),
+        "println" | "print" | "eprintln" | "eprint" => {
+            (format!("`{text}` is in `std::io`; call `io::{text}`"), None)
+        }
+        "printf" | "puts" | "console" => (
+            format!(
+                "Cheby has no `{text}`; call `io::println`, and interpolate values, as in \
+                 `\"{{x}}\"`"
+            ),
+            None,
+        ),
+        "len" => (
+            "Cheby has no `len`; call `list::length(xs)` or `string::length(s)`".to_owned(),
+            None,
+        ),
+        "str" => (
+            "Cheby has no `str`; interpolate, as in `\"{x}\"`, or call `int::show(x)`".to_owned(),
+            None,
+        ),
+        "range" => (
+            "`range` is in `std::list`; call `list::range(start, end)`".to_owned(),
+            None,
+        ),
+        "pass" => (
+            "Cheby has no `pass`; a body with nothing to do is `Nil`".to_owned(),
+            None,
+        ),
+        "this" => (
+            "Cheby has no `this`; pass the value as a parameter".to_owned(),
+            None,
+        ),
+        _ => return None,
+    };
+    Some((help, target))
+}
+
+/// The help for an unknown type name that another language uses, such as
+/// `Void` or `Vec`, and the prelude type its edit writes, if any (D-1934).
+fn foreign_type(text: &str) -> Option<(String, Option<&'static str>)> {
+    let (help, target) = match text {
+        "Void" | "Unit" => ("the type that carries no information is `Nil`", Some("Nil")),
+        "Vec" | "Array" | "ArrayList" | "Slice" => ("Cheby's list type is `List`", Some("List")),
+        "Str" | "Char" | "Rune" => ("Cheby's string type is `String`", Some("String")),
+        "Integer" | "Long" | "Usize" | "Isize" | "BigInt" => {
+            ("Cheby's integer type is `Int`", Some("Int"))
+        }
+        "Double" | "Number" | "F64" => ("Cheby's floating-point type is `Float`", Some("Float")),
+        "Boolean" => ("Cheby's boolean type is `Bool`", Some("Bool")),
+        "Maybe" | "Optional" => ("Cheby's option type is `Option`", Some("Option")),
+        "Either" => ("Cheby's result type is `Result`", Some("Result")),
+        "HashMap" | "Dict" | "Dictionary" | "BTreeMap" => (
+            "Cheby's map type is `Map`: add `import std::map` and write `map::Map`",
+            None,
+        ),
+        "HashSet" | "BTreeSet" => (
+            "Cheby's set type is `Set`: add `import std::set` and write `set::Set`",
+            None,
+        ),
+        _ => return None,
+    };
+    Some((help.to_owned(), target))
 }

@@ -1,0 +1,8 @@
+error[E0013]: expected a type, found identifier
+ --> tests/ui/03-types/habits/lower_case_int.cheby:6:13
+  |
+6 | fn twice(n: int) -> Int {
+  |             ^^^
+  |
+  = help: type names start with an upper-case letter; write `Int`
+

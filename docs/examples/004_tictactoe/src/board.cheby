@@ -12,6 +12,7 @@
 
 import std::list
 import std::string
+
 import tictactoe::player
 
 type Board {

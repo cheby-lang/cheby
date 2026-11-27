@@ -3,8 +3,8 @@
 //! [`format_source`] parses a file with the compiler's parser and prints
 //! its lossless tree (D-272, D-280) in the one canonical style: a pretty
 //! printer driven by one line width, with no options. Comments and single
-//! blank lines are kept, runs of blank lines collapse to one, imports are
-//! sorted within their block, files use LF and end with one newline,
+//! blank lines are kept, runs of blank lines collapse to one, imports come
+//! in up to three sorted blocks (D-1953), files use LF and end with one newline,
 //! string literals are never split, and long decimal numbers get digit
 //! separators (`number`). A source with a grammar error is never formatted.
 //!
@@ -65,22 +65,44 @@ impl fmt::Display for FormatError {
 
 impl std::error::Error for FormatError {}
 
-/// Formats `text` at line width `width`.
+/// Formats `text`, a file of no package, at line width `width`: its
+/// imports have no block of the package's own modules (D-1953).
 ///
 /// # Errors
 ///
 /// Returns the grammar errors if `text` has any; it is then not formatted.
 pub fn format_source(text: &str, width: usize) -> Result<String, FormatError> {
-    format_file(FileId::new(0), text, width)
+    format_source_in(text, width, None)
 }
 
-/// Formats `text`, whose diagnostics name `file`, at line width `width`.
+/// Formats `text`, a file of the package named `package`, at line width
+/// `width`. The name tells the imports of the package's own modules,
+/// which come last, from those of other packages (D-1953).
 ///
 /// # Errors
 ///
 /// Returns the grammar errors if `text` has any; it is then not formatted.
-pub fn format_file(file: FileId, text: &str, width: usize) -> Result<String, FormatError> {
-    run(file, text, width).map(|(text, _)| text)
+pub fn format_source_in(
+    text: &str,
+    width: usize,
+    package: Option<&str>,
+) -> Result<String, FormatError> {
+    format_file(FileId::new(0), text, width, package)
+}
+
+/// Formats `text`, whose diagnostics name `file`, as
+/// [`format_source_in`] does.
+///
+/// # Errors
+///
+/// Returns the grammar errors if `text` has any; it is then not formatted.
+pub fn format_file(
+    file: FileId,
+    text: &str,
+    width: usize,
+    package: Option<&str>,
+) -> Result<String, FormatError> {
+    run(file, text, width, package).map(|(text, _)| text)
 }
 
 /// Formats `text` as [`format_source`] does and counts the nodes the
@@ -90,10 +112,15 @@ pub fn format_file(file: FileId, text: &str, width: usize) -> Result<String, For
 ///
 /// Returns the grammar errors if `text` has any.
 pub fn coverage(text: &str, width: usize) -> Result<Coverage, FormatError> {
-    run(FileId::new(0), text, width).map(|(_, coverage)| coverage)
+    run(FileId::new(0), text, width, None).map(|(_, coverage)| coverage)
 }
 
-fn run(file: FileId, text: &str, width: usize) -> Result<(String, Coverage), FormatError> {
+fn run(
+    file: FileId,
+    text: &str,
+    width: usize,
+    package: Option<&str>,
+) -> Result<(String, Coverage), FormatError> {
     let parse = cheby_syntax::parse(file, Arc::from(text));
     if !parse.errors().is_empty() {
         return Err(FormatError {
@@ -101,7 +128,7 @@ fn run(file: FileId, text: &str, width: usize) -> Result<(String, Coverage), For
         });
     }
     let tree = parse.tree();
-    let mut formatter = layout::Formatter::new(source::Source::new(tree));
+    let mut formatter = layout::Formatter::new(source::Source::new(tree), package);
     let doc = formatter.file(tree.root());
     Ok((doc::print(&doc, width), formatter.coverage))
 }

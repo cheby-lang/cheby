@@ -33,8 +33,9 @@ use cheby_iface::{Globals, InterfaceSet, ModuleId, ModuleTable, encoded_order};
 use super::wire::{Reader, Writer};
 use crate::parse_module_path;
 
-/// The version of the blob's encoding.
-const VERSION: u8 = 1;
+/// The version of the blob's encoding: 2 since a help stores whether it is
+/// a sure fix (D-1945).
+const VERSION: u8 = 2;
 
 /// A stored span.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -169,6 +170,7 @@ fn encode_one(w: &mut Writer, d: &Diagnostic, cx: &SpanCx<'_>) -> Option<()> {
     w.len(d.helps.len());
     for help in &d.helps {
         w.str(&help.message);
+        w.u8(u8::from(help.fix));
         w.len(help.edits.len());
         for edit in &help.edits {
             encode_span(w, &cx.store(edit.span)?);
@@ -288,6 +290,11 @@ fn decode_one(
     }
     for _ in 0..r.len()? {
         let message = r.str()?.to_owned();
+        let fix = match r.u8()? {
+            0 => false,
+            1 => true,
+            _ => return None,
+        };
         let mut edits = Vec::new();
         for _ in 0..r.len()? {
             let span = resolve(&decode_span(r)?)?;
@@ -296,7 +303,11 @@ fn decode_one(
                 replacement: r.str()?.to_owned(),
             });
         }
-        d.helps.push(Help { message, edits });
+        d.helps.push(Help {
+            message,
+            edits,
+            fix,
+        });
     }
     Some(d)
 }

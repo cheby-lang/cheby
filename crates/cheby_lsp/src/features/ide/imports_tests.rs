@@ -1,4 +1,4 @@
-//! Import plans: where a new import goes in the text (D-1030, D-1148,
+//! Import plans: where a new import goes in the text (D-1030, D-1953,
 //! E0018), and the plan over a run: an existing binding, an alias on a
 //! clash (D-1395), and refusals. Tests that analyze run only the front
 //! end, so they run on Windows too (D-1516).
@@ -6,16 +6,18 @@
 use std::sync::Arc;
 
 use cheby_driver::analysis::{ModuleView, TextRange};
+use cheby_syntax::imports::{Misplaced, import_section};
 
 use super::{ImportPlan, import_plan, parse_path, placement};
 use crate::features::DocText;
 use crate::features::ide::hover::tests::{Temp, analyze};
 
-/// `text` with the import of `path`, written as `line`, inserted where
-/// [`placement`] puts it.
+/// `text`, a file of the package `app`, with the import of `path`,
+/// written as `line`, inserted where [`placement`] puts it.
 fn placed(text: &str, path: &str, line: &str) -> String {
     let doc = DocText::new("placed.cheby".into(), None, Arc::from(text)).unwrap();
-    let (range, insert): (TextRange, String) = placement(doc.tree.root(), text, path, line);
+    let (range, insert): (TextRange, String) =
+        placement(doc.tree.root(), text, Some("app"), path, line);
     assert!(range.is_empty(), "an insertion");
     let at = usize::try_from(range.start()).unwrap();
     format!(
@@ -26,26 +28,30 @@ fn placed(text: &str, path: &str, line: &str) -> String {
 }
 
 #[test]
-fn an_import_goes_into_the_first_block_in_byte_order() {
-    let text = "import app::geo\nimport std::io\n\nfn main() {}\n";
+fn an_import_goes_into_the_block_of_its_class_in_byte_order() {
+    let text = "import std::io\n\nimport json\n\nimport app::geo\n\nfn main() {}\n";
     assert_eq!(
         placed(text, "std::list", "import std::list"),
-        "import app::geo\nimport std::io\nimport std::list\n\nfn main() {}\n"
+        "import std::io\nimport std::list\n\nimport json\n\nimport app::geo\n\nfn main() {}\n"
     );
     assert_eq!(
         placed(text, "std::dict", "import std::dict"),
-        "import app::geo\nimport std::dict\nimport std::io\n\nfn main() {}\n"
+        "import std::dict\nimport std::io\n\nimport json\n\nimport app::geo\n\nfn main() {}\n"
     );
     assert_eq!(
         placed(text, "app", "import app"),
-        "import app\nimport app::geo\nimport std::io\n\nfn main() {}\n"
+        "import std::io\n\nimport json\n\nimport app\nimport app::geo\n\nfn main() {}\n"
+    );
+    assert_eq!(
+        placed(text, "yaml", "import yaml"),
+        "import std::io\n\nimport json\nimport yaml\n\nimport app::geo\n\nfn main() {}\n"
     );
 }
 
 #[test]
 fn equal_paths_sort_by_their_whole_text() {
     // `import std :: list :: { map }` sorts before `import std :: list as
-    // std_list`, since `:` is before `a` (D-1148).
+    // std_list`, since `:` is before `a` (D-1953).
     let text = "import std::list::{map}\n\nfn main() {}\n";
     assert_eq!(
         placed(text, "std::list", "import std::list as std_list"),
@@ -55,22 +61,140 @@ fn equal_paths_sort_by_their_whole_text() {
         placed(text, "std::list", "import std::list"),
         "import std::list\nimport std::list::{map}\n\nfn main() {}\n"
     );
+    // A list's tokens are spaced as the section's keys space them.
+    let text = "import std::list::{map}\n\nfn main() {}\n";
+    assert_eq!(
+        placed(text, "std::list", "import std::list::{length, map}"),
+        "import std::list::{length, map}\nimport std::list::{map}\n\nfn main() {}\n"
+    );
 }
 
+/// D-1953: a file with one block gets the others, each at its place with
+/// a blank line between two blocks, and stays in `cheby fmt`'s order.
 #[test]
-fn only_the_first_block_is_searched() {
-    // A blank line ends a block: the import goes after its last.
-    let text = "import std::io\n\nimport std::array\n\nfn main() {}\n";
+fn a_file_with_one_block_gets_three() {
+    let text = "//! Doc.\n\nimport json\n\nfn main() {}\n";
+    let with_std = placed(text, "std::io", "import std::io");
     assert_eq!(
-        placed(text, "std::list", "import std::list"),
-        "import std::io\nimport std::list\n\nimport std::array\n\nfn main() {}\n"
+        with_std,
+        "//! Doc.\n\nimport std::io\n\nimport json\n\nfn main() {}\n"
     );
-    // So does a comment.
-    let text = "import std::io\n// the rest\nimport std::array\n";
+    let all = placed(&with_std, "app::geo", "import app::geo");
     assert_eq!(
-        placed(text, "std::list", "import std::list"),
-        "import std::io\nimport std::list\n// the rest\nimport std::array\n"
+        all,
+        "//! Doc.\n\nimport std::io\n\nimport json\n\nimport app::geo\n\nfn main() {}\n"
     );
+    assert_eq!(misplaced(&all), None);
+    // The local block alone gets std's before it, and the other packages'
+    // between the two.
+    let local = placed("import app::geo\n", "std::io", "import std::io");
+    assert_eq!(local, "import std::io\n\nimport app::geo\n");
+    assert_eq!(
+        placed(&local, "json", "import json"),
+        "import std::io\n\nimport json\n\nimport app::geo\n"
+    );
+    // At the end of a file with no line break.
+    assert_eq!(
+        placed("import std::io", "app::geo", "import app::geo"),
+        "import std::io\n\nimport app::geo\n"
+    );
+}
+
+/// An insertion before an import goes before the comments that travel
+/// with it (D-1953), and a header that a blank line keeps apart stays.
+#[test]
+fn an_import_goes_before_the_comments_of_the_next() {
+    let text = "import std::io\n// the rest\nimport std::list // last\n";
+    assert_eq!(
+        placed(text, "std::json", "import std::json"),
+        "import std::io\nimport std::json\n// the rest\nimport std::list // last\n"
+    );
+    assert_eq!(
+        placed(text, "std::map", "import std::map"),
+        "import std::io\n// the rest\nimport std::list // last\nimport std::map\n"
+    );
+    let text = "// header\n\n// about geo\nimport app::geo\n";
+    assert_eq!(
+        placed(text, "std::io", "import std::io"),
+        "// header\n\nimport std::io\n\n// about geo\nimport app::geo\n"
+    );
+    // A file of no package has no local block: `app` is another package.
+    let doc = DocText::new("placed.cheby".into(), None, Arc::from("import json\n")).unwrap();
+    let (at, insert) = placement(doc.tree.root(), "import json\n", None, "app", "import app");
+    assert_eq!((at, insert.as_str()), (TextRange::empty(0), "import app\n"));
+}
+
+/// The section of `text` in the package `app`: what `cheby fmt` would
+/// change first.
+fn misplaced(text: &str) -> Option<Misplaced> {
+    let doc = DocText::new("placed.cheby".into(), None, Arc::from(text)).unwrap();
+    import_section(doc.tree.root(), Some("app"))?.misplaced()
+}
+
+/// D-1953's property: every import placed into a section in `cheby fmt`'s
+/// order leaves it in order, whatever blocks the section has and wherever
+/// comments travel.
+#[test]
+fn a_section_in_order_stays_in_order() {
+    let pool = [
+        "import std::io",
+        "import std::list",
+        "import std::list::{map}",
+        "import json",
+        "import yaml::parse",
+        "import app",
+        "import app::geo",
+    ];
+    let path = |line: &str| {
+        line.trim_start_matches("import ")
+            .split("::{")
+            .next()
+            .unwrap()
+            .to_owned()
+    };
+    let class = |line: &str| {
+        if line.starts_with("import std") {
+            0
+        } else if line.starts_with("import app") {
+            2
+        } else {
+            1
+        }
+    };
+    // Every subset of the pool as an ordered section, with a comment above
+    // its second import, then every import of the pool it lacks.
+    for mask in 0_u32..(1 << pool.len()) {
+        let kept: Vec<&str> = pool
+            .iter()
+            .enumerate()
+            .filter(|(n, _)| mask & (1 << n) != 0)
+            .map(|(_, line)| *line)
+            .collect();
+        let mut section = String::new();
+        for (n, line) in kept.iter().enumerate() {
+            if n > 0 {
+                section.push('\n');
+                if class(kept[n - 1]) != class(line) {
+                    section.push('\n');
+                }
+            }
+            if n == 1 {
+                section.push_str("// note\n");
+            }
+            section.push_str(line);
+        }
+        let text = format!("{section}\n\nfn main() {{}}\n");
+        assert_eq!(misplaced(&text), None, "{text}");
+        for line in pool.iter().filter(|line| !kept.contains(line)) {
+            let after = placed(&text, &path(line), line);
+            assert_eq!(
+                misplaced(&after),
+                None,
+                "{line} into:\n{text}\ngave:\n{after}"
+            );
+            assert!(after.ends_with("\n\nfn main() {}\n"), "{after}");
+        }
+    }
 }
 
 #[test]

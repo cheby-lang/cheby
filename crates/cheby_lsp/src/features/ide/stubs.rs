@@ -56,14 +56,13 @@ use cheby_driver::analysis::{
 use cheby_syntax::names::to_snake_case;
 use cheby_syntax::{SyntaxElement, SyntaxKind as K};
 
-use super::Refusal;
 use super::actions::{Action, ActionId, ActionKind, DiagRef, FixCx, formatted};
 use super::cursor::token_at;
 use super::fill_arms::{line_end, newline_at};
 use super::imports::import_plan;
 use super::near_miss::near_misses;
 use super::print::{Printer, hides_prelude};
-use super::scope;
+use super::{Refusal, package_name, scope};
 use crate::features::index::Meaning;
 
 /// D-1736's title of "Add all missing functions".
@@ -178,7 +177,15 @@ pub(crate) fn resolve_make_visible(
             let edit = visibility_edit(snapshot, fix.def, fix.to).ok_or_else(gone)?;
             let (_, text, _) = file_of(snapshot, at).ok_or_else(gone)?;
             let path = edit.path.clone();
-            return Ok(formatted(text, &path, vec![edit], false, cx.cancel));
+            let package = package_name(snapshot);
+            return Ok(formatted(
+                text,
+                &path,
+                package.as_deref(),
+                vec![edit],
+                false,
+                cx.cancel,
+            ));
         }
     }
     Err(gone())
@@ -635,7 +642,15 @@ fn stub_edits(cx: &FixCx<'_>, ty: DefId, fns: &[DefId]) -> Result<Vec<PlainEdit>
     if cx.path() == Some(path) {
         return Ok(edits);
     }
-    Ok(formatted(text, path, edits, false, cx.cancel))
+    let package = package_name(snapshot);
+    Ok(formatted(
+        text,
+        path,
+        package.as_deref(),
+        edits,
+        false,
+        cx.cancel,
+    ))
 }
 
 /// What writing the stubs of one type reads, and the imports they need.

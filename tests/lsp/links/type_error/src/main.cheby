@@ -2,8 +2,9 @@
 // @requests: documentLink
 //! A type error leaves the links as they are.
 
-import links::util
 import std::io
+
+import links::util
 
 fn answer() -> Int {
   "forty-two"

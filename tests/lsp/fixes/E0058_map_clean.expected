@@ -6,7 +6,7 @@
       "codeDescription": {
         "href": "https://github.com/cheby-lang/cheby/blob/main/docs/diagnostics/E0058.md"
       },
-      "message": "`List<Int>` has no field `map`\nunknown field",
+      "message": "`List<Int>` has no field `map`\nunknown field\nhelp: Cheby has no methods; call `list::map(xs, …)`",
       "range": {
         "end": {
           "character": 8,
@@ -62,7 +62,7 @@
         "codeDescription": {
           "href": "https://github.com/cheby-lang/cheby/blob/main/docs/diagnostics/E0058.md"
         },
-        "message": "`List<Int>` has no field `map`\nunknown field",
+        "message": "`List<Int>` has no field `map`\nunknown field\nhelp: Cheby has no methods; call `list::map(xs, …)`",
         "range": {
           "end": {
             "character": 8,

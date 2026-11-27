@@ -1,0 +1,8 @@
+error[E0013]: expected `,` or `)`, found `as`
+ --> tests/ui/05-expressions/habits/cast_argument.cheby:9:25
+  |
+9 |   let s = float::show(x as Float)
+  |                         ^^
+  |
+  = help: Cheby has no casts; convert with a function, such as `float::from_int(x)`
+

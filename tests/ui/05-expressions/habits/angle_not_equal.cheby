@@ -1,0 +1,9 @@
+// @mode: parse-fail
+// @decisions: D-1930, D-1933
+//! `<>` between operands gets the help to write `!=` or `+`, and the operand
+//! after it adds no error.
+
+fn main() {
+  let other = 1 <> 2
+  assert other
+}

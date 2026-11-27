@@ -32,13 +32,14 @@
 //! got "3.405"`. The first error stops the program, and nothing is
 //! printed to standard output.
 
-import csv_report::csv
-import csv_report::sales
 import std::env
 import std::io
 import std::list
 import std::result
 import std::string
+
+import csv_report::csv
+import csv_report::sales
 
 fn main() -> Result<Nil, AppError> {
   use path <- result::try(parse_args(env::args()))

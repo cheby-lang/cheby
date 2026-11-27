@@ -128,7 +128,9 @@ mod tests {
         })
     }
 
-    fn check(name: &str, main_text: &str) {
+    /// `main_text` links `std::io` on its first line and `app::other` on
+    /// `line`, the first of the package's own imports or the second.
+    fn check(name: &str, main_text: &str, line: u32) {
         let temp = Temp::package(name, &[("main.cheby", main_text), ("other.cheby", OTHER)]);
         let main = temp.src("main.cheby");
         let other = temp.src("other.cheby");
@@ -143,7 +145,7 @@ mod tests {
                     json!(uri(&std_dir.join("std/io.cheby"))),
                     json!("std::io")
                 ),
-                (range(1, 7, 17), json!(uri(&other)), json!("app::other")),
+                (range(line, 7, 17), json!(uri(&other)), json!("app::other")),
             ],
             "{name}"
         );
@@ -156,7 +158,8 @@ mod tests {
     fn imports_link_to_their_files() {
         check(
             "links_clean",
-            "import std::io\nimport app::other::{g}\n\nfn main() {\n  io::println(\"{g()}\")\n}\n",
+            "import std::io\n\nimport app::other::{g}\n\nfn main() {\n  io::println(\"{g()}\")\n}\n",
+            2,
         );
     }
 
@@ -165,7 +168,8 @@ mod tests {
     fn a_type_error_keeps_the_links() {
         check(
             "links_type_error",
-            "import std::io\nimport app::other::{g}\n\nfn main() {\n  io::println(g())\n}\n",
+            "import std::io\n\nimport app::other::{g}\n\nfn main() {\n  io::println(g())\n}\n",
+            2,
         );
     }
 
@@ -174,7 +178,8 @@ mod tests {
     fn a_grammar_error_keeps_the_links() {
         check(
             "links_grammar_error",
-            "import std::io\nimport app::other::{g}\nimport app::missing\n\nfn main() {\n  io::println(\"{g()}\"\n}\n",
+            "import std::io\n\nimport app::missing\nimport app::other::{g}\n\nfn main() {\n  io::println(\"{g()}\"\n}\n",
+            3,
         );
     }
 }

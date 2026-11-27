@@ -25,20 +25,24 @@
 //! - W0003: the whole import, from the line's start to its line break, or
 //!   one name of a list with its comma (`removes`, D-1360).
 //! - E0018 on an import that follows an item: the import, and every other
-//!   import of the file with an E0018, is moved to where
-//!   [`placement_without`] puts a new one, titled "Move the imports to the
-//!   import block" when there are several (D-1744).
+//!   import of the file with an E0018, is moved to where [`placement`]
+//!   puts a new one, into the block of its class, titled "Move the imports
+//!   to the import block" when there are several (D-1744, D-1953).
 //! - Organize imports, a source action: W0003's imports removed, unless the
-//!   report is substituted (D-1360), and the imports sorted as `cheby fmt`
-//!   sorts them (D-1148). It is computed from the imports' lines alone,
-//!   formatted as a text of their own, so a listing never formats the
-//!   file; its edit is computed on resolve. With nothing to do it is
-//!   listed with an empty edit, which the frame keeps only when `only`
-//!   asks for it (D-1691), and a file with a grammar error gets none.
+//!   report is substituted (D-1360), and the import section put in the
+//!   blocks and order `cheby fmt` gives it (D-1953). It is computed from
+//!   the section's text alone, formatted as a text of its own, so a
+//!   listing never formats the file; its edit is computed on resolve. With
+//!   nothing to do it is listed with an empty edit, which the frame keeps
+//!   only when `only` asks for it (D-1691), and a file with a grammar
+//!   error gets none.
 //!
 //! The fixes carry their edits in the listing. The session's modules are
 //! read through `own_modules`, and std's index only outside a std checkout,
 //! where std's modules are the session's own (D-1706).
+
+use std::path::PathBuf;
+use std::sync::Arc;
 
 use cheby_driver::analysis::codes;
 use cheby_driver::analysis::{
@@ -47,14 +51,14 @@ use cheby_driver::analysis::{
     std_item_names, std_items_of,
 };
 use cheby_syntax::ast::{AstNode, AstToken, PathNode};
+use cheby_syntax::imports::import_section;
 use cheby_syntax::{SyntaxElement, SyntaxKind as K, SyntaxNode, SyntaxToken, SyntaxTree};
 
-use super::Refusal;
 use super::actions::{Action, ActionId, ActionKind, DiagRef, FixCx};
-use super::edits::formatted;
-use super::imports::{
-    import_plan, line_start, next_line, parse_path, path_text, placement_without,
-};
+use super::edits::{formatted, line_diff};
+use super::imports::{import_plan, line_start, next_line, parse_path, path_text, placement};
+use super::{Refusal, package_name};
+use crate::features::DocText;
 
 /// D-1736's title of W0003's fix.
 pub(crate) const REMOVE_IMPORT: &str = "Remove the unused import";
@@ -489,10 +493,11 @@ fn remove(cx: &FixCx<'_>, tree: &SyntaxTree, index: usize, at: TextRange) -> Opt
 }
 
 /// E0018 on an import after an item: that import and every other import
-/// of the file that the report gives an E0018, moved to the import block
-/// in one edit (D-1744). They go in as one run of lines where the first of
-/// them by module path goes, and the frame's formatting sorts the block
-/// (D-1148, D-1735).
+/// of the file that the report gives an E0018, moved to the import
+/// section in one fix (D-1744). Each goes where [`placement`] puts a new
+/// import, one at a time in byte order, into the block of its class, so
+/// a section in `cheby fmt`'s order stays in it (D-1953). The fix is the
+/// moved imports' removals and the whole lines that write them in.
 fn move_import(cx: &FixCx<'_>, tree: &SyntaxTree, index: usize, at: TextRange) -> Option<Action> {
     let misplaced: Vec<TextRange> = cx
         .report
@@ -520,13 +525,43 @@ fn move_import(cx: &FixCx<'_>, tree: &SyntaxTree, index: usize, at: TextRange) -
         lines.push((path, significant(*import)?.slice(cx.text)?));
     }
     lines.sort();
-    let (first, _) = lines.first()?;
-    let written: Vec<&str> = lines.iter().map(|(_, line)| *line).collect();
-    let ranges: Vec<TextRange> = moved.iter().map(|node| node.text_range()).collect();
-    let (to, line) = placement_without(tree.root(), cx.text, first, &written.join("\n"), &ranges);
-    let mut edits = vec![edit_of(cx, to, line)?];
+    let mut cuts: Vec<TextRange> = Vec::with_capacity(moved.len());
     for import in &moved {
-        edits.push(edit_of(cx, whole_import(cx.text, *import)?, "")?);
+        cuts.push(whole_import(cx.text, *import)?);
+    }
+    // The text without the moved imports, which all follow an item, and
+    // so the section and whatever precedes it.
+    let mut cut = String::with_capacity(cx.text.len());
+    let mut from = 0;
+    for range in &cuts {
+        cut.push_str(TextRange::new(from, range.start()).slice(cx.text)?);
+        from = range.end();
+    }
+    cut.push_str(TextRange::new(from, text_len(cx.text)).slice(cx.text)?);
+    let package = package_name(&cx.analyzed.snapshot);
+    let mut placed = cut.clone();
+    for (path, line) in &lines {
+        // A parse of its own, as a text request's, whose handles meet no
+        // snapshot's.
+        let doc = DocText::new(PathBuf::new(), None, Arc::from(placed.as_str()))?;
+        let (to, insert) = placement(doc.tree.root(), &placed, package.as_deref(), path, line);
+        let start = usize::try_from(to.start()).ok()?;
+        placed.insert_str(start, &insert);
+    }
+    // The insertions as whole lines. Each lies before the first item,
+    // where `cut` is the file's text.
+    let before = cuts
+        .first()
+        .map_or_else(|| text_len(cx.text), |first| first.start());
+    let mut edits = Vec::with_capacity(cuts.len().saturating_add(1));
+    for hunk in line_diff(&cut, &placed) {
+        if hunk.old.end() > before {
+            return None;
+        }
+        edits.push(edit_of(cx, hunk.old, hunk.new.slice(&placed)?)?);
+    }
+    for range in cuts {
+        edits.push(edit_of(cx, range, "")?);
     }
     let title = if moved.len() > 1 {
         MOVE_IMPORTS
@@ -565,32 +600,29 @@ fn organize(cx: &FixCx<'_>) -> Option<Action> {
     })
 }
 
-/// Organize imports for the request's file: the lines from the first
-/// import to the last, with W0003's imports removed while the report is
-/// not substituted (D-1360), formatted as a text of their own, which sorts
-/// each block (D-1148). `None` for a file with a grammar error, or one
-/// whose imports have an item between them (E0018), which it refuses.
+/// Organize imports for the request's file: its import section, the
+/// imports before its first item with the comments that travel with them
+/// (D-1953), with W0003's imports removed while the report is not
+/// substituted (D-1360), formatted as a text of their own with the
+/// package's name, which puts them in `cheby fmt`'s blocks and order. With
+/// nothing removed it writes what W0014's fix writes, each import as the
+/// formatter writes it. `None` for a file with a phase-A error, which it
+/// refuses: a grammar error, or an import after an item (E0018), which
+/// E0018's fix moves.
 fn organized(cx: &FixCx<'_>) -> Option<Organized> {
     if cx.view.is_broken() {
         return None;
     }
     let tree = cx.view.tree()?;
-    let nodes: Vec<SyntaxNode<'_>> = tree.root().children().collect();
-    let first = nodes.iter().position(|n| n.kind() == K::IMPORT_DECL);
-    let last = nodes.iter().rposition(|n| n.kind() == K::IMPORT_DECL);
-    let (Some(first), Some(last)) = (first, last) else {
+    let package = package_name(&cx.analyzed.snapshot);
+    let Some(section) = import_section(tree.root(), package.as_deref()) else {
         return Some(Organized {
             edit: None,
             removes: false,
         });
     };
-    let between = nodes.get(first..=last)?;
-    if between.iter().any(|n| n.kind() != K::IMPORT_DECL) {
-        return None;
-    }
-    let start = line_start(cx.text, significant(*between.first()?)?.start());
-    let end = line_end(cx.text, significant(*between.last()?)?.end());
-    let region = TextRange::new(start, end);
+    let region = section.range();
+    let (start, end) = (region.start(), region.end());
     let crlf = region.slice(cx.text)?.contains("\r\n");
     let mut cuts: Vec<TextRange> = if cx.substituted {
         Vec::new()
@@ -602,7 +634,7 @@ fn organized(cx: &FixCx<'_>) -> Option<Organized> {
             .filter_map(|d| d.range)
             .filter(|at| region.contains_range(*at))
             .filter_map(|at| removal(cx.text, tree, at))
-            .map(|range| TextRange::new(range.start(), range.end().min(region.end())))
+            .map(|range| TextRange::new(range.start().max(start), range.end().min(end)))
             .collect()
     };
     cuts.sort_by_key(|range| (range.start(), range.end()));
@@ -625,7 +657,7 @@ fn organized(cx: &FixCx<'_>) -> Option<Organized> {
     }
     kept.push_str(TextRange::new(at, end).slice(cx.text)?);
     kept.push('\n');
-    let sorted = formatted(&kept.replace("\r\n", "\n"))?;
+    let sorted = formatted(&kept.replace("\r\n", "\n"), package.as_deref())?;
     let sorted = sorted.strip_suffix('\n').unwrap_or(&sorted);
     let old = region.slice(cx.text)?;
     let edit = if sorted == old.replace("\r\n", "\n") {
@@ -639,19 +671,6 @@ fn organized(cx: &FixCx<'_>) -> Option<Organized> {
         edit,
         removes: !removed.is_empty(),
     })
-}
-
-/// The end of the line that holds `offset`, before its line break.
-fn line_end(text: &str, offset: TextSize) -> TextSize {
-    let Some(next) = next_line(text, offset) else {
-        return text_len(text);
-    };
-    let before = next.saturating_sub(1);
-    let cr = before
-        .checked_sub(1)
-        .and_then(|at| TextRange::new(at, before).slice(text))
-        == Some("\r");
-    if cr { before.saturating_sub(1) } else { before }
 }
 
 /// The length of `text` as a text offset.

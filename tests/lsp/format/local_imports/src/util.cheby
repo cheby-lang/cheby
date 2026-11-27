@@ -1,0 +1,6 @@
+//! A module of the package.
+
+/// A name.
+pub fn name() -> String {
+  "shop"
+}

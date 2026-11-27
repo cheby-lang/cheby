@@ -1,0 +1,16 @@
+error[E0013]: expected an expression, found `=`
+ --> tests/ui/05-expressions/habits/triple_equals.cheby:6:18
+  |
+6 |   let same = 1 === 1
+  |                  ^
+  |
+  = help: Cheby has no `===`; write `==`
+
+error[E0013]: expected an expression, found `=`
+ --> tests/ui/05-expressions/habits/triple_equals.cheby:7:19
+  |
+7 |   let other = 1 !== 2
+  |                   ^
+  |
+  = help: Cheby has no `!==`; write `!=`
+

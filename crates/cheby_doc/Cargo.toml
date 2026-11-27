@@ -8,6 +8,8 @@ repository.workspace = true
 publish = false
 
 [dependencies]
+# The JSON lines of `--format json` (D-1944).
+cheby_diag.workspace = true
 cheby_driver.workspace = true
 
 [lints]

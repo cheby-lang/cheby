@@ -1,0 +1,8 @@
+error[E0013]: expected a line break after the item, found `.`
+ --> tests/ui/07-modules-and-packages/habits/dot_import.cheby:6:11
+  |
+6 | import std.io
+  |           ^
+  |
+  = help: module paths use `::`; write `::`
+

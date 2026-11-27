@@ -251,7 +251,7 @@ fn empty_field_lists() {
 
 #[test]
 fn import_shapes() {
-    ok("import std::io as sys\nimport std::{list, Option as Opt, map as m}\n");
+    ok("import std::{list, Option as Opt, map as m}\nimport std::io as sys\n");
     reports("import std::{io, list} as both\n", &[("E0013", "as both")]);
     reports("import std::{Option as opt}\n", &[("E0013", "opt")]);
     reports("import std::{list as List}\n", &[("E0013", "List")]);
@@ -802,4 +802,63 @@ fn names_have_no_interpolation() {
         "test \"{subject} works\" {\n  assert True\n}\n",
         &[("E0012", "{subject}")],
     );
+}
+
+// ---- W0015 nested calls ----
+
+/// D-1954: function calls may nest three deep. A fourth level is reported
+/// once for the outermost call, at the first call of the fourth level.
+#[test]
+fn nested_calls_warning() {
+    ok(&in_fn("  f(g(h(x)))"));
+    reports(&in_fn("  f(g(h(i(x))))"), &[("W0015", "i(x)")]);
+    // One warning for a chain, however deep, and one for each chain.
+    reports(&in_fn("  f(g(h(i(j(k(x))))))"), &[("W0015", "i(j(k(x)))")]);
+    reports(&in_fn("  f(g(h(i(x))), g(h(j(y))))"), &[("W0015", "i(x)")]);
+    reports(
+        &in_fn("  let a = f(g(h(i(x))))\n  let b = f(g(h(j(y))))"),
+        &[("W0015", "i(x)"), ("W0015", "j(y)")],
+    );
+    let (_, diags) = check(&in_fn("  f(g(h(i(j(x)))))"));
+    assert_eq!(diags[0].message, "function calls are nested 5 deep");
+    assert_eq!(diags[0].helps.len(), 1);
+    assert_eq!(diags[0].helps[0].edits.len(), 0);
+}
+
+/// D-1954: what adds no level, and what starts the count again.
+#[test]
+fn nested_calls_count_function_calls_in_one_expression() {
+    // A constructor adds no level, and passes the levels inside it on.
+    ok(&in_fn("  Ok(Some(f(g(h(x)))))"));
+    ok(&in_fn("  f(Some(g(shape::Circle(h(x)))))"));
+    reports(&in_fn("  f(Some(g(Wrap(h(i(x))))))"), &[("W0015", "i(x)")]);
+    // Operators, lists, tuples, records and fields pass them on too.
+    reports(&in_fn("  f(g(1 + h([i(x)])))"), &[("W0015", "i(x)")]);
+    reports(
+        &in_fn("  f(g(P { a: h((i(x), 1)) }))"),
+        &[("W0015", "i(x)")],
+    );
+    // A block, a closure, a local function and a `case` start again.
+    ok(&in_fn("  f(g(h(fn(y) { i(j(k(y))) })))"));
+    ok(&in_fn("  f(g(h(case y {\n    _ => i(j(k(y)))\n  })))"));
+    reports(
+        &in_fn("  f(g(h(fn(y) { i(j(k(l(y)))) })))"),
+        &[("W0015", "l(y)")],
+    );
+    // The stages of a pipeline are not nested in each other.
+    ok(&in_fn("  x |> i |> h(_, 1) |> g(_, k(l(y))) |> f"));
+    ok(&in_fn("  f(x |> h(_, i(y)) |> g(_, 2))"));
+    reports(
+        &in_fn("  f(x |> h(_, i(j(k(y)))))"),
+        &[("W0015", "j(k(y))")],
+    );
+    // A `use` call counts like any other.
+    ok(&in_fn("  use a <- result::try(f(g(x)))\n  a"));
+    reports(
+        &in_fn("  use a <- result::try(f(g(h(x))))\n  a"),
+        &[("W0015", "h(x)")],
+    );
+    // A call in a callee is at the callee's own level.
+    ok(&in_fn("  f(g(h(x)))(i(j(y)))"));
+    reports(&in_fn("  f(g(h(x)))(i(j(k(y))))"), &[("W0015", "k(y)")]);
 }

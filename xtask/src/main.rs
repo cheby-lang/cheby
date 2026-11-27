@@ -1,8 +1,12 @@
 //! Developer commands (docs/plan/m0-foundation.md, task 0.10):
 //!
-//! - `test`: runs every Rust test under cargo-nextest with one shared
-//!   build cache and prints the harnesses' pending summary (D-1553,
-//!   D-1554, D-1556; [`mod@test`]).
+//! - `test`: builds the runtime archive, then runs every Rust test under
+//!   cargo-nextest with one shared build cache and prints the harnesses'
+//!   pending summary (D-1553, D-1554, D-1556, D-1950; [`mod@test`]).
+//! - `doctor`: reports what is stale or missing in the checkout and on the
+//!   machine, and changes nothing (D-1950; [`doctor`]).
+//! - `affected`: prints the checks of CI that the changed files can fail,
+//!   as commands, and runs them with `--run` (D-1948; [`affected`]).
 //! - `bless`: rewrites the goldens of examples, UI tests and the language
 //!   server's golden tests under `tests/lsp/` from the current `cheby`
 //!   binary, including the goldens beside package UI tests (directories
@@ -26,12 +30,16 @@
 //!   test's header (`src/main.cheby` of a package test), from each
 //!   transcript's header (D-638) and from each test under `tests/lsp/`
 //!   (D-1352).
+//! - `decisions`: `show`, `search`, `next-id` and `lint` for the decision
+//!   log, and `next-adr` for the ADRs; CI runs `lint` (D-1940, D-1941,
+//!   D-1942, D-1943; [`decisions`]).
 //! - `cross-check`: parses examples and UI tests with `tree-sitter-cheby`
 //!   at the pinned commit and with the compiler parser, and fails if they
 //!   disagree (D-272).
 //! - `test-std`: checks every shipped std module with its `test` blocks
-//!   and runs them, one batch per module (D-479, D-542); `--release`
-//!   builds them in the release profile.
+//!   and runs them, one batch per module (D-479, D-542), and fails on a
+//!   warning in any std module (D-1955); `--release` builds them in the
+//!   release profile.
 //! - `bench-compile`: compile-speed numbers on generated projects (I1,
 //!   D-247, plan §8.5), with the size of the code and its RC operations
 //!   (D-718).
@@ -54,12 +62,15 @@
 //! `xtask` process ([`cache`]), so no command reads or fills the
 //! developer's cache (D-1128).
 
+mod affected;
 mod bench;
 mod bench_oqp11;
 mod bench_run;
 mod cache;
 mod cross_check;
+mod decisions;
 mod determinism;
+mod doctor;
 mod examples;
 mod junit;
 mod native_libs;
@@ -72,7 +83,7 @@ use std::process::{Command, ExitCode};
 use std::time::Instant;
 
 use cheby_bench_gen::{Config, Shape};
-use cheby_test_support::{decisions, repo_root, ui};
+use cheby_test_support::{decisions as numbers, repo_root, ui};
 use clap::{Parser, Subcommand};
 
 #[derive(Debug, Parser)]
@@ -91,6 +102,9 @@ enum Cmd {
         #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
         args: Vec<String>,
     },
+    /// Print the checks of CI that the changed files can fail, and with `--run` run them
+    /// (D-1948)
+    Affected(affected::Args),
     /// Rewrite goldens of examples, UI tests and LSP tests from the current `cheby`
     Bless {
         /// Only bless tests whose name contains this filter
@@ -134,6 +148,12 @@ enum Cmd {
     CheckNativeLibs,
     /// List decisions cited in the spec that no test names
     Coverage,
+    /// Read, number and check the decision log, and number ADRs (D-1940,
+    /// D-1943)
+    Decisions(decisions::Args),
+    /// Report what is stale or missing: tools, `target/debug/deps`, the grammar's pin,
+    /// worktrees and the runtime archive (D-1950)
+    Doctor,
     /// Parse examples and UI tests with tree-sitter-cheby at the pinned
     /// commit and with the compiler parser, and compare
     CrossCheck(cross_check::Args),
@@ -175,6 +195,7 @@ fn main() -> ExitCode {
     let result = match cli.command {
         // nextest's own exit status, not this command's (D-1554).
         Cmd::Test { args } => return test::run(&root, &args, &[]),
+        Cmd::Affected(args) => affected::run(&root, &args),
         Cmd::Bless { filter } => bless(&root, filter.as_deref()),
         Cmd::GenBench {
             lines,
@@ -189,6 +210,8 @@ fn main() -> ExitCode {
         Cmd::CheckExamples => examples::run(&root),
         Cmd::CheckNativeLibs => native_libs::run(&root),
         Cmd::Coverage => coverage(&root),
+        Cmd::Decisions(args) => decisions::run(&root, &args),
+        Cmd::Doctor => doctor::run(&root),
         Cmd::CrossCheck(args) => cross_check::run(&root, &args),
         Cmd::TestStd { filter, release } => test_std(filter.as_deref(), release),
         Cmd::BenchCompile(args) => bench::run(&root, &args),
@@ -230,8 +253,8 @@ fn bless(root: &Path, filter: Option<&str>) -> Result<(), String> {
 /// Tests the standard library (D-542) and prints the report: a line per
 /// test, the modules and tests that did not build with their codes, a
 /// block per failure, and the counts per module and in total. Fails when a
-/// test failed or did not build. With `release`, the tests are built in
-/// the release profile.
+/// test failed or did not build, or a std module has a warning (D-1955).
+/// With `release`, the tests are built in the release profile.
 fn test_std(filter: Option<&str>, release: bool) -> Result<(), String> {
     let profile = if release {
         cheby_driver::Profile::Release
@@ -244,8 +267,12 @@ fn test_std(filter: Option<&str>, release: bool) -> Result<(), String> {
         Ok(())
     } else {
         let counts = report.counts();
+        let warnings = match report.warnings.len() {
+            1 => "1 warning".to_owned(),
+            n => format!("{n} warnings"),
+        };
         Err(format!(
-            "{} std tests failed and {} did not build",
+            "{} std tests failed, {} did not build, and std has {warnings}",
             counts.failed, counts.not_built
         ))
     }
@@ -372,7 +399,7 @@ fn coverage(root: &Path) -> Result<(), String> {
     for file in spec {
         let text =
             std::fs::read_to_string(&file).map_err(|e| format!("{}: {e}", file.display()))?;
-        cited.extend(decisions::mentioned_in(&text));
+        cited.extend(numbers::mentioned_in(&text));
     }
     let mut covered = std::collections::BTreeSet::new();
     for test in ui::all(root)? {
@@ -413,7 +440,7 @@ fn print_wrapped(label: &str, numbers: &[u32]) {
     }
     println!("{label} ({}):", numbers.len());
     for chunk in numbers.chunks(12) {
-        let line: Vec<_> = chunk.iter().map(|&n| decisions::format(n)).collect();
+        let line: Vec<_> = chunk.iter().map(|&n| numbers::format(n)).collect();
         println!("  {}", line.join(" "));
     }
 }

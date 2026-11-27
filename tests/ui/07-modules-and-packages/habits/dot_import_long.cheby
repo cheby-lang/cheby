@@ -1,0 +1,10 @@
+// @mode: parse-fail
+// @decisions: D-1930, D-1931
+//! A module path with several `.` gets the help without an edit, since one
+//! edit fixes one `.`.
+
+import std.json.decode
+
+fn main() {
+  assert 1 == 1
+}

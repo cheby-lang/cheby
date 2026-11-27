@@ -19,9 +19,10 @@
 //!   qualifier `old::` of the file becomes `new::`. When `new` is not free in the
 //!   file, the qualifiers stay and the import gets `as old` instead.
 //! - `import a::old::{x}` and `import a::old as o` need only the path.
-//! - An import block whose order the new paths change is written again in
-//!   `cheby fmt`'s order (D-1148), since a move's edit must leave every
-//!   touched line a fixed point (D-1676).
+//! - An import section whose order the new paths change is written again in
+//!   `cheby fmt`'s blocks and order, the comments travelling with their
+//!   imports (D-1953), since a move's edit must leave every touched line a
+//!   fixed point (D-1676). Imports after an item get their paths alone.
 //!
 //! `verify` then checks the edit with the files moved: one module path pair per
 //! moved module (D-1674), then, for a module whose last segment changes, the
@@ -43,11 +44,12 @@ use cheby_driver::analysis::{
     FileLocation, ModuleId, ModulePath, ModuleView, PlainEdit, Snapshot, TextRange, TextSize,
     VerifyRequest,
 };
+use cheby_syntax::imports::{ImportChunk, ImportClass, ImportSection, import_section};
 use cheby_syntax::{SyntaxKind as K, SyntaxNode, SyntaxToken};
 
-use super::Refusal;
 use super::imports::{binding, path_text};
 use super::rename::{Action, RenameError, RenamePlan, check};
+use super::{Refusal, package_name};
 use crate::features::index::{Index, Meaning, Role};
 use crate::features::{Analyzed, CancelToken};
 
@@ -258,13 +260,6 @@ fn onto_modules(snapshot: &Snapshot, moves: &[Move]) -> Result<(), Refusal> {
     Ok(())
 }
 
-/// The name of the package: the first segment of its modules' paths.
-fn package_name(snapshot: &Snapshot) -> Option<String> {
-    snapshot
-        .own_modules()
-        .find_map(|view| view.path()?.segments().first().cloned())
-}
-
 /// The module files of the snapshot that a move of `old` moves: the file
 /// itself, or every module file below the folder `old`, by path.
 fn moved_files<'s>(snapshot: &'s Snapshot, old: &Path) -> Vec<(PathBuf, ModuleView<'s>)> {
@@ -397,6 +392,7 @@ fn edits(
     cancel: &CancelToken,
 ) -> Result<Vec<PlainEdit>, RenameError> {
     let snapshot = index.snapshot();
+    let package = package_name(snapshot);
     let mut out = Vec::new();
     for view in snapshot.own_modules() {
         cancel.check()?;
@@ -425,55 +421,18 @@ fn edits(
             continue;
         }
         let mut file_edits = qualifiers;
-        // The imports whose block the loop below has written.
+        // The imports of the section, when the move changes their order,
+        // written again in `cheby fmt`'s (D-1953).
         let mut done: Vec<usize> = Vec::new();
-        for block in blocks(&imports, text) {
-            let (Some(&first), Some(&last)) = (block.first(), block.last()) else {
-                continue;
-            };
-            let members: Vec<(SyntaxNode<'_>, Option<&ImportChange>)> = block
-                .iter()
-                .filter_map(|&n| Some((*imports.get(n)?, changes.get(n)?.as_ref())))
-                .collect();
-            if members.iter().all(|(_, change)| change.is_none()) {
-                continue;
+        if let Some(section) = import_section(tree.root(), package.as_deref())
+            && let Some(written) = section_moved(&section, &imports, &changes, text)
+        {
+            file_edits.push((section.range(), written));
+            for chunk in section.chunks() {
+                done.extend(imports.iter().position(|n| *n == chunk.import));
             }
-            let keys: Vec<(String, String)> = members
-                .iter()
-                .map(|(node, change)| sort_key(*node, *change))
-                .collect();
-            if keys.is_sorted() {
-                file_edits.extend(members.iter().filter_map(|(_, c)| *c).map(token_edit));
-                done.extend(block.iter().copied());
-                continue;
-            }
-            let mut order: Vec<usize> = (0..members.len()).collect();
-            order.sort_by(|&a, &b| keys.get(a).cmp(&keys.get(b)));
-            let written: Vec<String> = order
-                .iter()
-                .filter_map(|&k| members.get(k))
-                .map(|(node, change)| rewritten(*node, *change, text))
-                .collect();
-            let (Some(start), Some(end)) = (
-                imports.get(first).map(|n| n.text_range().start()),
-                imports.get(last).map(|n| n.text_range().end()),
-            ) else {
-                continue;
-            };
-            // The text between the block's first two imports, `\n` or
-            // `\r\n`, joins them again, so the file keeps its line ends.
-            let separator = block
-                .get(1)
-                .and_then(|&second| {
-                    let from = imports.get(first)?.text_range().end();
-                    let to = imports.get(second)?.text_range().start();
-                    TextRange::new(from, to).slice(text)
-                })
-                .unwrap_or("\n");
-            file_edits.push((TextRange::new(start, end), written.join(separator)));
-            done.extend(block.iter().copied());
         }
-        // Imports in no block of two or more keep their place.
+        // The rest keep their place.
         file_edits.extend(
             changes
                 .iter()
@@ -599,8 +558,9 @@ fn rewritten(import: SyntaxNode<'_>, change: Option<&ImportChange>, text: &str) 
     format!("{before}{}{alias}{after}", change.path)
 }
 
-/// The key `cheby fmt` sorts `import` by once `change` is applied (D-1148):
-/// its module path's text, then its tokens joined by single spaces.
+/// The key `cheby fmt` sorts `import` by in its block once `change` is
+/// applied (D-1953): its module path's text, then its tokens joined by
+/// single spaces.
 fn sort_key(import: SyntaxNode<'_>, change: Option<&ImportChange>) -> (String, String) {
     let mut path = String::new();
     let mut whole: Vec<String> = Vec::new();
@@ -645,56 +605,60 @@ fn spaced_path(path: &str) -> Vec<String> {
     out
 }
 
-/// The import blocks of a file whose top-level imports are `imports`, as
-/// indexes into it (D-1148): runs of two or more imports on consecutive
-/// lines, with nothing but white space and one line break between each and
-/// the next, none with a comment inside. An import with a comment after it
-/// on its line ends the run before it, as `cheby fmt` keeps it in place.
-fn blocks(imports: &[SyntaxNode<'_>], text: &str) -> Vec<Vec<usize>> {
-    let commented = |node: &SyntaxNode<'_>| {
-        node.tokens()
-            .any(|t| matches!(t.kind(), K::COMMENT | K::DOC_COMMENT | K::MODULE_DOC))
+/// The text of `section` once the move has applied `changes`, one per
+/// import of `imports`, when it changes the order `cheby fmt` gives the
+/// section (D-1953): each import with its comments, in the order of its
+/// block and new sort key, and one blank line between two blocks, with the
+/// section's line ends. `None` when the move leaves the order as it is,
+/// so token edits keep every import in its place.
+fn section_moved(
+    section: &ImportSection<'_>,
+    imports: &[SyntaxNode<'_>],
+    changes: &[Option<ImportChange>],
+    text: &str,
+) -> Option<String> {
+    let chunks = section.chunks();
+    let change = |chunk: &ImportChunk<'_>| {
+        let n = imports.iter().position(|node| *node == chunk.import)?;
+        changes.get(n)?.as_ref()
     };
-    let gap = |from: TextSize, to: TextSize| TextRange::new(from, to).slice(text).unwrap_or("x");
-    let mut out: Vec<Vec<usize>> = Vec::new();
-    let mut run: Vec<usize> = Vec::new();
-    let close = |run: &mut Vec<usize>, out: &mut Vec<Vec<usize>>| {
-        if let Some(&last) = run.last()
-            && let Some(node) = imports.get(last)
-        {
-            let end = node.text_range().end();
-            let rest = text
-                .get(usize::try_from(end).unwrap_or(usize::MAX)..)
-                .unwrap_or("");
-            let line = rest.split('\n').next().unwrap_or("");
-            if !line.trim().is_empty() {
-                run.pop();
+    if chunks.iter().all(|chunk| change(chunk).is_none()) {
+        return None;
+    }
+    let keys: Vec<(ImportClass, (String, String))> = chunks
+        .iter()
+        .map(|chunk| (chunk.class, sort_key(chunk.import, change(chunk))))
+        .collect();
+    let mut order: Vec<usize> = (0..chunks.len()).collect();
+    order.sort_by(|&a, &b| keys.get(a).cmp(&keys.get(b)));
+    if order.iter().enumerate().all(|(position, &n)| position == n) {
+        return None;
+    }
+    let eol = if section.range().slice(text)?.contains("\r\n") {
+        "\r\n"
+    } else {
+        "\n"
+    };
+    let mut out = String::new();
+    for (position, &n) in order.iter().enumerate() {
+        let chunk = chunks.get(n)?;
+        if position > 0 {
+            out.push_str(eol);
+            if section.starts_block(&order, position) {
+                out.push_str(eol);
             }
         }
-        if run.len() > 1 {
-            out.push(std::mem::take(run));
+        for comment in &chunk.leading {
+            out.push_str(comment.text().trim_end());
+            out.push_str(eol);
         }
-        run.clear();
-    };
-    for (n, node) in imports.iter().enumerate() {
-        if commented(node) {
-            close(&mut run, &mut out);
-            continue;
+        out.push_str(rewritten(chunk.import, change(chunk), text).trim_end());
+        if let Some(comment) = chunk.trailing {
+            out.push(' ');
+            out.push_str(comment.text().trim_end());
         }
-        let joined = run
-            .last()
-            .and_then(|&prev| imports.get(prev))
-            .is_some_and(|prev| {
-                let between = gap(prev.text_range().end(), node.text_range().start());
-                between.matches('\n').count() == 1 && between.chars().all(char::is_whitespace)
-            });
-        if !joined {
-            close(&mut run, &mut out);
-        }
-        run.push(n);
     }
-    close(&mut run, &mut out);
-    out
+    Some(out)
 }
 
 #[cfg(test)]
@@ -796,7 +760,7 @@ mod tests {
     const UTIL: &str =
         "pub type Shape {\n  Shape(Int),\n}\n\npub fn greet() -> String {\n  \"hi\"\n}\n";
 
-    const MAIN: &str = "import app::util\nimport app::util::{greet}\nimport std::io\n\nfn main() {\n  let s: util::Shape = util::Shape(1)\n  let _ = s\n  io::println(util::greet())\n  io::println(greet())\n}\n";
+    const MAIN: &str = "import std::io\n\nimport app::util\nimport app::util::{greet}\n\nfn main() {\n  let s: util::Shape = util::Shape(1)\n  let _ = s\n  io::println(util::greet())\n  io::println(greet())\n}\n";
 
     /// A file renamed: its importers' paths, and each qualifier of a bare
     /// import, follow it (X §3.6 step 4).
@@ -872,7 +836,7 @@ mod tests {
 
     /// When the new last segment is not free in the importer, the import
     /// keeps the old name with `as` and no qualifier changes. The alias
-    /// sorts the import after the list (D-1148), so the block is written
+    /// sorts the import after the list (D-1953), so the section is written
     /// again.
     #[test]
     fn a_name_that_is_not_free_keeps_the_old_one_with_as() {
@@ -948,13 +912,13 @@ mod tests {
         assert_eq!(plan.edits.len(), 2, "{plan:?}");
     }
 
-    /// A path that changes the order of its block writes the block again in
-    /// `cheby fmt`'s order (D-1148). A block the move keeps in order, and
-    /// an import with a comment after it, which `cheby fmt` never moves, keep
-    /// their places.
+    /// A path that changes the order of its block writes the section again
+    /// in `cheby fmt`'s blocks and order (D-1953). A section the move keeps
+    /// in order keeps its places, and the comment after an import moves
+    /// with it.
     #[test]
     fn a_block_out_of_order_is_written_in_fmt_order() {
-        let main = "import app::alpha\nimport app::beta\nimport std::io\n\nfn main() {\n  io::println(alpha::name() + beta::name())\n}\n";
+        let main = "import std::io\n\nimport app::alpha\nimport app::beta\n\nfn main() {\n  io::println(alpha::name() + beta::name())\n}\n";
         let name = "pub fn name() -> String {\n  \"n\"\n}\n";
         let case = Case::new(
             "order",
@@ -967,7 +931,7 @@ mod tests {
         let plan = case.plan(&[("src/alpha.cheby", "src/zeta.cheby")]);
         assert_eq!(
             case.applied(&plan, "main.cheby"),
-            "import app::beta\nimport app::zeta\nimport std::io\n\nfn main() {\n  io::println(zeta::name() + beta::name())\n}\n"
+            "import std::io\n\nimport app::beta\nimport app::zeta\n\nfn main() {\n  io::println(zeta::name() + beta::name())\n}\n"
         );
         let plan = case.plan(&[("src/alpha.cheby", "src/aa.cheby")]);
         assert_eq!(
@@ -986,7 +950,7 @@ mod tests {
         let plan = case.plan(&[("src/alpha.cheby", "src/zeta.cheby")]);
         assert_eq!(
             case.applied(&plan, "main.cheby"),
-            commented.replace("alpha", "zeta")
+            "import std::io\n\nimport app::beta\nimport app::zeta // first\n\nfn main() {\n  io::println(zeta::name() + beta::name())\n}\n"
         );
     }
 

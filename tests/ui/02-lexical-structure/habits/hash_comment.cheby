@@ -1,0 +1,9 @@
+// @mode: parse-fail
+// @decisions: D-1930, D-1931, D-1933
+//! `#` starts a comment in Python and shells. E0003 says that comments start
+//! with `//`, with an edit, and the rest of the line adds no error.
+
+fn main() {
+  # it's the count, (one) "item"
+  assert 1 == 1
+}

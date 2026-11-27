@@ -6,12 +6,13 @@
 //! used as a value with `S = dyn shape::Shape` all pick each value's
 //! functions (§8.6).
 
-import app::rect
-import app::shape
-import app::square
 import std::io
 import std::list
 import std::string
+
+import app::rect
+import app::shape
+import app::square
 
 fn shapes() -> List<dyn shape::Shape> {
   [square::Square(2), rect::Rect { width: 2, height: 3 }, square::Square(5)]

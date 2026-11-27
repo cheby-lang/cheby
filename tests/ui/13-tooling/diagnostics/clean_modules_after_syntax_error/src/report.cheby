@@ -1,0 +1,8 @@
+//! Imports only a module without syntax errors.
+
+import app::util
+
+fn line(text: String) -> String {
+  let n: String = util::twice(2)
+  text
+}

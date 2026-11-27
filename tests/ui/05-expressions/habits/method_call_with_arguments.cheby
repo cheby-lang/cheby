@@ -1,0 +1,11 @@
+// @mode: check-fail
+// @decisions: D-1938
+//! A method call with arguments, `[1, 2].map(f)`, is written with the
+//! receiver first and `…` for the rest.
+
+import std::list
+
+fn main() {
+  let ys = [1, 2].map(fn(x) { x + 1 })
+  assert ys == [2, 3]
+}

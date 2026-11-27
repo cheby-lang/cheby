@@ -983,7 +983,10 @@ test "filter and map_values never call compare" {
       Bin(n, k, x, l, r) => Bin(n, 0 - k, x, negated(l), negated(r))
     }
   }
-  let backwards = negated(from_list(list::map(list::range(0, 100), fn(n) { (n, n) })))
+  let backwards = list::range(0, 100)
+    |> list::map(_, fn(n) { (n, n) })
+    |> from_list
+    |> negated
   let downward = list::map(list::range(0, 100), fn(n) { 0 - n })
   assert keys(backwards) == downward
   assert get(backwards, -99) == None

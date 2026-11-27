@@ -1,0 +1,9 @@
+// @mode: parse-fail
+// @decisions: D-1930, D-1933
+//! `??` gets the help to call `option::unwrap_or`, and its second `?` adds
+//! no error.
+
+fn main() {
+  let n = None ?? 1
+  assert n == 1
+}

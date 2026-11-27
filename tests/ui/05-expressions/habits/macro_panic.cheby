@@ -1,0 +1,7 @@
+// @mode: parse-fail
+// @decisions: D-1930
+//! `panic!(…)` gets the help to write `panic as "message"`.
+
+fn main() {
+  panic!("bad")
+}

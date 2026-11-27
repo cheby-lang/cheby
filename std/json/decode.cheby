@@ -320,7 +320,11 @@ pub fn field<T, U>(name: String, decoder: Decoder<T>, next: fn(T) -> Decoder<U>)
   Decoder(fn(value) {
     case value {
       tree::Object(members) => find_field(members, name, decoder, next, value)
-      _ => then_errors(mismatch("Object", value), apply(next(missing_placeholder(decoder)), value))
+      _ => {
+        let wrong = mismatch("Object", value)
+        let after = next(missing_placeholder(decoder))
+        then_errors(wrong, apply(after, value))
+      }
     }
   })
 }
@@ -337,7 +341,8 @@ priv fn find_field<T, U>(
   case rest {
     [] => {
       let missing = Under(name, Mismatch("Field", "Nothing"))
-      then_errors(missing, apply(next(missing_placeholder(decoder)), value))
+      let after = next(missing_placeholder(decoder))
+      then_errors(missing, apply(after, value))
     }
     [.., (key, member)] when key == name => case decoder {
       Leaf(expected, placeholder, accepts, take) => case accepts(member) {

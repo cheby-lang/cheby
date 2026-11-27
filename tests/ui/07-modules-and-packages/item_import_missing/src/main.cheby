@@ -2,8 +2,9 @@
 // @decisions: D-111
 //! Every name in an item import must be an item of the module.
 
-import app::greeting::{txt}
 import std::io
+
+import app::greeting::{txt}
 
 fn main() {
   io::println(txt())

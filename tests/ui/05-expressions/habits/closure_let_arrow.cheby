@@ -1,0 +1,8 @@
+// @mode: parse-fail
+// @decisions: D-1930, D-1932
+//! An arrow function bound with `let` gets the closure help.
+
+fn main() {
+  let inc = x => x + 1
+  assert inc(1) == 2
+}

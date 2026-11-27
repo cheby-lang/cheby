@@ -1,0 +1,8 @@
+//! Imports the module with the syntax error: it is not checked.
+
+import app::parser
+
+fn serve() -> String {
+  let wrong: Int = parser::parse("not reported")
+  "ok"
+}

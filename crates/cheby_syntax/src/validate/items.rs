@@ -167,7 +167,7 @@ pub(super) fn interface_ref(iref: InterfaceRef<'_>, out: &mut Vec<Diagnostic>) {
             "an interface is named without type arguments",
         )
         .with_primary(args.significant_span(), "")
-        .with_suggestion("remove the type arguments", args.significant_span(), ""),
+        .with_fix("remove the type arguments", args.significant_span(), ""),
     );
 }
 
@@ -187,7 +187,7 @@ pub(super) fn variant(variant: Variant<'_>, out: &mut Vec<Diagnostic>) {
     out.push(
         Diagnostic::new(codes::SYNTAX_ERROR, "a variant's field list is empty")
             .with_primary(span, "")
-            .with_suggestion(
+            .with_fix(
                 "for a variant without fields, remove the brackets",
                 span,
                 "",
@@ -260,7 +260,7 @@ pub(super) fn local_fn(function: LocalFn<'_>, out: &mut Vec<Diagnostic>) {
         out.push(
             Diagnostic::new(codes::SYNTAX_ERROR, "a local function has no visibility")
                 .with_primary(visibility.significant_span(), "")
-                .with_suggestion("remove it", removal, ""),
+                .with_fix("remove it", removal, ""),
         );
     }
     if let Some(params) = function.type_params() {
@@ -298,6 +298,18 @@ pub(super) fn let_stmt(stmt: LetStmt<'_>, out: &mut Vec<Diagnostic>) {
     };
     let mut diag = Diagnostic::new(codes::SYNTAX_ERROR, "a `let` with a message needs `assert`")
         .with_primary(message.significant_span(), "");
+    // `let y = x as Float`: a cast of another language, not a message
+    // (D-1939).
+    let words: Vec<(SyntaxKind, &str)> = message
+        .syntax()
+        .tokens()
+        .filter(|t| !t.kind().is_trivia() && t.kind() != SyntaxKind::AS_KW)
+        .map(|t| (t.kind(), t.text()))
+        .collect();
+    if crate::parser::is_cast_target(&words) {
+        out.push(diag.with_help(crate::parser::CAST_HELP));
+        return;
+    }
     if let Some(let_kw) = stmt.syntax().first_token_of_kind(SyntaxKind::LET_KW) {
         let at = empty_at(stmt.syntax(), let_kw.text_range().end());
         diag = diag.with_suggestion(
@@ -332,6 +344,6 @@ pub(super) fn use_stmt(stmt: UseStmt<'_>, out: &mut Vec<Diagnostic>) {
             "trailing comma after the `use` binders",
         )
         .with_primary(comma.span(), "")
-        .with_suggestion("remove the comma", comma.span(), ""),
+        .with_fix("remove the comma", comma.span(), ""),
     );
 }

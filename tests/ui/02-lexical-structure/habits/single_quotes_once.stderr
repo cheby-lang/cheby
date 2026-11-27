@@ -1,0 +1,8 @@
+error[E0003]: unexpected character `'`
+ --> tests/ui/02-lexical-structure/habits/single_quotes_once.cheby:7:11
+  |
+7 |   let c = 'a'
+  |           ^
+  |
+  = help: strings use double quotes, such as "text"
+

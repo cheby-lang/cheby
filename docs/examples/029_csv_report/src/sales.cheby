@@ -9,13 +9,14 @@
 //! whole number of cents by hand, because money is never a `Float`:
 //! `0.29 * 100.0` is not exactly `29.0` in binary floating point.
 
-import csv_report::csv
 import std::int
 import std::list
 import std::map
 import std::map::{Map}
 import std::result
 import std::string
+
+import csv_report::csv
 
 /// The header the file must start with, field by field.
 const header: List<String> = ["date", "region", "product", "quantity", "unit_price"]

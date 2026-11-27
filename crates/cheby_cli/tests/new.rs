@@ -76,7 +76,10 @@ fn cheby_new_package_checks_and_is_formatted() {
     let work = fresh();
     let app = new_app(&work);
     assert_eq!(names_in(work.path()), ["app"]);
-    assert_eq!(names_in(&app), [".gitignore", "cheby.toml", "src"]);
+    assert_eq!(
+        names_in(&app),
+        [".gitignore", "AGENTS.md", "cheby.toml", "src"]
+    );
     assert_eq!(names_in(&app.join("src")), ["main.cheby"]);
     let read = |rel: &str| std::fs::read_to_string(app.join(rel)).unwrap();
     assert_eq!(read("cheby.toml"), "name = \"app\"\nversion = \"0.1.0\"\n");
@@ -148,7 +151,10 @@ fn cheby_new_library_tests_and_builds() {
             (out.stdout.as_str(), out.stderr.as_str(), out.status),
             ("", "", Some(0))
         );
-        assert_eq!(names_in(&dir), [".gitignore", "cheby.toml", "src"]);
+        assert_eq!(
+            names_in(&dir),
+            [".gitignore", "AGENTS.md", "cheby.toml", "src"]
+        );
     }
     // D-1875: no file is written, so `-o` is refused.
     let out = cheby(&dir, &["build", "-o", "geo"]);
@@ -161,7 +167,10 @@ fn cheby_new_library_tests_and_builds() {
             Some(1)
         )
     );
-    assert_eq!(names_in(&dir), [".gitignore", "cheby.toml", "src"]);
+    assert_eq!(
+        names_in(&dir),
+        [".gitignore", "AGENTS.md", "cheby.toml", "src"]
+    );
 }
 
 /// The skeleton runs and prints its greeting.

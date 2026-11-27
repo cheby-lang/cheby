@@ -1,0 +1,9 @@
+error[E0058]: `Point` has no field `norm`
+  --> tests/ui/05-expressions/habits/method_call_own_type.cheby:16:12
+   |
+16 |   assert p.norm() == 3
+   |            ^^^^ unknown field
+   |
+   = note: the fields of `Point`: `x` and `y`
+   = help: Cheby has no methods; call `norm(p)`
+

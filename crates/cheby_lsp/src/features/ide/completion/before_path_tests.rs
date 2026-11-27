@@ -61,7 +61,7 @@ fn every_item_parses(found: &Completions, text: &str) -> bool {
 /// The imports the D-1530 tests share: a module, an alias, a module with
 /// interfaces, and one imported with an item by name.
 const IMPORTS: &str =
-    "import app::shape\nimport std::list as l\nimport std::ops\nimport std::string::{length}\n\n";
+    "import std::list as l\nimport std::ops\nimport std::string::{length}\n\nimport app::shape\n\n";
 
 /// `IMPORTS`, then a function `f` whose body holds `line`.
 fn body(line: &str) -> String {
@@ -228,7 +228,7 @@ fn before_a_path_a_pattern_offers_modules_only() {
     // D-1530: in a pattern only a module starts a path. Patterns offered
     // no module before; now they do before `::`. The subject's
     // constructors, those in scope and `_` are left out.
-    let main = "import app::geo as g\nimport std::list\n\nfn f(s: g::Shape) -> Int {\n  case s {\n    ge‸::Square(_) => 1\n    _ => 0\n  }\n}\n";
+    let main = "import std::list\n\nimport app::geo as g\n\nfn f(s: g::Shape) -> Int {\n  case s {\n    ge‸::Square(_) => 1\n    _ => 0\n  }\n}\n";
     let (found, text) = run(main, &[], WITH, StdAccess::None);
     assert_eq!(labels(&found), ["g", "list"]);
     assert!(!found.incomplete);

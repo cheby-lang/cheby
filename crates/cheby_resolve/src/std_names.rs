@@ -85,7 +85,146 @@ const ALIASES: &[(StdPath, StdPath)] = &[
     (("list", "index_of"), ("list", "position")),
     (("map", "get_or_default"), ("map", "get_or")),
     (("map", "get_with_default"), ("map", "get_or")),
+    // The names of Rust, Python, JavaScript and Go for what the tier-1
+    // modules have (D-1937).
+    (("list", "for_each"), ("list", "each")),
+    (("list", "foreach"), ("list", "each")),
+    (("list", "reduce"), ("list", "fold")),
+    (("list", "fold_left"), ("list", "fold")),
+    (("list", "foldl"), ("list", "fold")),
+    (("list", "foldr"), ("list", "fold_right")),
+    (("list", "concat"), ("list", "append")),
+    (("list", "extend"), ("list", "append")),
+    (("list", "includes"), ("list", "contains")),
+    (("list", "at"), ("list", "get")),
+    (("list", "nth"), ("list", "get")),
+    (("list", "index"), ("list", "position")),
+    (("list", "head"), ("list", "first")),
+    (("list", "push_back"), ("list", "push")),
+    (("list", "unshift"), ("list", "prepend")),
+    (("list", "push_front"), ("list", "prepend")),
+    (("list", "sorted"), ("list", "sort")),
+    (("list", "sort_by"), ("list", "sort_with")),
+    (("list", "reversed"), ("list", "reverse")),
+    (("list", "rev"), ("list", "reverse")),
+    (("list", "every"), ("list", "all")),
+    (("list", "some"), ("list", "any")),
+    (("list", "dedup"), ("list", "unique")),
+    (("list", "distinct"), ("list", "unique")),
+    (("list", "uniq"), ("list", "unique")),
+    (("list", "concat_map"), ("list", "flat_map")),
+    (("list", "max_by"), ("list", "max_with")),
+    (("list", "min_by"), ("list", "min_with")),
+    (("list", "join"), ("string", "join")),
+    (("string", "upper"), ("string", "uppercase")),
+    (("string", "to_upper"), ("string", "uppercase")),
+    (("string", "to_uppercase"), ("string", "uppercase")),
+    (("string", "to_upper_case"), ("string", "uppercase")),
+    (("string", "lower"), ("string", "lowercase")),
+    (("string", "to_lower"), ("string", "lowercase")),
+    (("string", "to_lowercase"), ("string", "lowercase")),
+    (("string", "to_lower_case"), ("string", "lowercase")),
+    (("string", "strip"), ("string", "trim")),
+    (("string", "lstrip"), ("string", "trim_start")),
+    (("string", "rstrip"), ("string", "trim_end")),
+    (("string", "trim_left"), ("string", "trim_start")),
+    (("string", "trim_right"), ("string", "trim_end")),
+    (("string", "startswith"), ("string", "starts_with")),
+    (("string", "has_prefix"), ("string", "starts_with")),
+    (("string", "endswith"), ("string", "ends_with")),
+    (("string", "has_suffix"), ("string", "ends_with")),
+    (("string", "includes"), ("string", "contains")),
+    (("string", "concat"), ("string", "add")),
+    (("string", "substr"), ("string", "slice")),
+    (("string", "trim_prefix"), ("string", "remove_prefix")),
+    (("string", "strip_prefix"), ("string", "remove_prefix")),
+    (("string", "removeprefix"), ("string", "remove_prefix")),
+    (("string", "trim_suffix"), ("string", "remove_suffix")),
+    (("string", "strip_suffix"), ("string", "remove_suffix")),
+    (("string", "removesuffix"), ("string", "remove_suffix")),
+    (("string", "splitlines"), ("string", "lines")),
+    (("string", "split_lines"), ("string", "lines")),
+    (("string", "chars"), ("string", "to_code_points")),
+    (("string", "pad_left"), ("string", "pad_start")),
+    (("string", "pad_right"), ("string", "pad_end")),
+    (("string", "rjust"), ("string", "pad_start")),
+    (("string", "ljust"), ("string", "pad_end")),
+    (("string", "replace_all"), ("string", "replace")),
+    (("string", "size"), ("string", "length")),
+    (("string", "to_float"), ("float", "parse")),
+    (("string", "parse_float"), ("float", "parse")),
+    (("string", "from_int"), ("int", "show")),
+    (("int", "to_string"), ("int", "show")),
+    (("int", "to_str"), ("int", "show")),
+    (("int", "itoa"), ("int", "show")),
+    (("int", "atoi"), ("int", "parse")),
+    (("int", "from_str"), ("int", "parse")),
+    (("int", "parse_int"), ("int", "parse")),
+    (("int", "to_float"), ("float", "from_int")),
+    (("int", "power"), ("int", "pow")),
+    (("int", "remainder"), ("int", "rem")),
+    (("float", "to_string"), ("float", "show")),
+    (("float", "to_str"), ("float", "show")),
+    (("float", "from_str"), ("float", "parse")),
+    (("float", "parse_float"), ("float", "parse")),
+    (("float", "power"), ("float", "pow")),
+    (("float", "powf"), ("float", "pow")),
+    (("float", "log"), ("float", "ln")),
+    (("option", "and_then"), ("option", "then")),
+    (("option", "flat_map"), ("option", "then")),
+    (("option", "bind"), ("option", "then")),
+    (("option", "unwrap_or_else"), ("option", "lazy_unwrap_or")),
+    (("option", "get_or_else"), ("option", "unwrap_or")),
+    (("option", "with_default"), ("option", "unwrap_or")),
+    (("option", "unwrap"), ("option", "expect")),
+    (("option", "ok_or"), ("option", "to_result")),
+    (("result", "and_then"), ("result", "try")),
+    (("result", "then"), ("result", "try")),
+    (("result", "flat_map"), ("result", "try")),
+    (("result", "map_err"), ("result", "map_error")),
+    (("result", "is_err"), ("result", "is_error")),
+    (("result", "unwrap_or_else"), ("result", "lazy_unwrap_or")),
+    (("result", "with_default"), ("result", "unwrap_or")),
+    (("result", "unwrap"), ("result", "expect")),
+    (("result", "ok"), ("result", "to_option")),
+    (("map", "len"), ("map", "size")),
+    (("map", "length"), ("map", "size")),
+    (("map", "contains_key"), ("map", "has_key")),
+    (("map", "contains"), ("map", "has_key")),
+    (("map", "has"), ("map", "has_key")),
+    (("map", "set"), ("map", "insert")),
+    (("map", "put"), ("map", "insert")),
+    (("map", "delete"), ("map", "remove")),
+    (("map", "items"), ("map", "to_list")),
+    (("map", "entries"), ("map", "to_list")),
+    (("map", "for_each"), ("map", "each")),
+    (("map", "lookup"), ("map", "get")),
+    (("set", "len"), ("set", "size")),
+    (("set", "length"), ("set", "size")),
+    (("set", "add"), ("set", "insert")),
+    (("set", "has"), ("set", "contains")),
+    (("set", "delete"), ("set", "remove")),
+    (("set", "discard"), ("set", "remove")),
+    (("set", "for_each"), ("set", "each")),
+    (("set", "issubset"), ("set", "is_subset")),
+    (("io", "puts"), ("io", "println")),
+    (("io", "write_line"), ("io", "println")),
+    (("io", "writeln"), ("io", "println")),
+    (("io", "input"), ("io", "read_line")),
+    (("io", "readline"), ("io", "read_line")),
 ];
+
+/// The std item that another language's name `module::name` means, by the
+/// table of D-1658, as `(module, name)` under `std`: `("list", "length")`
+/// for `list::len`. The type checker reads it for the help of a method
+/// call (D-1938).
+#[must_use]
+pub fn std_alias(module: &str, name: &str) -> Option<(&'static str, &'static str)> {
+    ALIASES
+        .iter()
+        .find(|((m, n), _)| *m == module && *n == name)
+        .map(|&(_, to)| to)
+}
 
 /// How many modules the help names at most.
 const MAX_MODULES: usize = 3;
@@ -375,6 +514,142 @@ mod tests {
                 "{module}::{name}: `std::{to_module}` has no `{to_name}`"
             );
         }
+    }
+
+    /// Every `.stderr` file under `dir`, sorted.
+    fn goldens(dir: &Path, out: &mut Vec<std::path::PathBuf>) {
+        let mut entries: Vec<std::path::PathBuf> = std::fs::read_dir(dir)
+            .unwrap()
+            .map(|entry| entry.unwrap().path())
+            .collect();
+        entries.sort();
+        for path in entries {
+            if path.is_dir() {
+                goldens(&path, out);
+            } else if path.extension().is_some_and(|ext| ext == "stderr") {
+                out.push(path);
+            }
+        }
+    }
+
+    /// The paths `a::b`, `a::b::c` written in the code `code`, each as its
+    /// segments: the runs of name characters and `::` that hold a `::` with a
+    /// name on each side.
+    fn paths_in(code: &str) -> Vec<Vec<&str>> {
+        code.split(|c: char| !(c.is_ascii_alphanumeric() || c == '_' || c == ':'))
+            .filter(|run| run.contains("::"))
+            .map(|run| run.split("::").collect::<Vec<&str>>())
+            .filter(|segments| segments.iter().all(|s| !s.is_empty()))
+            .collect()
+    }
+
+    /// Items that a UI golden's help line names on purpose although std
+    /// lacks them, as `(golden, item, reason)`. Each must still occur.
+    const NAMED_ON_PURPOSE: &[(&str, &str, &str)] = &[(
+        "tests/ui/07-modules-and-packages/module_as_value.stderr",
+        "io::name",
+        "the help of a module used as a value writes `name` for any item of the module",
+    )];
+
+    /// Every std item and module that a help line of a UI golden names in
+    /// backticks, as in "call `list::get(xs, i)`" or "add `import std::map`",
+    /// exists in std: a module's item in the value or the type namespace,
+    /// a builtin item homed there (D-447), or a module `std::…`. A qualifier
+    /// that is no std module, such as a test's own module or an import
+    /// alias, is not std's. So a help that names std cannot outlive a
+    /// rename in std unseen, as the alias table cannot (D-1658, D-1930).
+    #[test]
+    fn std_items_named_in_ui_helps_exist() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+        let mut sources = Vec::new();
+        std_sources(&root.join("std"), "", &mut sources);
+        let modules: std::collections::BTreeSet<String> =
+            sources.iter().map(|(path, _)| path.clone()).collect();
+        let mut items: std::collections::BTreeSet<(String, String)> = sources
+            .iter()
+            .flat_map(|(path, text)| {
+                names_of(text)
+                    .into_iter()
+                    .map(|(name, _)| (path.clone(), name))
+            })
+            .collect();
+        let globals = cheby_iface::Globals::new();
+        let builtins = builtin::interface(&globals);
+        for (index, item) in builtins.items.iter_enumerated() {
+            let owner = item.parent.unwrap_or(index);
+            let owner = cheby_iface::DefId::new(ModuleId::BUILTIN, owner);
+            if let Some(&(_, home)) = builtin::HOMES.iter().find(|(def, _)| *def == owner) {
+                items.insert((home.to_owned(), globals.names.get(item.name).to_owned()));
+            }
+        }
+        let mut files = Vec::new();
+        goldens(&root.join("tests/ui"), &mut files);
+        let mut used = vec![false; NAMED_ON_PURPOSE.len()];
+        let mut missing = Vec::new();
+        for file in &files {
+            let shown = file
+                .strip_prefix(&root)
+                .unwrap()
+                .to_string_lossy()
+                .replace('\\', "/");
+            let text = std::fs::read_to_string(file).unwrap();
+            let helps = text
+                .lines()
+                .filter_map(|line| line.trim_start().strip_prefix("= help: "));
+            for help in helps {
+                // The odd pieces between backticks are code.
+                for code in help.split('`').skip(1).step_by(2) {
+                    for segments in paths_in(code) {
+                        let named = segments.join("::");
+                        let exists = if let Some((&"std", rest)) = segments.split_first() {
+                            modules.contains(&rest.join("::"))
+                                || rest.split_last().is_some_and(|(last, module)| {
+                                    items.contains(&(module.join("::"), (*last).to_owned()))
+                                })
+                        } else {
+                            let Some((last, module)) = segments.split_last() else {
+                                continue;
+                            };
+                            let module = module.join("::");
+                            if !modules.contains(&module) {
+                                continue;
+                            }
+                            items.contains(&(module, (*last).to_owned()))
+                        };
+                        if exists {
+                            continue;
+                        }
+                        let excused = NAMED_ON_PURPOSE
+                            .iter()
+                            .position(|&(golden, item, _)| golden == shown && item == named);
+                        match excused {
+                            Some(index) => {
+                                if let Some(flag) = used.get_mut(index) {
+                                    *flag = true;
+                                }
+                            }
+                            None => missing.push(format!("{shown}: `{named}`")),
+                        }
+                    }
+                }
+            }
+        }
+        assert!(
+            missing.is_empty(),
+            "help lines name std items that std does not have:\n{}",
+            missing.join("\n")
+        );
+        let stale: Vec<String> = NAMED_ON_PURPOSE
+            .iter()
+            .zip(&used)
+            .filter(|&(_, &used)| !used)
+            .map(|(&(golden, item, _), _)| format!("{golden}: `{item}`"))
+            .collect();
+        assert!(
+            stale.is_empty(),
+            "exceptions that no golden names any more:\n{}",
+            stale.join("\n")
+        );
     }
 
     fn fake_items() -> &'static [StdItemName] {

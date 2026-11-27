@@ -81,9 +81,10 @@ pub fn show(p: Point) -> String {
 
 const MAIN: &str = "//! Root.
 
+import std::io
+
 import app::shapes
 import app::shapes::{Point as P}
-import std::io
 
 fn main() {
   let p = P { x: 1, y: 2 }
@@ -256,48 +257,48 @@ fn definition_on_clean_text() {
     let case = Case::new("clean", MAIN);
     let def = |line, col| case.run(definition, false, case.at("main.cheby", line, col));
     // An alias's use leads to its `as` name.
-    assert_eq!(def(7, 10), ["main.cheby 3:30-3:31"]);
+    assert_eq!(def(8, 10), ["main.cheby 5:30-5:31"]);
     // An item in another module.
-    assert_eq!(def(8, 19), ["shapes.cheby 8:7-8:10"]);
+    assert_eq!(def(9, 19), ["shapes.cheby 8:7-8:10"]);
     // `+` leads to the function it calls (D-1353).
-    assert_eq!(def(8, 28), ["shapes.cheby 8:7-8:10"]);
+    assert_eq!(def(9, 28), ["shapes.cheby 8:7-8:10"]);
     // A module, at its start.
-    assert_eq!(def(8, 12), ["shapes.cheby 0:0-0:0"]);
+    assert_eq!(def(9, 12), ["shapes.cheby 0:0-0:0"]);
     // A field of a record expression.
-    assert_eq!(def(7, 14), ["shapes.cheby 4:2-4:3"]);
+    assert_eq!(def(8, 14), ["shapes.cheby 4:2-4:3"]);
     // A punned field of a pattern is its binding (D-1392).
-    assert_eq!(def(9, 10), ["main.cheby 9:10-9:11"]);
+    assert_eq!(def(10, 10), ["main.cheby 10:10-10:11"]);
     // The name in `{x}`, and the braces of `{q}`, which call `show`.
-    assert_eq!(def(10, 16), ["main.cheby 9:10-9:11"]);
-    assert_eq!(def(10, 19), ["shapes.cheby 12:7-12:11"]);
+    assert_eq!(def(11, 16), ["main.cheby 10:10-10:11"]);
+    assert_eq!(def(11, 19), ["shapes.cheby 12:7-12:11"]);
     // Into std: the materialized file (D-1369).
-    assert_eq!(def(10, 3), ["std/io.cheby 0:0-0:0"]);
+    assert_eq!(def(11, 3), ["std/io.cheby 0:0-0:0"]);
     let (line, col) = in_std("io", "println(text");
     assert_eq!(
-        def(10, 8),
+        def(11, 8),
         [format!(
             "std/io.cheby {line}:{col}-{line}:{}",
             col.saturating_add(7)
         )]
     );
     // An import's module path segment, and nothing on a keyword.
-    assert_eq!(def(2, 13), ["shapes.cheby 0:0-0:0"]);
-    assert_eq!(def(7, 3), Vec::<String>::new());
+    assert_eq!(def(4, 13), ["shapes.cheby 0:0-0:0"]);
+    assert_eq!(def(8, 3), Vec::<String>::new());
 }
 
 #[test]
 fn links_carry_the_origin_and_the_declaration() {
     let case = Case::new("links", MAIN);
-    let params = case.at("main.cheby", 8, 19);
+    let params = case.at("main.cheby", 9, 19);
     let output = case.output(definition, true, params);
     assert_eq!(
         case.show(&output.value),
-        ["shapes.cheby 8:7-8:10 <- 8:18-8:21"]
+        ["shapes.cheby 8:7-8:10 <- 9:18-9:21"]
     );
     // The target range is the whole function.
     assert_eq!(range(&output.value[0]["targetRange"]), "8:0-10:1");
-    let braces = case.run(definition, true, case.at("main.cheby", 10, 19));
-    assert_eq!(braces, ["shapes.cheby 12:7-12:11 <- 10:19-10:22"]);
+    let braces = case.run(definition, true, case.at("main.cheby", 11, 19));
+    assert_eq!(braces, ["shapes.cheby 12:7-12:11 <- 11:19-11:22"]);
 }
 
 #[test]
@@ -314,29 +315,29 @@ fn declaration_and_type_definition() {
     );
     // Any other name: the definition.
     assert_eq!(
-        case.run(declaration, false, case.at("main.cheby", 8, 6)),
-        ["main.cheby 8:6-8:7"]
+        case.run(declaration, false, case.at("main.cheby", 9, 6)),
+        ["main.cheby 9:6-9:7"]
     );
     // The type of a local, of a field, and of a function's signature.
     let ty = |line, col| case.run(type_definition, false, case.at("main.cheby", line, col));
-    assert_eq!(ty(8, 6), ["shapes.cheby 3:9-3:14"]);
-    assert_eq!(ty(9, 10), ["std/int.cheby 0:0-0:0"]);
-    assert_eq!(ty(8, 19), ["shapes.cheby 3:9-3:14"]);
+    assert_eq!(ty(9, 6), ["shapes.cheby 3:9-3:14"]);
+    assert_eq!(ty(10, 10), ["std/int.cheby 0:0-0:0"]);
+    assert_eq!(ty(9, 19), ["shapes.cheby 3:9-3:14"]);
     // A literal, through its expression's type.
-    assert_eq!(ty(7, 17), ["std/int.cheby 0:0-0:0"]);
+    assert_eq!(ty(8, 17), ["std/int.cheby 0:0-0:0"]);
 }
 
 #[test]
 fn references_and_highlights() {
     let case = Case::new("refs", MAIN);
-    let mut at = case.at("main.cheby", 7, 6);
+    let mut at = case.at("main.cheby", 8, 6);
     assert_eq!(
         case.run(references, false, at.clone()),
         [
-            "main.cheby 7:6-7:7",
-            "main.cheby 8:22-8:23",
-            "main.cheby 8:25-8:26",
-            "main.cheby 8:30-8:31",
+            "main.cheby 8:6-8:7",
+            "main.cheby 9:22-9:23",
+            "main.cheby 9:25-9:26",
+            "main.cheby 9:30-9:31",
         ]
     );
     at["context"]["includeDeclaration"] = json!(false);
@@ -346,20 +347,20 @@ fn references_and_highlights() {
     add["context"]["includeDeclaration"] = json!(false);
     assert_eq!(
         case.run(references, false, add),
-        ["main.cheby 8:18-8:21", "main.cheby 8:28-8:29"]
+        ["main.cheby 9:18-9:21", "main.cheby 9:28-9:29"]
     );
     // A clean package: nothing logged.
-    let output = case.output(references, false, case.at("main.cheby", 7, 6));
+    let output = case.output(references, false, case.at("main.cheby", 8, 6));
     assert_eq!(output.effects, []);
     // A local: written at its binding, read in a path and in `{q}`.
     assert_eq!(
-        case.run(document_highlight, false, case.at("main.cheby", 8, 6)),
-        ["8:6-8:7 3", "9:19-9:20 2", "10:20-10:21 2"]
+        case.run(document_highlight, false, case.at("main.cheby", 9, 6)),
+        ["9:6-9:7 3", "10:19-10:20 2", "11:20-11:21 2"]
     );
     // The braces of `{q}` call `show`: an implicit occurrence is text.
     assert_eq!(
-        case.run(document_highlight, false, case.at("main.cheby", 10, 19)),
-        ["10:19-10:22 1"]
+        case.run(document_highlight, false, case.at("main.cheby", 11, 19)),
+        ["11:19-11:22 1"]
     );
 }
 

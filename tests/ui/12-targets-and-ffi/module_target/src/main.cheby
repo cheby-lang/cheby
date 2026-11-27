@@ -4,8 +4,9 @@
 //! `@!target(native)` restricts a whole module to native. A package that
 //! declares only the native target may use it anywhere.
 
-import app::platform
 import std::io
+
+import app::platform
 
 fn main() {
   io::println(platform::name())

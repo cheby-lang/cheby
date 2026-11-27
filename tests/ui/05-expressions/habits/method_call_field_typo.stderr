@@ -1,0 +1,17 @@
+error[E0058]: `Handlers` has no field `handlr`
+  --> tests/ui/05-expressions/habits/method_call_field_typo.cheby:13:12
+   |
+13 |   assert h.handlr(1) == 1
+   |            ^^^^^^ unknown field
+   |
+   = note: the field of `Handlers`: `handler`
+
+error[E0058]: `Handlers` has no field `area`
+  --> tests/ui/05-expressions/habits/method_call_field_typo.cheby:14:12
+   |
+14 |   assert h.area() == 1
+   |            ^^^^ unknown field
+   |
+   = note: the field of `Handlers`: `handler`
+   = help: Cheby has no methods; the functions of `Handlers` are in this module
+

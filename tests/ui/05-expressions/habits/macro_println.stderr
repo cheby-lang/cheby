@@ -1,0 +1,32 @@
+error[E0013]: expected a line break or `}`, found `!`
+ --> tests/ui/05-expressions/habits/macro_println.cheby:7:10
+  |
+7 |   println!("a")
+  |          ^
+  |
+  = help: Cheby has no macros; call `io::println(…)`
+
+error[E0013]: expected a line break or `}`, found `!`
+ --> tests/ui/05-expressions/habits/macro_println.cheby:8:8
+  |
+8 |   print!("b")
+  |        ^
+  |
+  = help: Cheby has no macros; call `io::print(…)`
+
+error[E0013]: expected a line break or `}`, found `!`
+ --> tests/ui/05-expressions/habits/macro_println.cheby:9:11
+  |
+9 |   eprintln!("c")
+  |           ^
+  |
+  = help: Cheby has no macros; call `io::eprintln(…)`
+
+error[E0013]: expected a line break or `}`, found `!`
+  --> tests/ui/05-expressions/habits/macro_println.cheby:10:9
+   |
+10 |   eprint!("d")
+   |         ^
+   |
+   = help: Cheby has no macros; call `io::eprint(…)`
+

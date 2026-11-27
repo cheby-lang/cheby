@@ -1,0 +1,6 @@
+//! Fails a syntax check: its comparisons are chained.
+
+fn parse(text: String) -> String {
+  assert 1 < 2 < 3
+  text
+}

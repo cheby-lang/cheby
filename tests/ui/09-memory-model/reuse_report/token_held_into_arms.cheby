@@ -45,7 +45,11 @@ fn keys(tree: Tree) -> String {
 }
 
 fn main() {
-  let tree = insert(insert(insert(insert(Leaf, 4), 2), 6), 5)
+  let tree = Leaf
+    |> insert(_, 4)
+    |> insert(_, 2)
+    |> insert(_, 6)
+    |> insert(_, 5)
   let before = keys(tree)
   let after = keys(cut(tree, 6))
   io::println("{before} |{after}")

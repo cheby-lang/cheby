@@ -1,0 +1,8 @@
+error[E0013]: expected an item, found `use`
+ --> tests/ui/07-modules-and-packages/habits/use_import.cheby:6:1
+  |
+6 | use std::io
+  | ^^^
+  |
+  = help: Cheby imports a module with `import`; write `import`
+

@@ -23,7 +23,6 @@
 //! once. Each of them eats a fixed number of meals and then leaves, and
 //! once the table is empty `main` prints how many meals each one ate.
 
-import dining_philosophers::fork
 import std::channel
 import std::duration
 import std::fiber
@@ -35,6 +34,8 @@ import std::random
 import std::result
 import std::selector
 import std::set
+
+import dining_philosophers::fork
 
 /// Who comes to dinner, in their order around the table.
 const guests: List<String> = ["Aristotle", "Kant", "Spinoza", "Marx", "Russell"]

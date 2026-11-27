@@ -247,6 +247,11 @@ pub(crate) struct DocText {
     /// Its phase-A errors, grammar and syntax validation (D-1355), with
     /// ranges in `text`.
     pub errors: Vec<PlainDiagnostic>,
+    /// The name of the document's package, which tells the imports of
+    /// the package's own modules from other packages' when the text is
+    /// formatted (D-1953). `None` for a document of no package, and from
+    /// [`DocText::new`], which knows no package.
+    pub package: Option<String>,
 }
 
 impl DocText {
@@ -287,7 +292,31 @@ impl DocText {
             tree,
             lines,
             errors,
+            package: None,
         })
+    }
+}
+
+/// Where a text request finds the name of its document's package
+/// (D-1953), the name a snapshot's module paths start with: known from
+/// the document's route, or read from the package's manifest on the
+/// query thread, so the main loop reads no file for it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum PackageName {
+    /// Known: `std` for a std checkout's file, `script` in single-file
+    /// mode, none for a std document or one that no session owns.
+    Known(Option<String>),
+    /// The name in the manifest of the package at this root.
+    Manifest(PathBuf),
+}
+
+impl PackageName {
+    /// The name: a manifest's is read now, and `None` when it cannot be.
+    fn resolve(&self) -> Option<String> {
+        match self {
+            Self::Known(name) => name.clone(),
+            Self::Manifest(root) => cheby_driver::package_name(root),
+        }
     }
 }
 
@@ -299,25 +328,38 @@ pub(crate) struct LiveText {
     path: PathBuf,
     version: Option<i32>,
     text: Arc<str>,
+    package: PackageName,
     parsed: OnceLock<Option<DocText>>,
 }
 
 impl LiveText {
-    /// `text` at `version`, not parsed yet.
-    pub(crate) const fn new(path: PathBuf, version: Option<i32>, text: Arc<str>) -> Self {
+    /// `text` at `version`, of the package `package` names, not parsed
+    /// yet.
+    pub(crate) const fn new(
+        path: PathBuf,
+        version: Option<i32>,
+        text: Arc<str>,
+        package: PackageName,
+    ) -> Self {
         Self {
             path,
             version,
             text,
+            package,
             parsed: OnceLock::new(),
         }
     }
 
-    /// The parse, made on the first call. `None` when the text is too
-    /// large.
+    /// The parse, with the package's name, made on the first call. `None`
+    /// when the text is too large.
     pub(crate) fn doc_text(&self) -> Option<&DocText> {
         self.parsed
-            .get_or_init(|| DocText::new(self.path.clone(), self.version, Arc::clone(&self.text)))
+            .get_or_init(|| {
+                let mut doc =
+                    DocText::new(self.path.clone(), self.version, Arc::clone(&self.text))?;
+                doc.package = self.package.resolve();
+                Some(doc)
+            })
             .as_ref()
     }
 }

@@ -1,0 +1,19 @@
+error[E0058]: `String` has no field `len`
+ --> tests/ui/05-expressions/habits/method_call_alias.cheby:9:12
+  |
+9 |   assert s.len() == 3
+  |          - ^^^ unknown field
+  |          |
+  |          this has type `String`
+  |
+  = help: Cheby has no methods; call `string::length(s)`, after `import std::string`
+
+error[E0058]: `Option` has no field `unwrap`
+  --> tests/ui/05-expressions/habits/method_call_alias.cheby:11:12
+   |
+11 |   assert o.unwrap() == 1
+   |            ^^^^^^ unknown field
+   |
+   = note: `Option` has no named fields; positional fields are read with a pattern (D-241)
+   = help: Cheby has no methods; call `option::expect(o, …)`, after `import std::option`
+

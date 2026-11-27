@@ -508,6 +508,21 @@ Logged in [`../decisions/LOG.md`](../decisions/LOG.md#2026-10-04-implementation-
 | D-1899    | A library's build reads and writes `cheby run`'s code records; every module is checked              |
 | D-1900    | The dev profile optimizes every crate at level 1; the LSP harness waits after a refused move        |
 | D-1901    | `std::secret` is a tier-4 module in Cheby with no kernels, and ships on native before M4            |
+| D-1940    | `cargo xtask decisions`: `show`, `search`, `next-id` over every branch, and `lint` in CI            |
+| D-1944    | `--format json`: diagnostics and tool errors as JSON Lines on standard error, every command         |
+| D-1945    | Helps marked as sure fixes at the source; `cheby check --fix` applies them, four rounds             |
+| D-1946    | `cheby test --format json` results on standard output; `--report-failures-only`                     |
+| D-1947    | `cheby doc <path>`: signatures and doc comments of std, the package and its dependencies            |
+| D-1948    | `cargo xtask affected`: the checks of CI that changed files can fail, and `--run`                   |
+| D-1949    | `cheby check`, `run` and `test` take a single `.cheby` file, and `check` and `run` take `-`         |
+| D-1950    | `cargo xtask test` builds the runtime archive first; `cargo xtask doctor` reports stale things      |
+| D-1951    | A syntax error stops the later phases for its module and that module's importers only               |
+| D-1952    | `cheby guide` and `AGENTS.md` in `cheby new`: a guide for coding agents, checked by tests           |
+| D-1953    | Imports in three blocks (std, other packages, own), written by `cheby fmt`, reported by W0014       |
+| D-1954    | Function calls nest at most three deep; a fourth level is the warning W0015                         |
+| D-1955    | `cargo xtask test-std` fails on a warning in a std module, whatever the filter                      |
+| D-1956    | CI runs on pushes to `main`; on other branches only by hand (`workflow_dispatch`)                   |
+| D-1957    | Std's self-test runs W0005 over std: a package-visible std item nothing in std uses fails it        |
 
 ## Open questions
 

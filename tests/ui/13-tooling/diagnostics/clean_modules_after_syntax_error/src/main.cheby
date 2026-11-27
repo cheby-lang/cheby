@@ -1,0 +1,18 @@
+// @mode: check-fail
+// @decisions: D-1951, D-452
+//! A syntax error in one module does not stop the later phases for the
+//! modules that do not import it. `parser` fails a syntax check. `util` and
+//! `report`, which import neither it nor a module that does, get their
+//! errors of name resolution and type checking, and their warnings, but
+//! not the warning for an unused package-visible item. This module and
+//! `server` import `parser`, so they are not checked, and a note names
+//! them.
+
+import app::parser
+import app::report
+import std::io
+
+fn main() {
+  io::println(report::line(parser::parse("x")))
+  let wrong: Int = "not reported"
+}

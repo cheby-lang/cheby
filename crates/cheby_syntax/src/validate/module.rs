@@ -128,7 +128,7 @@ fn misplaced_doc(token: SyntaxToken<'_>, attached_kind: bool) -> Diagnostic {
     diag.with_note(
         "a `///` comment documents the item, variant, field or interface function right after it",
     )
-    .with_suggestion("use `//` for an ordinary comment", slashes, "//")
+    .with_fix("use `//` for an ordinary comment", slashes, "//")
 }
 
 /// E0018: inner attributes come before imports, and imports before items
@@ -260,6 +260,6 @@ fn attr_space(node: SyntaxNode<'_>, out: &mut Vec<Diagnostic>) {
             "space between `@` and the attribute name",
         )
         .with_primary(space.span(), "")
-        .with_suggestion("remove the space", space.span(), ""),
+        .with_fix("remove the space", space.span(), ""),
     );
 }

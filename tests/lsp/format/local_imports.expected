@@ -1,0 +1,100 @@
+== diagnostics
+{
+  "src/main.cheby": [
+    {
+      "code": "W0014",
+      "codeDescription": {
+        "href": "https://github.com/cheby-lang/cheby/blob/main/docs/diagnostics/W0014.md"
+      },
+      "message": "the imports are not in order\n`std::io` comes before this import\nnote: imports come in up to three blocks, each sorted by path: the standard library's, other packages', then the package's own",
+      "range": {
+        "end": {
+          "character": 17,
+          "line": 8
+        },
+        "start": {
+          "character": 0,
+          "line": 8
+        }
+      },
+      "severity": 2,
+      "source": "cheby"
+    }
+  ]
+}
+
+== src/main.cheby:10:1 rangeFormatting
+[
+  {
+    "newText": "import std::io\n\n",
+    "range": {
+      "end": {
+        "character": 0,
+        "line": 7
+      },
+      "start": {
+        "character": 0,
+        "line": 7
+      }
+    }
+  },
+  {
+    "newText": "",
+    "range": {
+      "end": {
+        "character": 0,
+        "line": 10
+      },
+      "start": {
+        "character": 0,
+        "line": 9
+      }
+    }
+  }
+]
+
+== src/main.cheby formatting
+[
+  {
+    "newText": "import std::io\n\n",
+    "range": {
+      "end": {
+        "character": 0,
+        "line": 7
+      },
+      "start": {
+        "character": 0,
+        "line": 7
+      }
+    }
+  },
+  {
+    "newText": "",
+    "range": {
+      "end": {
+        "character": 0,
+        "line": 10
+      },
+      "start": {
+        "character": 0,
+        "line": 9
+      }
+    }
+  },
+  {
+    "newText": "  io::println(util::name())\n",
+    "range": {
+      "end": {
+        "character": 0,
+        "line": 13
+      },
+      "start": {
+        "character": 0,
+        "line": 12
+      }
+    }
+  }
+]
+
+== src/util.cheby formatting
+[]

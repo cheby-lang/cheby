@@ -132,6 +132,7 @@ fn show(s: Square) -> String {
 
 const MAIN: &str = r#"
 import std::list
+
 import app::circle
 import app::shape
 import app::square

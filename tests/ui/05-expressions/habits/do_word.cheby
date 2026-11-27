@@ -1,0 +1,9 @@
+// @mode: parse-fail
+// @decisions: D-1930
+//! `do { … }` gets the help to use recursion.
+
+fn main() {
+  do {
+    assert True
+  }
+}

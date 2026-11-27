@@ -1,0 +1,9 @@
+// @mode: parse-fail
+// @decisions: D-1688, D-1933
+//! A `'…'` literal is one E0003 at its opening quote, whose edit writes both
+//! quotes: the closing quote adds no error.
+
+fn main() {
+  let c = 'a'
+  assert c == "a"
+}

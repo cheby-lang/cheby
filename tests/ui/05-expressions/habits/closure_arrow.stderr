@@ -1,0 +1,10 @@
+error[E0015]: unclosed `(`
+ --> tests/ui/05-expressions/habits/closure_arrow.cheby:9:29
+  |
+9 |   let ys = list::map([1], x => x + 1)
+  |                     -       ^^ expected `)`
+  |                     |
+  |                     this `(` is never closed
+  |
+  = help: a closure is written `fn(x) { x + 1 }`
+

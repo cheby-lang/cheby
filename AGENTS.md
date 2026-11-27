@@ -15,6 +15,7 @@ Design documents:
 - `docs/plan/`: the implementation plan, milestones M0-M6. Each milestone file has a `Status` section.
 - `docs/examples/`: 35 example programs with their goldens, the conformance suite (D-275).
 - `docs/diagnostics/`: one explanation per diagnostic code, `E0001.md` and `W0001.md` onward (D-420).
+- `docs/guide/agents.md`: the guide for coding agents that `cheby guide` prints and `cheby new` writes as `AGENTS.md` (D-1952).
 
 Implementation:
 
@@ -42,11 +43,12 @@ Never change language behavior in the spec, the examples or the compiler without
 ## Decision log and ADRs
 
 - The log is append-only. New decisions go under a new `## YYYY-MM-DD: <topic>` session heading at the end, with a one-line `Goal:`.
-- Entry format: `- **D-NNN Title**: decision. Why: reason.` IDs are sequential across the whole file and never reused. Mention rejected alternatives in the "Why" when they matter.
+- Entry format: `- **D-NNN Title**: decision. Why: reason.` IDs come from one sequence and are never reused. Take the next one from `cargo xtask decisions next-id`, which reads the log of every branch and worktree (D-1941). Mention rejected alternatives in the "Why" when they matter.
 - Superseding: strike the old entry through (`~~…~~`) and append `Superseded by D-NNN.`, and end the new entry with `Supersedes D-NNN.` Use `Refines D-NNN.` or `Extends D-NNN.` for narrower changes. Update the old ADR's `status` line only, never its body.
 - Each session has an `Open:` list. Settled items are struck through with `→ D-NNN` or `Done: …`, not deleted.
-- An ADR is written only for decisions that are hard to reverse, surprising without context, and a real trade-off. Use frontmatter `status`, `date` and `log`, then a short body, optionally followed by `## Considered options` and `## Consequences`. Link it from the log entry with `→ [ADR-NNNN](../adr/…)`.
+- An ADR is written only for decisions that are hard to reverse, surprising without context, and a real trade-off. Use frontmatter `status`, `date` and `log`, then a short body, optionally followed by `## Considered options` and `## Consequences`. Link it from the log entry with `→ [ADR-NNNN](../adr/…)`. Take its number from `cargo xtask decisions next-adr` (D-1943).
 - Plan-level decisions also go in the decision table of `docs/plan/README.md`.
+- The log is too long to read whole. `cargo xtask decisions show D-244` prints an entry with the decisions it names, the entries that name it, and where the spec, the tests and the code cite it. `cargo xtask decisions search WORD…` lists the entries that have every word. `cargo xtask decisions lint` checks the log's form, that every `D-NNN` in the repository is an entry, and that an ADR number has one file (D-1940, D-1942, D-1943).
 - Design sessions follow the `grilling` skill if it is available.
 
 ## Spec conventions
@@ -65,21 +67,11 @@ Never change language behavior in the spec, the examples or the compiler without
 
 ## Writing Cheby code
 
-Code in the spec, the ADRs, the examples, `std/` and the tests must be valid Cheby in the form `cheby fmt` will produce: two-space indentation, no semicolons, trailing commas in multi-line lists, a width of 100 columns, type bodies and pipelines always broken with one variant, field or stage per line, an arm's body on the arm's line with one space before `=>`, and `_` between groups of three digits in a decimal number of five or more digits. Agents often get these rules wrong:
+Code in the spec, the ADRs, the examples, `std/` and the tests must be valid Cheby in the form `cheby fmt` will produce: two-space indentation, no semicolons, trailing commas in multi-line lists, a width of 100 columns, type bodies and pipelines always broken with one variant, field or stage per line, an arm's body on the arm's line with one space before `=>`, `_` between groups of three digits in a decimal number of five or more digits, and the imports in up to three blocks, the standard library's, other packages' and the package's own, each sorted by path (D-1953).
 
-- No `for`, `while`, `loop` or `if` (D-002). Iterate with recursion, often through a local `fn`, and branch with `case`, including subjectless `case { cond => … }` and multi-subject `case a, b { … }`. Arm guards use `when`.
-- No `return` (D-1340). Leave a block early with `guard cond else { … }` or `let guard p = e else { … }`, whose `else` block's value becomes the block's. A non-empty `else` block is always broken over lines (D-1343).
-- No mutation and no shadowing (D-017, D-051). Every `let` introduces a new name.
-- No methods or `impl` (D-061). Call module functions: `list::map(xs, f)`. Paths use `::`.
-- Pipes need an explicit hole (D-244): `xs |> list::map(_, f)`. Only one-parameter functions are piped bare: `xs |> list::length`. `f(_)` is an error everywhere (D-245).
-- No positional tuple access such as `t.0` (D-241). Destructure with a pattern instead: `let (a, b) = t` or `fn((x, y)) { … }`.
-- Errors use `Result`, `Option` and `use x <- result::try(…)`. There is no `?` and no `null` (D-018, D-091).
-- Top-level functions need full signatures, and types are inferred only inside bodies (D-011).
-- Comments are `//` only, with no block comments (D-078). `///` documents an item and `//!` documents a module.
-- Imports look like `import std::io`, and strings interpolate with `"{name}"`.
-- Put `test "…" { assert … }` blocks next to the code they test.
+The rules that differ from the languages a model knows are in [`docs/guide/agents.md`](docs/guide/agents.md), the guide the toolchain ships: `cheby guide` prints it, and `cheby new` writes it as a package's `AGENTS.md` (D-1952). Read it before writing Cheby. A test checks, formats and runs every code block of it, and parses every command it shows, so it does not go stale. Here its commands are run as `cargo run -p cheby_cli -- <command>`, such as `cargo run -p cheby_cli -- doc list::map` or `cargo run -p cheby_cli -- check probe.cheby`.
 
-When unsure, find a similar construct in `docs/examples/` or `std/` and check the relevant spec chapter. `cargo run -p cheby_cli -- check` in a package directory confirms that the code checks.
+When unsure, find a similar construct in `docs/examples/` or `std/` and check the relevant spec chapter.
 
 ## Examples
 
@@ -117,7 +109,7 @@ Follow `docs/plan/`, especially `architecture.md`, `testing.md` and the file of 
 
 ### Building and testing
 
-CI (`.github/workflows/ci.yml`) runs these commands, and a change must pass them:
+CI (`.github/workflows/ci.yml`) runs these commands on every push to `main`, and on another branch only when started by hand, with `gh workflow run ci.yml --ref <branch>` (D-1956). A change must pass them:
 
 ```sh
 cargo build --workspace --all-targets --locked
@@ -125,8 +117,9 @@ cargo clippy --workspace --all-targets --locked
 cargo fmt --all --check
 cargo xtask test                  # every test under cargo-nextest, the harnesses included
 cargo xtask coverage              # decisions cited in the spec that no test names
+cargo xtask decisions lint        # the decision log's form, every D-NNN names an entry, ADR numbers
 cargo xtask cross-check           # compiler parser against tree-sitter
-cargo xtask test-std              # std's own test blocks, one module at a time
+cargo xtask test-std              # std's own test blocks, one module at a time; std's warnings fail it
 cargo xtask check-examples        # cheby check in every example
 # cheby fmt's form in std and the examples
 cargo run --locked -q -p cheby_cli -- fmt --check $(git ls-files 'std/*.cheby' 'docs/examples/*/src/*.cheby')
@@ -140,12 +133,12 @@ cargo deny --locked check         # advisories, licences and sources (deny.toml)
 
 - The workspace lints are in `Cargo.toml` (D-423, D-1560). Exempt code with `#[expect(lint, reason = "…")]` on the smallest item, never `#[allow]` (D-422). Every `unsafe` block has a `// SAFETY:` comment directly above it, a loop over a hash map or set says why its order cannot reach the output, and a `match` lists its enum's variants instead of `_`, except on `SyntaxKind` and in tests.
 
-- Tests run under [cargo-nextest](https://nexte.st), never `cargo test`, which is not supported (D-1553). Install it with `cargo install cargo-nextest --locked`. `cargo xtask test [ARGS]` runs `cargo nextest run --workspace --locked ARGS` with one build cache shared by the whole run, and prints the harnesses' pending summary at the end (D-1554, D-1556). A plain `cargo nextest run` works too, but every harness trial then compiles `std` from scratch. Select tests with nextest's filters: `cargo xtask test -E 'binary_id(cheby_cli::ui)' deadlock`. `.config/nextest.toml` holds the configuration, and CI uses its `ci` profile (D-1558). `cargo xtask junit-report --html FILE` renders that profile's JUnit report as an HTML page, which CI shows in each job's summary and uploads (D-1559). Doctests do not run.
-- Locally, run only the tests a change can affect, and leave the whole suite to CI, which takes about 16 minutes. A change to one std module, for example, needs its test blocks (`cargo xtask test-std io`), the UI tests and LSP goldens that name it (`cargo xtask test -E 'binary_id(cheby_cli::lsp)' completion`), the MIR and CLIF goldens that pin its code (`cargo xtask test -E 'package(cheby_driver) & test(/mir_of|clif_of|aot_001/)'`), and, when it adds or changes an `@external`, the checks of kernels against their declarations (`cargo xtask test -E 'package(cheby_runtime) & test(/kernels_match/)'`). Run the whole suite only for a broad change, such as one to the compiler or the runtime, or when asked.
+- Tests run under [cargo-nextest](https://nexte.st), never `cargo test`, which is not supported (D-1553). Install it with `cargo install cargo-nextest --locked`. `cargo xtask test [ARGS]` builds the runtime archive, which `cheby build` links, then runs `cargo nextest run --workspace --locked ARGS` with one build cache shared by the whole run, and prints the harnesses' pending summary at the end (D-1554, D-1556, D-1950). A plain `cargo nextest run` works too, but every harness trial then compiles `std` from scratch, and the archive is as stale as the last `cargo build -p cheby_rt_exe` left it. Select tests with nextest's filters: `cargo xtask test -E 'binary_id(cheby_cli::ui)' deadlock`. `.config/nextest.toml` holds the configuration, and CI uses its `ci` profile (D-1558). `cargo xtask junit-report --html FILE` renders that profile's JUnit report as an HTML page, which CI shows in each job's summary and uploads (D-1559). Doctests do not run.
+- Locally, run only the tests a change can affect, and leave the whole suite to CI, which takes about 16 minutes. `cargo xtask affected` prints the commands of the list above that the uncommitted changes can fail, and `cargo xtask affected --run` runs them, each with its output in a file under `target/affected/`; `--base main` takes every change of the branch (D-1948). What it does by rule is this: A change to one std module, for example, needs its test blocks (`cargo xtask test-std io`), the UI tests and LSP goldens that name it (`cargo xtask test -E 'binary_id(cheby_cli::lsp)' completion`), the MIR and CLIF goldens that pin its code (`cargo xtask test -E 'package(cheby_driver) & test(/mir_of|clif_of|aot_001/)'`), and, when it adds or changes an `@external`, the checks of kernels against their declarations (`cargo xtask test -E 'package(cheby_runtime) & test(/kernels_match/)'`). Run the whole suite only for a broad change, such as one to the compiler or the runtime, or when asked.
 - The harnesses are test targets of `cheby_cli`: `conformance` (the examples), `ui` (`tests/ui/`), `repl` (`tests/repl/`) and `lsp` (`cheby lsp` over stdio, with its tests in `tests/lsp/`). Run one with `cargo xtask test -E 'binary_id(cheby_cli::<name>)'`. Their trial names start with the expectation, such as `[pass]` or `[pending]`, which changes with `tests/milestone`. A UI check test's `.stderr` golden is also the expected output of an `lsp` parity trial, so a changed golden can fail both harnesses.
 - `tests/ui/` holds one rule per test, grouped by spec chapter. The header comment says whether the test must compile, fail or run. [`tests/ui/README.md`](tests/ui/README.md) documents every directive, and `// @decisions:` names the decisions a test pins, which `cargo xtask coverage` reads.
 - Send the output of a build, lint or test run to a file, then search the file: `cargo xtask test > "$LOG" 2>&1; grep -E 'FAIL|Summary' "$LOG"`. Never pipe cargo straight into `tail`, `head` or `grep`, because a filter that hides the line you need costs a second run. Run a command that may take more than a few minutes in the background, and never the same command twice without a change between the runs.
-- If a small rebuild takes minutes, count the entries of `target/debug/deps` before looking elsewhere. On macOS, rustc used to leave millions of stale `*.rcgu.o` files there, and every rustc lists the directory first. `.cargo/config.toml` now stops that, but a `RUSTFLAGS` variable turns its flag off.
+- If a small rebuild takes minutes, count the entries of `target/debug/deps` before looking elsewhere. On macOS, rustc used to leave millions of stale `*.rcgu.o` files there, and every rustc lists the directory first. `.cargo/config.toml` now stops that, but a `RUSTFLAGS` variable turns its flag off. `cargo xtask doctor` counts them, and reports the tools of the list above that are missing or not at CI's version, a tree-sitter pin that the sibling checkouts do not share, worktrees whose directory is gone, and a stale runtime archive (D-1950). It changes nothing.
 - `cargo xtask bless [FILTER]` rewrites goldens from the current `cheby` (D-292). Review blessed changes like code.
 - The harnesses follow `tests/milestone` (D-288). Tests of earlier milestones must pass, those of the milestone in progress are pending, and those of later milestones must fail. `CHEBY_MILESTONE`, `CHEBY_PENDING=require` and `CHEBY_PENDING_ALLOW` make a stricter run, for example to check a milestone's exit (D-544, D-567).
 - On Windows, until M6, tests that build or run JIT code carry `#[cfg_attr(windows, ignore = …)]` (D-545, D-641). Follow that rule for new tests.

@@ -6,7 +6,7 @@
       "codeDescription": {
         "href": "https://github.com/cheby-lang/cheby/blob/main/docs/diagnostics/E0058.md"
       },
-      "message": "`List<Int>` has no field `length`\nunknown field",
+      "message": "`List<Int>` has no field `length`\nunknown field\nhelp: Cheby has no methods; call `list::length(xs)`",
       "range": {
         "end": {
           "character": 11,
@@ -62,7 +62,7 @@
         "codeDescription": {
           "href": "https://github.com/cheby-lang/cheby/blob/main/docs/diagnostics/E0058.md"
         },
-        "message": "`List<Int>` has no field `length`\nunknown field",
+        "message": "`List<Int>` has no field `length`\nunknown field\nhelp: Cheby has no methods; call `list::length(xs)`",
         "range": {
           "end": {
             "character": 11,

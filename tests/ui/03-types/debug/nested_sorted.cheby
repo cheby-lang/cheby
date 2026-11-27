@@ -16,9 +16,10 @@ fn main() {
     set::from_list([1, 2]),
   ])
   io::println("{sets:?}")
+  let ones = set::from_list([set::from_list([1])])
   let deeper = set::from_list([
     set::from_list([sets]),
-    set::from_list([set::from_list([set::from_list([1])])]),
+    set::from_list([ones]),
   ])
   io::println("{deeper:?}")
   let by_name = map::from_list([

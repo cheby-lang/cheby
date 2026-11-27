@@ -1,0 +1,12 @@
+// @mode: check-fail
+// @decisions: D-1935
+//! Python's `pass` and the `this` of other languages get the Cheby form.
+
+fn nothing() -> Nil {
+  pass
+}
+
+fn main() {
+  let me = this
+  nothing()
+}

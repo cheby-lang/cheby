@@ -15,11 +15,12 @@
 //! simpler than `std::json`'s too, with one `Number(Float)` for every
 //! number.
 
-import json::parser
 import std::env
 import std::io
 import std::list
 import std::result
+
+import json::parser
 
 fn main() -> Result<Nil, AppError> {
   // Each `use` stops at the first `Err` and returns it from `main`.

@@ -41,7 +41,8 @@ pub(super) struct Scanner<'a> {
     tokens: Vec<RawToken>,
     errors: Vec<Diagnostic>,
     /// The closing `'` of the last `'…'` whose opening quote got the
-    /// edit of D-1688, so that the closing one gets no edit of its own.
+    /// edit of D-1688, or the closing backtick of a template literal, so
+    /// that the closing one gets no error of its own (D-1933).
     quote_close: Option<usize>,
 }
 
@@ -439,7 +440,13 @@ impl<'a> Scanner<'a> {
     /// character.
     fn unexpected(&mut self, c: char) {
         let pos = self.pos;
-        let end = pos + c.len_utf8();
+        let mut end = pos + c.len_utf8();
+        // The closing quote of a `'…'` whose opening quote got the edit of
+        // both: that quote's error covers it (D-1688, D-1933).
+        if matches!(c, '\'' | '`') && self.quote_close == Some(pos) {
+            self.push(SyntaxKind::ERROR_TOKEN, end);
+            return;
+        }
         let shown: String = if c.is_control() || c.is_whitespace() {
             c.escape_unicode().collect()
         } else {
@@ -454,7 +461,7 @@ impl<'a> Scanner<'a> {
             ';' => {
                 let help = "statements are separated by line breaks, not `;`";
                 if self.only_trivia_follows(end) {
-                    diag.with_suggestion(help, self.span(pos, end), "")
+                    diag.with_fix(help, self.span(pos, end), "")
                 } else {
                     diag.with_help(help)
                 }
@@ -464,7 +471,7 @@ impl<'a> Scanner<'a> {
                 match self.closing_quote(pos, end) {
                     Some(close) => {
                         self.quote_close = Some(close);
-                        diag.with_suggestion_edits(
+                        diag.with_fix_edits(
                             help,
                             vec![
                                 Edit {
@@ -481,10 +488,78 @@ impl<'a> Scanner<'a> {
                     None => diag.with_help(help),
                 }
             }
+            // A template literal of JavaScript (D-1930).
+            '`' => {
+                // The closing backtick on the line adds no error of its own
+                // (D-1933).
+                let line_end = self.run_while(end, |b| b != b'\n' && b != b'\r');
+                if let Some(close) = (end..line_end).find(|&i| self.at(i) == Some(b'`')) {
+                    self.quote_close = Some(close);
+                }
+                diag.with_help("strings use double quotes, such as \"text\"")
+            }
+            '?' => {
+                let (help, len) = self.question(pos);
+                end = pos + len;
+                match help {
+                    Some(help) => diag.with_help(help),
+                    None => diag,
+                }
+            }
+            // A comment of Python or a shell: the rest of the line is its
+            // text, not tokens (D-1930, D-1933).
+            '#' if self.mode == Mode::Normal
+                && matches!(
+                    self.at(end),
+                    None | Some(b' ' | b'\t' | b'\n' | b'\r' | b'#')
+                ) =>
+            {
+                end = self.run_while(end, |b| b != b'\n' && b != b'\r');
+                diag.with_fix(
+                    "comments start with `//`; write `//`",
+                    self.span(pos, pos + 1),
+                    "//",
+                )
+            }
             _ => diag,
         };
         self.error(diag);
         self.push(SyntaxKind::ERROR_TOKEN, end);
+    }
+
+    /// The help of a `?` at `pos`, after the form it is written in, and
+    /// the length of its error token, which takes both characters of `??`
+    /// (D-1930, D-1933).
+    fn question(&self, pos: usize) -> (Option<&'static str>, usize) {
+        let prev = pos.checked_sub(1).and_then(|p| self.at(p));
+        match self.at(pos + 1) {
+            Some(b'?') => (
+                Some("Cheby has no `??`; call `option::unwrap_or(o, default)`"),
+                2,
+            ),
+            Some(b'.') if prev != Some(b')') => (
+                Some(
+                    "Cheby has no `?.`; call `option::map(o, f)`, or take the value apart with `case`",
+                ),
+                1,
+            ),
+            _ if prev.is_some_and(|b| is_word(b) || matches!(b, b')' | b']' | b'"')) => (
+                Some("Cheby has no `?` operator; unwrap a `Result` with `use x <- result::try(…)`"),
+                1,
+            ),
+            _ if self.colon_follows(pos + 1) => (Some("Cheby has no `? :`; use `case`"), 1),
+            _ => (None, 1),
+        }
+    }
+
+    /// Whether a single `:` follows `from` on its line, as in `c ? a : b`.
+    fn colon_follows(&self, from: usize) -> bool {
+        let end = self.run_while(from, |b| b != b'\n' && b != b'\r');
+        (from..end).any(|i| {
+            self.at(i) == Some(b':')
+                && self.at(i + 1) != Some(b':')
+                && i.checked_sub(1).and_then(|p| self.at(p)) != Some(b':')
+        })
     }
 
     /// Whether nothing but spaces, tabs or a `//` comment follows `end`

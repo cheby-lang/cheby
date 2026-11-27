@@ -1,0 +1,16 @@
+// @mode: parse-fail
+// @decisions: D-1934
+//! A type name in lower case that names no prelude type gets the rule, with
+//! the name in upper case and no edit.
+
+type Point {
+  Point(Int, Int),
+}
+
+fn origin() -> point {
+  Point(0, 0)
+}
+
+fn main() {
+  assert origin() == Point(0, 0)
+}

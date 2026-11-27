@@ -59,9 +59,10 @@ impl Drop for Scratch {
 /// compute.
 const MAIN: &str = "//! Root: prints what its modules compute.
 
+import std::io
+
 import app::other
 import app::util
-import std::io
 
 const greeting: String = \"warm\"
 
@@ -538,6 +539,7 @@ fn code_cache_records_identical_from_two_paths() {
 const WARM_MAIN: &str = "//! Root: prints what its modules give.
 
 import std::io
+
 import warm::numbers
 import warm::words
 
@@ -770,8 +772,9 @@ fn package_of(dir: &Path, name: &str, files: &[(&str, &str)]) -> PathBuf {
 /// `user::twice`, and only the root imports `std::io`.
 const ERROR_MAIN: &str = "//! Root: prints what `user` gives.
 
-import app::user
 import std::io
+
+import app::user
 
 fn main() {
   let m = user::twice(\"s\")
@@ -883,8 +886,9 @@ fn warm_run_error_edited_outside_the_root_prints_checks_diagnostics() {
 /// its functions.
 const NAMED_MAIN: &str = "//! Root: prints a size.
 
-import mask::lib
 import std::io
+
+import mask::lib
 
 fn main() {
   let n = lib::size(\"hello\")
@@ -1148,9 +1152,10 @@ fn dyn_values_of_two_modules_are_equal_on_a_run() {
         &scratch.path().join("dynid"),
         "//! Compares what two modules converted.
 
+import std::io
+
 import dynid::left
 import dynid::right
-import std::io
 
 /// Evaluated when the program is built, across the same two units.
 const at_build: Bool = left::plain(1) == right::plain(1)
@@ -1199,9 +1204,10 @@ fn a_function_inside_dyn_values_of_two_modules_panics() {
         &scratch.path().join("dynid"),
         "//! Reaches a function value.
 
+import std::io
+
 import dynid::left
 import dynid::right
-import std::io
 
 fn main() {
   let same = left::holder() == right::holder()
@@ -1234,12 +1240,13 @@ fn set_and_map_of_dyn_values_of_two_modules() {
         &scratch.path().join("dynid"),
         "//! A `Set` and a `Map` of what two modules converted.
 
-import dynid::kinds
-import dynid::left
-import dynid::right
 import std::io
 import std::map
 import std::set
+
+import dynid::kinds
+import dynid::left
+import dynid::right
 
 fn main() {
   let none: set::Set<dyn kinds::Any> = set::new()
@@ -1279,11 +1286,12 @@ fn types_of_one_printed_name_stay_apart_on_a_run() {
         &scratch.path().join("dynid"),
         "//! What must not compare equal.
 
+import std::io
+import std::set
+
 import dynid::kinds
 import dynid::left
 import dynid::right
-import std::io
-import std::set
 
 fn main() {
   let own = left::own(1) == right::own(1)

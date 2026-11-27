@@ -1,0 +1,16 @@
+// @decisions: D-1678, D-1931
+//! A module whose own type is called `Int` gets no fix that writes `Int`
+//! for `int`, and the help keeps its line in the message.
+
+type Int {
+  I,
+}
+
+fn twice(a: int) -> Int {
+  a
+}
+
+fn main() {
+  assert twice(I) == I
+}
+//> 9:13 noAction type names start with an upper-case letter; write `Int`

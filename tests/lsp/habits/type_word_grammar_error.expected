@@ -10,11 +10,11 @@
       "range": {
         "end": {
           "character": 15,
-          "line": 5
+          "line": 6
         },
         "start": {
           "character": 12,
-          "line": 5
+          "line": 6
         }
       },
       "severity": 1,
@@ -29,11 +29,11 @@
       "range": {
         "end": {
           "character": 7,
-          "line": 14
+          "line": 15
         },
         "start": {
           "character": 6,
-          "line": 14
+          "line": 15
         }
       },
       "severity": 1,
@@ -42,18 +42,18 @@
   ]
 }
 
-== src/main.cheby:6:13 action Write `Int`
+== src/main.cheby:7:13 action type names start with an upper-case letter; write `Int`
 {
   "actions": [
-    "Write `Int`",
+    "type names start with an upper-case letter; write `Int`",
     "Explain E0013"
   ],
   "answer": {
     "data": {
       "hash": "<hash>",
       "range": [
-        208,
-        208
+        252,
+        252
       ],
       "uri": "src/main.cheby"
     },
@@ -67,11 +67,11 @@
         "range": {
           "end": {
             "character": 15,
-            "line": 5
+            "line": 6
           },
           "start": {
             "character": 12,
-            "line": 5
+            "line": 6
           }
         },
         "severity": 1,
@@ -87,11 +87,11 @@
               "range": {
                 "end": {
                   "character": 15,
-                  "line": 5
+                  "line": 6
                 },
                 "start": {
                   "character": 12,
-                  "line": 5
+                  "line": 6
                 }
               }
             }
@@ -103,8 +103,9 @@
         }
       ]
     },
+    "isPreferred": true,
     "kind": "quickfix",
-    "title": "Write `Int`"
+    "title": "type names start with an upper-case letter; write `Int`"
   },
   "showMessage": []
 }

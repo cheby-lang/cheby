@@ -66,7 +66,7 @@ pub(super) fn arg_list(list: ArgList<'_>, out: &mut Vec<Diagnostic>) {
             .with_note(format!(
                 "`{callee_text}(_)` means exactly `{callee_text}` (D-245)"
             ))
-            .with_suggestion(
+            .with_fix(
                 format!("write `{callee_text}` instead"),
                 call.significant_span(),
                 callee_text,
@@ -100,7 +100,7 @@ pub(super) fn path_expr(expr: PathExpr<'_>, out: &mut Vec<Diagnostic>) {
         )
         .with_primary(turbofish, "")
         .with_note("interface functions are not generic (D-165)")
-        .with_suggestion("remove the type arguments", turbofish, ""),
+        .with_fix("remove the type arguments", turbofish, ""),
     );
 }
 
@@ -237,7 +237,7 @@ pub(super) fn tuple_expr(tuple: TupleExpr<'_>, out: &mut Vec<Diagnostic>) {
     out.push(
         Diagnostic::new(codes::SHORT_TUPLE, "a tuple has at least two elements")
             .with_primary(span, "")
-            .with_suggestion(
+            .with_fix(
                 "write the value alone; `(e)` is just `e` in parentheses",
                 span,
                 replacement,
@@ -307,5 +307,121 @@ pub(super) fn record_expr(record: RecordExpr<'_>, out: &mut Vec<Diagnostic>) {
             .with_primary(record.significant_span(), "")
             .with_help("to copy a value unchanged, use it as it is"),
         );
+    }
+}
+
+/// The most levels of function calls a call may have, itself counted
+/// (D-1954): `f(g(h(x)))` is three.
+const CALL_DEPTH: usize = 3;
+
+/// W0015: function calls nested more than [`CALL_DEPTH`] deep, as in
+/// `f(g(h(i(x))))` (§13.8, D-1954). A call's depth is one more than the
+/// deepest function call in its arguments. A constructor call such as
+/// `Ok(…)` adds no level, though the calls in its arguments count, and a
+/// block, a closure, a local function and a `case` start again at zero:
+/// what they hold is not one expression read inside out. A pipeline's
+/// stages are not nested in each other, so a pipeline is how such a chain
+/// is written.
+///
+/// One warning for each outermost call, on the first call at the level
+/// past the limit.
+pub(super) fn call_expr(call: CallExpr<'_>, out: &mut Vec<Diagnostic>) {
+    if !is_function_call(call) || enclosed_by_function_call(call) {
+        return;
+    }
+    let mut deepest = 0;
+    let mut past = None;
+    levels(call.syntax(), 0, &mut |inner, level| {
+        deepest = deepest.max(level);
+        if level == CALL_DEPTH.saturating_add(1) && past.is_none() {
+            past = Some(inner);
+        }
+    });
+    let Some(past) = past else {
+        return;
+    };
+    out.push(
+        Diagnostic::new(
+            codes::NESTED_CALLS,
+            format!("function calls are nested {deepest} deep"),
+        )
+        .with_primary(past.significant_span(), "this call is the fourth level")
+        .with_note(
+            "function calls may nest three deep, as in `f(g(h(x)))`; constructors do not count",
+        )
+        .with_help("write a pipeline with `|>`, or bind an inner call to a name with `let`"),
+    );
+}
+
+/// Whether `call` calls a function: its callee is not a path that ends
+/// in a constructor's name, which starts with an upper-case letter.
+fn is_function_call(call: CallExpr<'_>) -> bool {
+    let constructor = match call.callee() {
+        Some(Expr::Path(path)) => path
+            .path()
+            .and_then(|p| {
+                p.syntax()
+                    .tokens()
+                    .rfind(|t| !t.kind().is_trivia() && t.kind() != SyntaxKind::NEWLINE)
+            })
+            .is_some_and(|last| last.kind() == SyntaxKind::UPPER_IDENT),
+        Some(_) | None => false,
+    };
+    !constructor
+}
+
+/// Whether `kind` starts the count of nested calls again: its calls are
+/// statements and branches of their own, not arguments read inside out.
+const fn starts_again(kind: SyntaxKind) -> bool {
+    matches!(
+        kind,
+        SyntaxKind::BLOCK | SyntaxKind::CLOSURE | SyntaxKind::LOCAL_FN | SyntaxKind::CASE_EXPR
+    )
+}
+
+/// Whether a function call's argument holds `call`, with nothing that
+/// [`starts_again`] between them: then that call reports the chain.
+fn enclosed_by_function_call(call: CallExpr<'_>) -> bool {
+    let mut inner = call.syntax();
+    for outer in call.syntax().ancestors().skip(1) {
+        if starts_again(outer.kind()) {
+            return false;
+        }
+        if inner.kind() == SyntaxKind::ARG_LIST
+            && CallExpr::cast(outer).is_some_and(is_function_call)
+        {
+            return true;
+        }
+        inner = outer;
+    }
+    false
+}
+
+/// Calls `visit` with every function call in `node` and its level,
+/// where `node` itself stands at `level`: a function call is one level
+/// above the function call whose argument holds it. A call in a callee,
+/// as in `f(x)(y)`, is at the callee's own level.
+fn levels<'t>(
+    node: crate::SyntaxNode<'t>,
+    level: usize,
+    visit: &mut dyn FnMut(CallExpr<'t>, usize),
+) {
+    let here = match CallExpr::cast(node) {
+        Some(call) if is_function_call(call) => {
+            let here = level.saturating_add(1);
+            visit(call, here);
+            Some(here)
+        }
+        Some(_) | None => None,
+    };
+    for child in node.children() {
+        if starts_again(child.kind()) {
+            continue;
+        }
+        let within = match here {
+            Some(here) if child.kind() == SyntaxKind::ARG_LIST => here,
+            Some(_) | None => level,
+        };
+        levels(child, within, visit);
     }
 }

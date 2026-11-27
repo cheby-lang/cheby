@@ -13,7 +13,7 @@
 //! - [`exprs`]: holes (E0026, E0027), pipes (E0028), chained comparisons
 //!   (E0029), one-element tuples (E0030), record updates (E0031), type
 //!   arguments on interface functions (E0023), negative literals with a
-//!   space after the `-` (E0056).
+//!   space after the `-` (E0056), and calls nested too deep (W0015).
 //! - [`patterns`]: tuple patterns (E0030), rests (E0032), float and
 //!   interpolated patterns (E0033, E0034), negative literals with a space
 //!   after the `-` (E0056), pattern shapes (E0013).
@@ -75,6 +75,7 @@ fn check_node(node: SyntaxNode<'_>, out: &mut Vec<Diagnostic>) {
         SyntaxKind::LET_STMT => run(node, items::let_stmt, out),
         SyntaxKind::USE_STMT => run(node, items::use_stmt, out),
         SyntaxKind::ARG_LIST => run(node, exprs::arg_list, out),
+        SyntaxKind::CALL_EXPR => run(node, exprs::call_expr, out),
         SyntaxKind::PATH_EXPR => run(node, exprs::path_expr, out),
         SyntaxKind::BIN_EXPR => run(node, exprs::bin_expr, out),
         SyntaxKind::PREFIX_EXPR => run(node, exprs::prefix_expr, out),
@@ -138,7 +139,7 @@ fn spaced_negative_literal(node: SyntaxNode<'_>, gap: TextRange, out: &mut Vec<D
         )
         .with_primary(span, "")
         .with_note(explanation)
-        .with_suggestion("remove the space", span, "")
+        .with_fix("remove the space", span, "")
     } else {
         Diagnostic::new(
             codes::SPACED_NEGATIVE_LITERAL,

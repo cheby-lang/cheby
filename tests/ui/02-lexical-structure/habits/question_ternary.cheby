@@ -1,0 +1,9 @@
+// @mode: parse-fail
+// @decisions: D-1930
+//! The conditional operator `? :` gets the help to use `case`.
+
+fn main() {
+  let n = 1
+  let sign = n > 0 ? 1 : 0
+  assert sign == 1
+}

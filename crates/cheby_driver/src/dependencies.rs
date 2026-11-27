@@ -82,6 +82,15 @@ impl PackageNames {
         Self { packages }
     }
 
+    /// The keys of the root package's `[dependencies]`, each with the first
+    /// segment of the module paths of the package it names.
+    pub(crate) fn root_keys(&self) -> impl Iterator<Item = (&str, &str)> {
+        self.packages.first().into_iter().flat_map(|(_, _, keys)| {
+            keys.iter()
+                .map(|(key, identity)| (key.as_str(), identity.as_str()))
+        })
+    }
+
     /// The package that `first` names in a module of `from`, and the first
     /// segment of its module paths. `std` is not among them.
     pub(crate) fn find(&self, from: PackageId, first: &str) -> Option<(PackageId, &str)> {

@@ -28,6 +28,7 @@
 //! edge to them. No phase function is re-exported (`resolve_module`,
 //! `check_bodies*`, `build_interface`): only the driver runs phases.
 
+mod api;
 mod backend_query;
 mod inputs;
 mod plain;
@@ -62,6 +63,7 @@ pub use cheby_iface::{
     interface_fns, item_signature, missing_imports, structure_visible,
 };
 pub use cheby_package::{ModulePath, Target, Targets};
+pub use cheby_resolve::std_alias;
 pub use cheby_resolve::{
     BodyRes, ImportItemRequest, ImportRequest, ImportTarget, ItemDef, ItemHelp, LocalDecl,
     LocalKind, MissingItem, ModuleScope, Res, ResolvedModule, ScopeEntry, ScopeSource, StdItemName,
@@ -79,6 +81,7 @@ pub use cheby_types::{ModuleRefs, TypesInput, infer, thir};
 
 pub use crate::cache::Hash128;
 pub use crate::std_lib::{item_names as std_item_names, items_of as std_items_of};
+pub use api::{ApiIndex, ApiItem, ApiModule, ApiOrigin, api_index};
 pub use backend_query::{
     BackendError, BackendFile, BackendJob, BackendRequest, BackendResult, ConstDiagnostic,
     ConstValue, ConstantsOut, FrontOutcome, Section, backend_query, cut_text,

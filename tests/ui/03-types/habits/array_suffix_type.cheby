@@ -1,0 +1,11 @@
+// @mode: parse-fail
+// @decisions: D-1932
+//! A list type written `Int[]` gets the help to write `List<Int>`.
+
+fn count(xs: Int[]) -> Int {
+  1
+}
+
+fn main() {
+  assert count([1]) == 1
+}

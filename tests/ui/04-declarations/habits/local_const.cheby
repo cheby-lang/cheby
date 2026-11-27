@@ -1,0 +1,9 @@
+// @mode: parse-fail
+// @decisions: D-1932, D-1931
+//! A `const` inside a body ends the body (E0015), and gets the help to write
+//! `let`, with an edit.
+
+fn main() {
+  const limit = 3
+  assert limit == 3
+}

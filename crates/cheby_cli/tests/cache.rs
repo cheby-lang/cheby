@@ -84,7 +84,7 @@ fn package(scratch: &Scratch) -> PathBuf {
     .unwrap();
     std::fs::write(
         dir.join("src/main.cheby"),
-        "//! Root.\n\nimport app::greet\nimport std::io\n\n\
+        "//! Root.\n\nimport std::io\n\nimport app::greet\n\n\
          fn main() {\n  let unused = 1\n  io::println(greet::hello(\"cache\"))\n}\n",
     )
     .unwrap();

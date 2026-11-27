@@ -16,13 +16,14 @@
 //! brought. `main` checks both with `assert`, which is also allowed
 //! outside tests.
 
-import bank_accounts::account
-import bank_accounts::bank
-import bank_accounts::money
 import std::fiber
 import std::io
 import std::list
 import std::result
+
+import bank_accounts::account
+import bank_accounts::bank
+import bank_accounts::money
 
 /// The customers, in their order around the circle.
 const owners: List<String> = ["Ada", "Grace", "Alan", "Edsger", "Barbara"]

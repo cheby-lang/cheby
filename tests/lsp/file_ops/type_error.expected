@@ -10,11 +10,11 @@
       "range": {
         "end": {
           "character": 31,
-          "line": 13
+          "line": 14
         },
         "start": {
           "character": 15,
-          "line": 13
+          "line": 14
         }
       },
       "relatedInformation": [
@@ -23,11 +23,11 @@
             "range": {
               "end": {
                 "character": 12,
-                "line": 13
+                "line": 14
               },
               "start": {
                 "character": 9,
-                "line": 13
+                "line": 14
               }
             },
             "uri": "src/main.cheby"
@@ -52,11 +52,11 @@
             "range": {
               "end": {
                 "character": 18,
-                "line": 4
+                "line": 6
               },
               "start": {
                 "character": 7,
-                "line": 4
+                "line": 6
               }
             }
           },
@@ -65,11 +65,11 @@
             "range": {
               "end": {
                 "character": 18,
-                "line": 5
+                "line": 7
               },
               "start": {
                 "character": 7,
-                "line": 5
+                "line": 7
               }
             }
           },
@@ -78,11 +78,11 @@
             "range": {
               "end": {
                 "character": 13,
-                "line": 9
+                "line": 10
               },
               "start": {
                 "character": 9,
-                "line": 9
+                "line": 10
               }
             }
           },
@@ -91,11 +91,11 @@
             "range": {
               "end": {
                 "character": 27,
-                "line": 9
+                "line": 10
               },
               "start": {
                 "character": 23,
-                "line": 9
+                "line": 10
               }
             }
           },
@@ -104,11 +104,11 @@
             "range": {
               "end": {
                 "character": 18,
-                "line": 11
+                "line": 12
               },
               "start": {
                 "character": 14,
-                "line": 11
+                "line": 12
               }
             }
           },
@@ -117,11 +117,11 @@
             "range": {
               "end": {
                 "character": 19,
-                "line": 13
+                "line": 14
               },
               "start": {
                 "character": 15,
-                "line": 13
+                "line": 14
               }
             }
           }

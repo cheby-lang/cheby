@@ -8,11 +8,12 @@
 //! (D-137). The whole file runs in one transaction, so a database is made
 //! completely or not at all.
 
-import sql
 import std::env
 import std::io
 import std::option
 import std::result
+
+import sql
 
 fn main() -> Result<Nil, SetupError> {
   use url <- result::try(option::to_result(env::get("DATABASE_URL"), MissingDatabaseUrl))

@@ -1,0 +1,9 @@
+// @mode: parse-fail
+// @decisions: D-1930
+//! Go's `package main` gets the help that each file is a module.
+
+package main
+
+fn main() {
+  assert 1 == 1
+}

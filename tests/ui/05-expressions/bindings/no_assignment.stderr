@@ -3,4 +3,6 @@ error[E0013]: expected a line break or `}`, found `=`
   |
 7 |   count = 2
   |         ^
+  |
+  = help: values are immutable; bind a new name, such as `let count_2 = …`
 

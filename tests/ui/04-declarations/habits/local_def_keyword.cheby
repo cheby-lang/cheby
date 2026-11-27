@@ -1,0 +1,10 @@
+// @mode: parse-fail
+// @decisions: D-1930, D-1931
+//! `def` before a local function gets the help to write `fn`.
+
+fn main() {
+  def twice(n: Int) -> Int {
+    n * 2
+  }
+  assert twice(1) == 2
+}

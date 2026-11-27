@@ -1,0 +1,14 @@
+error[E0013]: expected `,` or `)`, found `:`
+  --> tests/ui/05-expressions/habits/typed_binding_argument.cheby:12:6
+   |
+12 |     n: Int = 1,
+   |      ^
+
+error[E0015]: unclosed `(`
+  --> tests/ui/05-expressions/habits/typed_binding_argument.cheby:12:12
+   |
+11 |   let n = twice(
+   |                - this `(` is never closed
+12 |     n: Int = 1,
+   |            ^ expected `)`
+

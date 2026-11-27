@@ -1,4 +1,4 @@
-// @decisions: D-1388, D-1393, D-1148, D-1736, D-1744
+// @decisions: D-1388, D-1393, D-1953, D-1736, D-1744
 // @newErrors: E0047
 //! E0018 on two imports after an item: either one's fix moves both into
 //! the import block, in `cheby fmt`'s order.

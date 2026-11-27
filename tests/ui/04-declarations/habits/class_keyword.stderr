@@ -1,0 +1,8 @@
+error[E0013]: expected an item, found identifier
+ --> tests/ui/04-declarations/habits/class_keyword.cheby:5:1
+  |
+5 | class Point {
+  | ^^^^^
+  |
+  = help: Cheby has no `class`; use `type`
+

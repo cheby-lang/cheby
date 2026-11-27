@@ -6,8 +6,9 @@
 
 use super::{List, comma_list, path};
 use crate::SyntaxKind::{
-    BOUND_LIST, COLON2, DYN_KW, DYN_TYPE, FN_KW, FN_TYPE, INTERFACE_REF, L_PAREN, LOWER_IDENT, LT,
-    PATH_TYPE, PLUS, THIN_ARROW, TUPLE_TYPE, TYPE_ARG_LIST, TYPE_LIST, UPPER_IDENT,
+    BOUND_LIST, COLON, COLON2, DYN_KW, DYN_TYPE, FN_KW, FN_TYPE, INTERFACE_REF, L_PAREN,
+    LOWER_IDENT, LT, PATH_TYPE, PLUS, THIN_ARROW, TUPLE_TYPE, TYPE_ARG_LIST, TYPE_LIST,
+    UPPER_IDENT,
 };
 use crate::parser::recovery::{EXPR_RECOVERY, TYPE_FIRST};
 use crate::parser::{CompletedMarker, Parser};
@@ -71,6 +72,16 @@ pub(super) fn type_(p: &mut Parser<'_>) -> Option<CompletedMarker> {
 fn path_type(p: &mut Parser<'_>) -> CompletedMarker {
     let m = p.start();
     if p.at(LOWER_IDENT) && !(p.nth_at(1, COLON2) && p.nth_at(2, UPPER_IDENT)) {
+        // A type written in lower case, as `int` or `i32` (D-1934). A name
+        // followed by `:` is a field or parameter written where a type
+        // belongs, as in `P(x: Int)`, not a type, and one followed by `::`
+        // starts a path that the edit of one word would not fix.
+        if !p.nth_at(1, COLON) && !p.nth_at(1, COLON2) {
+            match crate::parser::habits::type_word(p.current_text()) {
+                (help, Some(to)) => p.suggest_at_current(help, to),
+                (help, None) => p.help_at_current(help),
+            }
+        }
         p.expected("a type");
     }
     path(p, false);

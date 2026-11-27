@@ -338,7 +338,7 @@ const UTIL: &str = "//! Util.\n\npub fn foo() -> Int {\n  1\n}\n";
 /// the qualified segment change.
 #[test]
 fn renaming_an_item_keeps_import_aliases_and_writes_the_qualified_segment() {
-    let main = "import app::util::{foo as bar}\nimport app::other\n\nfn main() {\n  assert bar() + other::twice() == 3\n}\n";
+    let main = "import app::other\nimport app::util::{foo as bar}\n\nfn main() {\n  assert bar() + other::twice() == 3\n}\n";
     let other = "//! Other.\n\nimport app::util\n\npub fn twice() -> Int {\n  util::foo() + util::foo()\n}\n";
     let util = UTIL.replace("fn foo", "fn ‸foo");
     let (case, plan) = plan(
@@ -631,7 +631,7 @@ fn syntax_errors_gate_by_the_reach_of_the_symbol() {
 /// D-1390: an item needs no unresolved path of its name in the package.
 #[test]
 fn an_unresolved_path_of_the_old_name_refuses_an_item() {
-    let main = "import app::util\nimport app::caller\n\nfn main() {\n  assert util::foo() == caller::call()\n}\n";
+    let main = "import app::caller\nimport app::util\n\nfn main() {\n  assert util::foo() == caller::call()\n}\n";
     let caller = "//! Caller.\n\npub fn call() -> Int {\n  foo()\n}\n";
     let util = UTIL.replace("fn foo", "fn ‸foo");
     assert_eq!(
@@ -701,7 +701,7 @@ fn an_item_renames_a_punned_field_with_an_unknown_receiver() {
 /// counts against an item of its name.
 #[test]
 fn a_punned_field_unknown_both_ways_refuses_an_item() {
-    let main = "import app::util\nimport app::caller\n\nfn main() {\n  assert util::x() == caller::call()\n}\n";
+    let main = "import app::caller\nimport app::util\n\nfn main() {\n  assert util::x() == caller::call()\n}\n";
     let caller = "//! Caller.\n\ntype Holder<T> {\n  item: T,\n}\n\ntype Point {\n  x: Int,\n  y: Int,\n}\n\nfn empty<T>(_items: List<T>) -> Holder<T> {\n  panic as \"never called\"\n}\n\npub fn call() -> Int {\n  let holder = empty([])\n  let moved = Holder { ..holder, item.x }\n  let typed: Holder<Point> = moved\n  typed.item.y\n}\n";
     let util = UTIL.replace("fn foo", "fn ‸x");
     assert_eq!(

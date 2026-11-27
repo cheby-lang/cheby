@@ -1,0 +1,8 @@
+// @mode: parse-fail
+// @decisions: D-1930, D-1933
+//! `**` gets the help to call `int::pow` or `float::pow`.
+
+fn main() {
+  let eight = 2 ** 3
+  assert eight == 8
+}

@@ -1,0 +1,9 @@
+warning[W0014]: the imports are not in order
+ --> tests/ui/13-tooling/warnings/import_order_unsorted.cheby:5:1
+  |
+5 | import std::list
+  | ^^^^^^^^^^^^^^^^ `std::io` comes before this import
+  |
+  = note: imports come in up to three blocks, each sorted by path: the standard library's, other packages', then the package's own
+  = help: put the imports in order, as `cheby fmt` does
+

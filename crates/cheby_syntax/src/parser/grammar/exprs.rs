@@ -355,7 +355,7 @@ fn paren_or_tuple(p: &mut Parser<'_>) -> CompletedMarker {
         // The help's edit writes `Nil` in place of `()` (D-1689).
         let diag = Diagnostic::new(codes::SHORT_TUPLE, "`()` is not a value")
             .with_primary(p.span(range), "")
-            .with_suggestion(
+            .with_fix(
                 "the value that carries no information is `Nil`",
                 p.span(range),
                 "Nil",
@@ -396,8 +396,30 @@ fn arg_list(p: &mut Parser<'_>) {
             hole(p);
         } else {
             expr(p);
+            closure_arrow(p);
         }
     });
+}
+
+/// The help of `x => x + 1`, a closure in another language's form, for the
+/// error that the caller reports at the `=>` after an expression (D-1932).
+pub(super) fn closure_arrow(p: &mut Parser<'_>) {
+    if p.at(FAT_ARROW) {
+        p.help_at_current(crate::parser::habits::CLOSURE_HELP);
+    }
+}
+
+/// The help and edit of `->` or `:` where a `case` arm needs `=>`
+/// (D-1932). `:` gets it only in an arm that starts its line, as Python's
+/// `case 1:` does: in `case Point { x: 0 } {` the `{` of the record
+/// opened the arms, and `x` is no arm the user wrote.
+fn arm_arrow(p: &mut Parser<'_>, own_line: bool) {
+    if p.at(THIN_ARROW) {
+        p.suggest_at_current(crate::parser::habits::ARM_ARROW_HELP, "=>");
+    } else if p.at(COLON) && own_line {
+        let to = if p.touches_previous() { " =>" } else { "=>" };
+        p.suggest_at_current(crate::parser::habits::ARM_ARROW_HELP, to);
+    }
 }
 
 /// `fn(params) -> T { … }` (§5.7). Parameters are patterns (D-242).
@@ -409,6 +431,7 @@ fn closure(p: &mut Parser<'_>) -> CompletedMarker {
     } else {
         p.expected("`(`");
     }
+    super::items::return_colon(p);
     if p.at(THIN_ARROW) {
         ret_type(p);
     }
@@ -479,6 +502,7 @@ fn block_subject(p: &mut Parser<'_>) {
 
 /// `pattern, … when guard => expr`.
 fn case_arm(p: &mut Parser<'_>) {
+    let own_line = p.at_line_start();
     let m = p.start();
     pattern(p);
     while p.eat(COMMA) {
@@ -490,6 +514,7 @@ fn case_arm(p: &mut Parser<'_>) {
         expr(p);
         guard.complete(p, GUARD);
     }
+    arm_arrow(p, own_line);
     if p.expect(FAT_ARROW) {
         expr(p);
     }
@@ -499,12 +524,14 @@ fn case_arm(p: &mut Parser<'_>) {
 /// `condition => expr` or `_ => expr`. A bare `_` here is a token, not a
 /// hole. Whether the last arm is `_` is checked by validation (E0035).
 fn cond_arm(p: &mut Parser<'_>) {
+    let own_line = p.at_line_start();
     let m = p.start();
     if p.at(UNDERSCORE) && p.nth_at(1, FAT_ARROW) {
         p.bump(UNDERSCORE);
     } else {
         expr(p);
     }
+    arm_arrow(p, own_line);
     if p.expect(FAT_ARROW) {
         expr(p);
     }

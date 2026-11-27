@@ -1,0 +1,8 @@
+error[E0013]: expected `,` or `)`, found `[`
+ --> tests/ui/03-types/habits/array_suffix_type.cheby:5:17
+  |
+5 | fn count(xs: Int[]) -> Int {
+  |                 ^
+  |
+  = help: a list type is written `List<T>`, such as `List<Int>`
+

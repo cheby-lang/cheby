@@ -79,8 +79,8 @@ use crate::features::ide::actions::{
     Action, ActionCommand, ActionId, ActionKind, DiagRef, FixCx, Provide, Resolve, formatted,
     registry,
 };
-use crate::features::ide::habits;
 use crate::features::ide::rename::{self, RenameError};
+use crate::features::ide::{habits, package_name};
 use crate::features::{Analyzed, HandlerOutput, PublishedReport, RequestCx, RequestError, params};
 use crate::server::Effect;
 
@@ -501,7 +501,15 @@ fn wire(
         fixed == Some(codes::SHADOWED_NAME) || matches!(action.data, Some(ActionId::Rename { .. }));
     let (edit, effects) = match action.edit.filter(|e| !e.is_empty() && !disabled) {
         Some(edits) => {
-            let edits = formatted(frame.doc.text, &frame.doc.path, edits, renames, cx.cancel);
+            let package = package_name(&analyzed.snapshot);
+            let edits = formatted(
+                frame.doc.text,
+                &frame.doc.path,
+                package.as_deref(),
+                edits,
+                renames,
+                cx.cancel,
+            );
             // A cancel during the widening leaves the raw edits, which
             // the cancelled request must not answer with (D-1738).
             cx.cancel.check()?;
@@ -617,7 +625,15 @@ fn resolve_with(
             }
             cx.cancel.check()?;
         }
-        let edits = formatted(frame.doc.text, &frame.doc.path, edits, renames, cx.cancel);
+        let package = package_name(&analyzed.snapshot);
+        let edits = formatted(
+            frame.doc.text,
+            &frame.doc.path,
+            package.as_deref(),
+            edits,
+            renames,
+            cx.cancel,
+        );
         cx.cancel.check()?;
         line_breaks(frame.doc.text, &frame.doc.path, edits)
     } else {

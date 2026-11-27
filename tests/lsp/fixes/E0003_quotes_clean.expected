@@ -19,25 +19,6 @@
       },
       "severity": 1,
       "source": "cheby"
-    },
-    {
-      "code": "E0003",
-      "codeDescription": {
-        "href": "https://github.com/cheby-lang/cheby/blob/main/docs/diagnostics/E0003.md"
-      },
-      "message": "unexpected character `'`\nhelp: strings use double quotes, such as \"text\"",
-      "range": {
-        "end": {
-          "character": 15,
-          "line": 5
-        },
-        "start": {
-          "character": 14,
-          "line": 5
-        }
-      },
-      "severity": 1,
-      "source": "cheby"
     }
   ]
 }

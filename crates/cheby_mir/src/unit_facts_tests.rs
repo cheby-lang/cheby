@@ -10,6 +10,7 @@ use crate::{MirModule, UnitKind};
 /// tail-calls it with a non-constant from its test.
 const MAIN: &str = "import std::io
 import std::list
+
 import app::util
 
 fn main() {

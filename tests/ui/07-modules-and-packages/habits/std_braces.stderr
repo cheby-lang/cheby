@@ -1,0 +1,8 @@
+error[E0039]: there is no module `std`
+ --> tests/ui/07-modules-and-packages/habits/std_braces.cheby:6:8
+  |
+6 | import std::{io, list}
+  |        ^^^ no such module
+  |
+  = help: `std` is a package, not a module; import each module on its own line, such as `import std::io`
+

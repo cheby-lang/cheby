@@ -10,11 +10,11 @@
       "range": {
         "end": {
           "character": 8,
-          "line": 7
+          "line": 8
         },
         "start": {
           "character": 6,
-          "line": 7
+          "line": 8
         }
       },
       "severity": 2,
@@ -32,11 +32,11 @@
       "range": {
         "end": {
           "character": 11,
-          "line": 8
+          "line": 9
         },
         "start": {
           "character": 6,
-          "line": 8
+          "line": 9
         }
       },
       "severity": 2,
@@ -54,11 +54,11 @@
       "range": {
         "end": {
           "character": 20,
-          "line": 8
+          "line": 9
         },
         "start": {
           "character": 14,
-          "line": 8
+          "line": 9
         }
       },
       "severity": 1,
@@ -67,7 +67,7 @@
   ]
 }
 
-== src/main.cheby:9:21 apply list::enumerate
+== src/main.cheby:10:21 apply list::enumerate
 {
   "item": {
     "additionalTextEdits": [
@@ -76,11 +76,11 @@
         "range": {
           "end": {
             "character": 0,
-            "line": 4
+            "line": 5
           },
           "start": {
             "character": 0,
-            "line": 4
+            "line": 5
           }
         }
       }
@@ -104,18 +104,19 @@
       "range": {
         "end": {
           "character": 20,
-          "line": 8
+          "line": 9
         },
         "start": {
           "character": 14,
-          "line": 8
+          "line": 9
         }
       }
     }
   },
   "text": [
-    "// @decisions: D-1395, D-1148",
-    "//! The import joins the first block, sorted by its path in byte order.",
+    "// @decisions: D-1395, D-1953",
+    "//! The import joins the standard library's block, sorted by its path in",
+    "//! byte order.",
     "",
     "import std::io",
     "import std::list",

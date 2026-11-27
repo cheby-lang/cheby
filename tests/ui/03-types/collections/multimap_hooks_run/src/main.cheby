@@ -6,9 +6,10 @@
 //! A skipped hook would fall back to the structural form: the debug text
 //! would show the record's fields instead of `multimap::from_list([…])`.
 
-import app::stock
 import std::io
 import std::set
+
+import app::stock
 
 fn main() {
   let listed = stock::listed()

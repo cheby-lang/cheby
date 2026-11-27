@@ -35,7 +35,7 @@ use std::sync::Arc;
 
 use cheby_driver::analysis::codes::{self, Code};
 use cheby_driver::analysis::{
-    Diagnostic, FileLocation, FileReport, ModuleView, PlainDiagnostic, PlainEdit, PlainHelp,
+    DefId, Diagnostic, FileLocation, FileReport, ModuleView, PlainDiagnostic, PlainEdit, PlainHelp,
     Snapshot, TextRange, TextSize, builtin,
 };
 use cheby_syntax::{SyntaxKind, SyntaxNode};
@@ -217,8 +217,8 @@ impl FixCx<'_> {
 /// the module `view` of `snapshot`, becomes a quick fix (`generic`): it
 /// has edits, all in that file, so a help with an edit in another file
 /// keeps its line (D-1752); in a std checkout none of them writes `pub`
-/// (D-1706); none writes the prelude's `Nil` where the module hides it
-/// (D-1678); D-1661's escape of a brace leaves no grammar error (D-1742);
+/// (D-1706); none writes the prelude's `Nil`, or another name of
+/// [`PRELUDE_WORDS`], where the module hides it (D-1678, D-1931); D-1661's escape of a brace leaves no grammar error (D-1742);
 /// and E0006's help, whose fix on a used name is a rename checked on
 /// resolve (D-1741), only for a client that `resolve_edits` (D-1754). For a
 /// client that takes code-action literals its line then leaves the
@@ -242,8 +242,40 @@ pub(crate) fn offers_fix(
     let in_file = !help.edits.is_empty() && help.edits.iter().all(|edit| edit.path == path);
     let writes_pub = snapshot.is_std_checkout() && writes("pub");
     let writes_hidden_nil = writes("Nil") && hides_nil(snapshot, view);
-    in_file && !writes_pub && !writes_hidden_nil && !escape_breaks(view, help)
+    let writes_hidden = PRELUDE_WORDS
+        .iter()
+        .any(|&(word, def)| writes(word) && hides_prelude(snapshot, view, def, None));
+    in_file && !writes_pub && !writes_hidden_nil && !writes_hidden && !escape_breaks(view, help)
 }
+
+/// The prelude names that the habit helps write with their edits (D-1931),
+/// as `Int` for `int` or `True` for `true`, with the items they name. A
+/// help that writes one where the module hides it, with a type `Int` of
+/// its own, say, is no fix (D-1678).
+const PRELUDE_WORDS: &[(&str, DefId)] = &[
+    ("Int", builtin::INT),
+    ("Float", builtin::FLOAT),
+    ("String", builtin::STRING),
+    ("Bool", builtin::BOOL),
+    ("True", builtin::TRUE),
+    ("False", builtin::FALSE),
+    ("List", builtin::LIST),
+    ("Option", builtin::OPTION),
+    ("Result", builtin::RESULT),
+    ("Some", builtin::SOME),
+    ("None", builtin::NONE),
+    ("Ok", builtin::OK),
+    ("Err", builtin::ERR),
+    ("I8", builtin::I8),
+    ("I16", builtin::I16),
+    ("I32", builtin::I32),
+    ("I64", builtin::I64),
+    ("U8", builtin::U8),
+    ("U16", builtin::U16),
+    ("U32", builtin::U32),
+    ("U64", builtin::U64),
+    ("F32", builtin::F32),
+];
 
 /// Whether `help` is D-1661's escape of an interpolation's `{`, one `\`
 /// written before a `{` (D-1694), and the text with it applied keeps a
@@ -367,8 +399,9 @@ pub(crate) fn hides_nil(snapshot: &Snapshot, view: ModuleView<'_>) -> bool {
         || hides_prelude(snapshot, view, builtin::NIL_TY, None)
 }
 
-/// `edits`, all of the file at `path` whose text is `text`, in `cheby
-/// fmt`'s form on the lines they touch (D-1735): applied in memory, the
+/// `edits`, all of the file at `path` whose text is `text`, a file of
+/// the package named `package`, in `cheby fmt`'s form on the lines they
+/// touch (D-1735, D-1953): applied in memory, the
 /// formatter's hunks that touch them kept, and the result written as one
 /// replacement of what changed. The edits stay as they are when they
 /// already leave those lines formatted, when the file has a grammar error,
@@ -379,6 +412,7 @@ pub(crate) fn hides_nil(snapshot: &Snapshot, view: ModuleView<'_>) -> bool {
 pub(crate) fn formatted(
     text: &str,
     path: &Path,
+    package: Option<&str>,
     edits: Vec<PlainEdit>,
     renames: bool,
     cancel: &CancelToken,
@@ -414,7 +448,8 @@ pub(crate) fn formatted(
         return edits;
     };
     new.push_str(rest);
-    let Ok(Some(changes)) = format_touching_with(&new, &touched, AtCap::GiveUp, cancel) else {
+    let Ok(Some(changes)) = format_touching_with(&new, package, &touched, AtCap::GiveUp, cancel)
+    else {
         return edits;
     };
     if changes.is_empty() {

@@ -24,8 +24,9 @@
 //! bounded functions below also accept a `List<dyn Notifier>`, with
 //! `N` being `dyn Notifier`.
 
-import plugins::message
 import std::list
+
+import plugins::message
 
 /// A way to send a message to someone. It embeds `Show`, so a notifier
 /// must also have a `show` that describes where it sends messages, and

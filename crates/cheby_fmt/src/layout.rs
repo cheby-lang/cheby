@@ -21,6 +21,8 @@
 
 use std::collections::BTreeMap;
 
+use cheby_diag::TextSize;
+use cheby_syntax::imports::import_section;
 use cheby_syntax::{SyntaxElement, SyntaxKind, SyntaxNode, SyntaxToken};
 
 use crate::doc::Doc;
@@ -140,6 +142,9 @@ struct ListItem<'t> {
 /// Formats a file's tree into a document.
 pub(crate) struct Formatter<'t> {
     pub(crate) src: Source<'t>,
+    /// The name of the file's package, which tells its own modules'
+    /// imports from other packages' (D-1953).
+    package: Option<&'t str>,
     pub(crate) coverage: Coverage,
 }
 
@@ -154,28 +159,6 @@ pub(crate) const fn is_comment(kind: SyntaxKind) -> bool {
 /// A comment's text without trailing whitespace.
 pub(crate) fn comment_text(token: SyntaxToken<'_>) -> &str {
     token.text().trim_end_matches([' ', '\t', '\r'])
-}
-
-/// Whether `kind` is neither trivia nor a line break.
-const fn is_significant(kind: SyntaxKind) -> bool {
-    !kind.is_trivia() && !matches!(kind, SyntaxKind::NEWLINE)
-}
-
-/// The text of `node`'s significant tokens, joined without spaces.
-fn compact_text(node: SyntaxNode<'_>) -> String {
-    node.tokens()
-        .filter(|t| is_significant(t.kind()))
-        .map(SyntaxToken::text)
-        .collect()
-}
-
-/// The text of `node`'s significant tokens, joined by single spaces.
-fn spaced_text(node: SyntaxNode<'_>) -> String {
-    node.tokens()
-        .filter(|t| is_significant(t.kind()))
-        .map(SyntaxToken::text)
-        .collect::<Vec<_>>()
-        .join(" ")
 }
 
 /// Whether the printer puts no space before a header part of this kind.
@@ -300,9 +283,10 @@ const fn is_tuple(kind: SyntaxKind) -> bool {
 }
 
 impl<'t> Formatter<'t> {
-    pub(crate) const fn new(src: Source<'t>) -> Self {
+    pub(crate) const fn new(src: Source<'t>, package: Option<&'t str>) -> Self {
         Self {
             src,
+            package,
             coverage: Coverage {
                 laid_out: BTreeMap::new(),
                 verbatim: BTreeMap::new(),
@@ -311,14 +295,13 @@ impl<'t> Formatter<'t> {
         }
     }
 
-    /// The whole file: its entries one per line, imports sorted within
-    /// their blocks, single blank lines kept, and one final line break.
+    /// The whole file: its entries one per line, the imports in their
+    /// blocks (D-1953), single blank lines kept, and one final line break.
     /// D-1147: a file with nothing but whitespace formats to
     /// the empty file, without a line break.
     pub(crate) fn file(&mut self, root: SyntaxNode<'t>) -> Doc {
         self.coverage.laid_out(root.kind());
-        let mut entries = entries(root, None);
-        sort_import_blocks(&mut entries);
+        let entries = group_imports(entries(root, None), root, self.package);
         if entries.is_empty() {
             return Doc::Nil;
         }
@@ -1010,57 +993,70 @@ pub(crate) fn entries<'t>(
     out
 }
 
-/// Sorts each block of imports by its module path's text in byte order
-/// (D-1030). D-1148: a block is a run of imports on
-/// consecutive lines with no blank line or comment between or after them;
-/// equal paths are ordered by the import's whole text.
-fn sort_import_blocks(entries: &mut [Entry<'_>]) {
-    let is_import = |e: &Entry<'_>| {
-        matches!(e.elem, SyntaxElement::Node(n)
-            if n.kind() == SyntaxKind::IMPORT_DECL
-                && !n.tokens().any(|t| is_comment(t.kind())))
+/// Puts the imports before the first item into `cheby fmt`'s order
+/// (D-1953): at most three blocks, the standard library's, other
+/// packages' and the package's own, each sorted by module path in byte
+/// order, with one blank line between two blocks. A comment travels with
+/// its import (`cheby_syntax::imports`). Imports that follow an item
+/// stay where they are.
+fn group_imports<'t>(
+    entries: Vec<Entry<'t>>,
+    root: SyntaxNode<'t>,
+    package: Option<&str>,
+) -> Vec<Entry<'t>> {
+    let Some(section) = import_section(root, package) else {
+        return entries;
     };
-    let mut i = 0;
-    while i < entries.len() {
-        let Some(first) = entries.get(i) else { break };
-        if !is_import(first) {
-            i = i.saturating_add(1);
+    let at = |offset: TextSize| {
+        entries
+            .iter()
+            .position(|e| e.elem.text_range().start() == offset)
+    };
+    let range = section.range();
+    let (Some(first), Some(last)) = (
+        at(range.start()),
+        entries
+            .iter()
+            .rposition(|e| e.elem.text_range().end() == range.end()),
+    ) else {
+        return entries;
+    };
+    let lead = entries.get(first).map_or(0, |e| e.newlines);
+    let order = section.order();
+    let mut grouped: Vec<Entry<'t>> = Vec::with_capacity(entries.len());
+    for (position, index) in order.iter().enumerate() {
+        let Some(chunk) = section.chunks().get(*index) else {
             continue;
-        }
-        let mut end = i.saturating_add(1);
-        while let Some(next) = entries.get(end) {
-            if next.newlines == 1 && is_import(next) {
-                end = end.saturating_add(1);
-            } else {
-                break;
-            }
-        }
-        // An import followed by a comment on its own line keeps its place.
-        if entries
-            .get(end)
-            .is_some_and(|e| e.newlines == 0 && is_comment(e.elem.kind()))
-        {
-            end = end.saturating_sub(1);
-        }
-        if let Some(block) = entries.get_mut(i..end)
-            && block.len() > 1
-        {
-            let first_newlines = block.first().map_or(0, |e| e.newlines);
-            block.sort_by_cached_key(|e| match e.elem {
-                SyntaxElement::Node(n) => (import_path(n), spaced_text(n)),
-                SyntaxElement::Token(_) => (String::new(), String::new()),
+        };
+        let mut newlines = if position == 0 {
+            lead
+        } else if section.starts_block(&order, position) {
+            2
+        } else {
+            1
+        };
+        for comment in &chunk.leading {
+            grouped.push(Entry {
+                elem: SyntaxElement::Token(*comment),
+                newlines,
             });
-            for (k, e) in block.iter_mut().enumerate() {
-                e.newlines = if k == 0 { first_newlines } else { 1 };
-            }
+            newlines = 1;
         }
-        i = end.max(i.saturating_add(1));
+        grouped.push(Entry {
+            elem: SyntaxElement::Node(chunk.import),
+            newlines,
+        });
+        if let Some(comment) = chunk.trailing {
+            grouped.push(Entry {
+                elem: SyntaxElement::Token(comment),
+                newlines: 0,
+            });
+        }
     }
-}
-
-/// The text of an import's module path, such as `std::map`.
-fn import_path(node: SyntaxNode<'_>) -> String {
-    node.children()
-        .find(|c| c.kind() == SyntaxKind::MODULE_PATH)
-        .map_or_default(compact_text)
+    let mut out = entries;
+    let rest = out.split_off(last.saturating_add(1));
+    out.truncate(first);
+    out.extend(grouped);
+    out.extend(rest);
+    out
 }

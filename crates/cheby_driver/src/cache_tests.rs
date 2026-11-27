@@ -272,7 +272,7 @@ fn expect_log(all: &[&str], hits: &[&str]) -> Vec<String> {
 /// `c`'s interface through a value of `b` (a hidden read, D-955), and has
 /// an unused binding (W0002, with a suggested edit); `d` has a
 /// package-visible function nothing uses (W0005, `cheby check` only).
-const ROOT: &str = "//! Root.\n\nimport app::b\nimport std::io\n\n\
+const ROOT: &str = "//! Root.\n\nimport std::io\n\nimport app::b\n\n\
     fn text() -> String {\n  let thing = b::make()\n  let unused = 2\n  \"{thing}\"\n}\n\n\
     fn main() {\n  io::println(text())\n}\n";
 const B: &str = "//! B.\n\nimport app::c\n\npub type Wrapper { inner: c::Thing }\n\n\
@@ -438,7 +438,7 @@ fn cache_hit_moved_item() {
         &[
             (
                 "main.cheby",
-                "//! Root.\n\nimport app::a\nimport std::io\n\n\
+                "//! Root.\n\nimport std::io\n\nimport app::a\n\n\
                  fn main() {\n  let n = a::use_it()\n  io::println(\"{n}\")\n}\n",
             ),
             ("a.cheby", A),
@@ -535,7 +535,7 @@ fn cache_hit_moved_item_run() {
         &[
             (
                 "main.cheby",
-                "//! Root.\n\nimport app::a\nimport std::io\n\n\
+                "//! Root.\n\nimport std::io\n\nimport app::a\n\n\
                  fn main() {\n  let n = a::use_it()\n  io::println(\"{n}\")\n}\n",
             ),
             ("a.cheby", A),
@@ -1373,7 +1373,7 @@ fn cache_hit_lost_diagnostics_after_restart() {
         &[
             (
                 "main.cheby",
-                "//! App.\n\nimport std::io\nimport app::a\nimport app::x\n\n\
+                "//! App.\n\nimport std::io\n\nimport app::a\nimport app::x\n\n\
                  fn main() {\n  io::println(a::twice(\"x\"))\n  io::println(x::name())\n}\n",
             ),
             (
@@ -1414,7 +1414,7 @@ fn cache_hit_lost_diagnostics_and_artifact() {
         &[
             (
                 "main.cheby",
-                "//! App.\n\nimport std::io\nimport app::a\n\n\
+                "//! App.\n\nimport std::io\n\nimport app::a\n\n\
                  fn main() {\n  io::println(a::twice(\"x\"))\n}\n",
             ),
             (
@@ -1446,7 +1446,7 @@ fn cache_hit_lost_diagnostics_and_artifact() {
 /// so it prints `b`'s W0001 as a cold check does (D-268, D-965).
 #[test]
 fn cache_hit_phase_a_error_keeps_unparsed_warnings() {
-    let main = "//! Root.\n\nimport std::io\nimport app::b\n\n\
+    let main = "//! Root.\n\nimport std::io\n\nimport app::b\n\n\
                 fn main() {\n  let n = b::g()\n  io::println(\"{n}\")\n}\n";
     let b = "//! B.\n\npub fn g() -> Int {\n  let t: (Int, Int, Int, Int) = (1, 2, 3, 4)\n  \
              let (a, _, _, _) = t\n  a\n}\n";
@@ -1456,7 +1456,7 @@ fn cache_hit_phase_a_error_keeps_unparsed_warnings() {
     // An error in phase A of the root, `b` unchanged.
     f.write(
         "main.cheby",
-        "//! Root.\n\nimport std::io\nimport app::b\n\nfn main() {\n  io::println(\"{b::g()}\")\n}\n",
+        "//! Root.\n\nimport std::io\n\nimport app::b\n\nfn main() {\n  io::println(\"{b::g()}\")\n}\n",
     );
     let cold = f.cold_check();
     assert!(cold.contains("W0001") && cold.contains("E0012"), "{cold}");
@@ -1512,7 +1512,7 @@ fn constants_fixture(name: &str) -> Fixture {
         &[
             (
                 "main.cheby",
-                "//! Root.\n\nimport app::a\nimport app::c\nimport std::io\n\n\
+                "//! Root.\n\nimport std::io\n\nimport app::a\nimport app::c\n\n\
                  fn main() {\n  let n = a::limit + c::other()\n  io::println(\"{n}\")\n}\n",
             ),
             (
@@ -1691,7 +1691,7 @@ fn hint_empty_lost_hint_misses() {
 
 /// The root of the code cache-hit tests: it calls `util::check` and
 /// `other::twice`, never anything of `lone`.
-const HIT_MAIN: &str = "//! Root.\n\nimport app::other\nimport app::util\nimport std::io\n\n\
+const HIT_MAIN: &str = "//! Root.\n\nimport std::io\n\nimport app::other\nimport app::util\n\n\
     fn main() {\n  let ok = util::check(\"x\")\n  let n = other::twice(21)\n  io::println(\"{ok} {n}\")\n}\n";
 /// `check` is package-visible (a `pub` function never borrows, D-787) and
 /// only compares its parameter: it borrows it.

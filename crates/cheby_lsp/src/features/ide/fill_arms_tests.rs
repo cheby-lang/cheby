@@ -298,8 +298,8 @@ fn main() {
 
 const MORE: &str = "//! Many missing values.
 
-import app::shape as geo
 import app::make
+import app::shape as geo
 
 type Color {
   Red,

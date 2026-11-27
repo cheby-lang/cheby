@@ -134,6 +134,20 @@ pub struct TestProgram {
     threads: Option<usize>,
     /// The text of `--reuse-report`, empty without the flag.
     reuse_report: String,
+    /// How the results are written ([`TestProgram::set_report`]).
+    report: ReportStyle,
+}
+
+/// How `cheby test` writes its results (D-1946).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct ReportStyle {
+    /// `--format json`: a line of JSON for each test, with the output it
+    /// wrote and its failure, and one for the summary, in place of the
+    /// text report and the replay of the tests' output.
+    pub json: bool,
+    /// `--report-failures-only`: a passing test gets no line, and the
+    /// output it wrote is dropped.
+    pub failures_only: bool,
 }
 
 /// The stacks of a test run (D-660): each test's root fiber gets `main`,
@@ -216,6 +230,10 @@ pub struct TestReport {
     /// How long the tests ran, from the first start to the last test's
     /// line, compile excluded. Informative: it is never printed.
     pub run_time: Duration,
+    /// The std self-test's warnings in std modules, each rendered as
+    /// `cheby check` prints it, in module order and then by place. Any
+    /// of them fails the run (D-1955). `cheby test` leaves it empty.
+    pub warnings: Vec<String>,
 }
 
 /// Counts of one module or of a whole run.
@@ -254,12 +272,12 @@ impl TestReport {
         TestCounts::of(self.modules.iter().flat_map(|m| &m.tests))
     }
 
-    /// Whether every selected test passed (also when none was selected)
-    /// and no write failure ended the run.
+    /// Whether every selected test passed (also when none was selected),
+    /// no write failure ended the run, and std had no warning (D-1955).
     #[must_use]
     pub fn success(&self) -> bool {
         let counts = self.counts();
-        !self.terminated && counts.failed == 0 && counts.not_built == 0
+        !self.terminated && counts.failed == 0 && counts.not_built == 0 && self.warnings.is_empty()
     }
 
     /// The exit status: 0 when every selected test passed, 1 otherwise
@@ -269,12 +287,17 @@ impl TestReport {
         i32::from(!self.success())
     }
 
-    /// The whole report of the std self-test (D-542): a line per test and
-    /// per module or test that did not build, a block per failure, the
-    /// counts per module and in total, and the summary line.
+    /// The whole report of the std self-test (D-542): std's warnings, each
+    /// followed by an empty line (D-1955), a line per test and per module
+    /// or test that did not build, a block per failure, the counts per
+    /// module and in total, and the summary line.
     #[must_use]
     pub fn render(&self) -> String {
         let mut text = String::new();
+        for warning in &self.warnings {
+            text.push_str(warning);
+            text.push('\n');
+        }
         for module in &self.modules {
             if let Some(codes) = &module.not_built {
                 let _ = writeln!(text, "module {} did not build: {codes}", module.path);
@@ -317,6 +340,19 @@ impl TestReport {
         text
     }
 
+    /// The summary line of `--format json` (D-1946), with its line break.
+    fn json_summary(&self) -> String {
+        let c = self.counts();
+        cheby_diag::render_json_object(
+            "summary",
+            &[
+                ("passed", c.passed.to_string()),
+                ("failed", c.failed.saturating_add(c.not_built).to_string()),
+                ("filtered_out", self.filtered_out.to_string()),
+            ],
+        )
+    }
+
     /// `test result: ok. 3 passed; 0 failed; 1 filtered out` (D-541), with
     /// `FAILED` when a test failed or did not build, and a newline.
     fn summary(&self) -> String {
@@ -327,11 +363,51 @@ impl TestReport {
         } else {
             String::new()
         };
+        let warnings = match self.warnings.len() {
+            0 => String::new(),
+            1 => "1 warning; ".to_owned(),
+            n => format!("{n} warnings; "),
+        };
         format!(
-            "test result: {verdict}. {} passed; {} failed; {not_built}{} filtered out\n",
+            "test result: {verdict}. {} passed; {} failed; {not_built}{warnings}{} filtered out\n",
             c.passed, c.failed, self.filtered_out
         )
     }
+}
+
+/// A test's line of `--format json` (D-1946), with its line break:
+/// `{"type":"test","module":…,"name":…,"outcome":"passed"}`, with `failed`
+/// for a test that failed or did not build, then `stdout` and `stderr`
+/// with what the test wrote there, each left out when it wrote nothing,
+/// and `failure` with the text of the failure block. Bytes that are not
+/// UTF-8 become U+FFFD.
+fn json_line(module: &str, name: &str, outcome: &TestOutcome, chunks: &[Chunk]) -> String {
+    use cheby_diag::json_string;
+    let (verdict, failure) = match outcome {
+        TestOutcome::Passed => ("passed", None),
+        TestOutcome::Failed(text) | TestOutcome::NotBuilt(text) => ("failed", Some(text)),
+    };
+    let mut fields = vec![
+        ("module", json_string(module)),
+        ("name", json_string(name)),
+        ("outcome", json_string(verdict)),
+    ];
+    for (key, stream) in [("stdout", Stream::Stdout), ("stderr", Stream::Stderr)] {
+        let mut bytes = Vec::new();
+        for chunk in chunks {
+            match chunk {
+                Chunk::Write(to, written) if *to == stream => bytes.extend_from_slice(written),
+                Chunk::Write(..) | Chunk::Flush => {}
+            }
+        }
+        if !bytes.is_empty() {
+            fields.push((key, json_string(&String::from_utf8_lossy(&bytes))));
+        }
+    }
+    if let Some(failure) = failure {
+        fields.push(("failure", json_string(failure)));
+    }
+    cheby_diag::render_json_object("test", &fields)
 }
 
 /// `test <module> "<name>" ... ok` or `... FAILED`, without a newline.
@@ -379,7 +455,7 @@ pub(crate) fn on_native(front: &Frontend, test: &thir::TestDef) -> bool {
 /// the package (D-597), and an [`Error`] for internal
 /// failures.
 pub fn prepare_test(root: &Path, options: &TestOptions) -> Result<PreparedTests, Error> {
-    prepare_test_inner(root, options, None)
+    prepare_test_inner(crate::Origin::Package(root), options, None)
 }
 
 /// [`prepare_test`] through the build cache, as `cheby test` runs it
@@ -394,20 +470,34 @@ pub fn prepare_test_cached(
     options: &TestOptions,
     cache: &crate::Cache,
 ) -> Result<PreparedTests, Error> {
-    prepare_test_inner(root, options, Some(cache))
+    prepare_test_inner(crate::Origin::Package(root), options, Some(cache))
+}
+
+/// [`prepare_test_cached`] for a single file (D-1949): the file's own
+/// `test` blocks.
+///
+/// # Errors
+///
+/// As [`prepare_test`], and an [`Error`] for a file that cannot be read.
+pub fn prepare_test_file_cached(
+    file: &crate::SingleFile,
+    options: &TestOptions,
+    cache: &crate::Cache,
+) -> Result<PreparedTests, Error> {
+    prepare_test_inner(crate::Origin::File(file), options, Some(cache))
 }
 
 fn prepare_test_inner(
-    root: &Path,
+    origin: crate::Origin<'_>,
     options: &TestOptions,
     cache: Option<&crate::Cache>,
 ) -> Result<PreparedTests, Error> {
     // D-1250: a warm `cheby test` checks only what its build needs; a build
     // that then wants a hit's body starts again with every module checked.
-    match prepare_test_once(root, options, cache, Some(options.reuse_report)) {
+    match prepare_test_once(origin, options, cache, Some(options.reuse_report)) {
         Err(crate::Restart::Again(mark)) => {
             crate::rollback_log(cache, mark);
-            prepare_test_once(root, options, cache, None).map_err(crate::Restart::into_error)
+            prepare_test_once(origin, options, cache, None).map_err(crate::Restart::into_error)
         }
         other => other.map_err(crate::Restart::into_error),
     }
@@ -416,7 +506,7 @@ fn prepare_test_inner(
 /// One attempt of [`prepare_test_inner`], `warm` as
 /// `crate::front_end_family`'s.
 fn prepare_test_once(
-    root: &Path,
+    origin: crate::Origin<'_>,
     options: &TestOptions,
     cache: Option<&crate::Cache>,
     warm: Option<bool>,
@@ -427,7 +517,7 @@ fn prepare_test_once(
         ..CheckOutput::default()
     };
     let front = crate::front_end_family(
-        root,
+        origin,
         frontend::Mode::Build,
         crate::cache::index::CommandFamily::Test,
         None,
@@ -522,6 +612,7 @@ fn prepare_test_once(
         stacks,
         threads: None,
         reuse_report,
+        report: ReportStyle::default(),
     })))
 }
 
@@ -546,6 +637,12 @@ impl TestProgram {
     /// variable (`RuntimeConfig::threads`).
     pub const fn set_threads(&mut self, threads: usize) {
         self.threads = Some(threads);
+    }
+
+    /// Sets how the results are written; the text report of D-541 with
+    /// every test is the default (D-1946).
+    pub const fn set_report(&mut self, report: ReportStyle) {
+        self.report = report;
     }
 
     /// Runs the tests, several at once (D-723), and writes the report of
@@ -599,11 +696,20 @@ impl TestProgram {
                 limit: usize::MAX,
                 hooks,
             };
+            let style = self.report;
             let mut sink = |test: &Selected, outcome: TestOutcome, chunks: Vec<Chunk>| {
-                replay(chunks, out, err)?;
-                let line = test_line(&test.module, &test.name, &outcome);
-                out.write_all(format!("{line}\n").as_bytes())?;
-                printed = true;
+                let passed = matches!(outcome, TestOutcome::Passed);
+                if !(passed && style.failures_only) {
+                    if style.json {
+                        let line = json_line(&test.module, &test.name, &outcome, &chunks);
+                        out.write_all(line.as_bytes())?;
+                    } else {
+                        replay(chunks, out, err)?;
+                        let line = test_line(&test.module, &test.name, &outcome);
+                        out.write_all(format!("{line}\n").as_bytes())?;
+                    }
+                    printed = true;
+                }
                 push_result(&mut report, &test.module, &test.name, outcome);
                 Ok(())
             };
@@ -630,7 +736,13 @@ impl TestProgram {
         if let Some(runtime) = runtime {
             runtime.shutdown();
         }
-        if write_tail(&report, printed, out).is_err() {
+        let tail = if self.report.json {
+            out.write_all(report.json_summary().as_bytes())
+                .and_then(|()| out.flush())
+        } else {
+            write_tail(&report, printed, out)
+        };
+        if tail.is_err() {
             report.terminated = true;
         }
         Ok(report)
@@ -1229,7 +1341,9 @@ const STD_TEST_PACKAGE: &str = "std_self_test";
 /// tests whose full name `std::<module> "<name>"` contains `filter`, one
 /// JIT batch per module. A module whose batch does not build has each of
 /// its tests built alone. Modules and tests that do not build are counted
-/// and reported with their codes, and the other modules still run.
+/// and reported with their codes, and the other modules still run. A
+/// warning in any std module, whatever `filter` selects, fails the run
+/// (D-1955).
 ///
 /// The tests' own output goes to standard output as they run; the report
 /// is returned for [`TestReport::render`].
@@ -1268,6 +1382,21 @@ pub fn test_std_in(filter: Option<&str>, profile: cheby_mir::Profile) -> Result<
         .map(|(id, info)| (info.path.clone(), id))
         .collect();
     std_modules.sort();
+    // A warning in a std module fails the self-test (D-1955). The root
+    // module's unused imports of every std module are not std's.
+    for &(_, module) in &std_modules {
+        let Some(file) = front.modules.get(module).and_then(|info| info.file) else {
+            continue;
+        };
+        let mut here: Vec<&Diagnostic> = diagnostics
+            .iter()
+            .filter(|d| !d.is_error() && d.primary_span().is_some_and(|s| s.file == file))
+            .collect();
+        here.sort_by_key(|d| d.primary_span().map(|s| s.range.start()));
+        report
+            .warnings
+            .extend(here.into_iter().map(|d| cheby_diag::render(d, &sources)));
+    }
     for (path, module) in std_modules {
         let shown = path.to_string();
         let errors = codes_in(&front, module, &diagnostics);

@@ -1,0 +1,14 @@
+// @mode: parse-fail
+// @decisions: D-1930, D-1933
+//! A range pattern `1..5 =>` gets the help to match with a guard.
+
+fn small(n: Int) -> Bool {
+  case n {
+    1..5 => True
+    _ => False
+  }
+}
+
+fn main() {
+  assert small(1)
+}

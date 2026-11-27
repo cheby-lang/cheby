@@ -121,12 +121,15 @@ fn shape(node: SyntaxNode<'_>) -> (Vec<SyntaxKind>, Vec<String>) {
 }
 
 /// What formatting must keep of a file: the imports as a sorted list,
-/// the other top-level nodes in order, and the comments in order.
+/// the other top-level nodes in order, and the comments in order. The
+/// comments of the import section travel with their imports (D-1953), so
+/// those are kept as a sorted list too.
 #[derive(Debug, PartialEq, Eq)]
 struct Meaning {
     imports: Vec<(Vec<SyntaxKind>, Vec<String>)>,
     others: Vec<(Vec<SyntaxKind>, Vec<String>)>,
     comments: Vec<String>,
+    import_comments: Vec<String>,
 }
 
 fn meaning(tree: &SyntaxTree) -> Meaning {
@@ -140,21 +143,28 @@ fn meaning(tree: &SyntaxTree) -> Meaning {
         }
     }
     imports.sort();
-    let comments = tree
-        .root()
-        .tokens()
-        .filter(|t| {
-            matches!(
-                t.kind(),
-                SyntaxKind::COMMENT | SyntaxKind::DOC_COMMENT | SyntaxKind::MODULE_DOC
-            )
-        })
-        .map(|t| t.text().trim_end().to_owned())
-        .collect();
+    let section = cheby_syntax::imports::import_section(tree.root(), None).map(|s| s.range());
+    let mut comments = Vec::new();
+    let mut import_comments = Vec::new();
+    for token in tree.root().tokens().filter(|t| {
+        matches!(
+            t.kind(),
+            SyntaxKind::COMMENT | SyntaxKind::DOC_COMMENT | SyntaxKind::MODULE_DOC
+        )
+    }) {
+        let text = token.text().trim_end().to_owned();
+        if section.is_some_and(|range| range.contains_range(token.text_range())) {
+            import_comments.push(text);
+        } else {
+            comments.push(text);
+        }
+    }
+    import_comments.sort();
     Meaning {
         imports,
         others,
         comments,
+        import_comments,
     }
 }
 
@@ -180,7 +190,7 @@ fn check(text: &str, width: usize) -> Result<(), String> {
     }
     let formatted = parse_clean(&once).map_err(|e| format!("the output has {e}"))?;
     let (before, after) = (meaning(&original), meaning(&formatted));
-    if before.comments != after.comments {
+    if before.comments != after.comments || before.import_comments != after.import_comments {
         return Err("the comments changed".to_owned());
     }
     if before.imports != after.imports {

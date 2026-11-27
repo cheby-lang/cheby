@@ -1,0 +1,10 @@
+// @mode: parse-fail
+// @decisions: D-1930, D-1931, D-1933
+//! `*x` gets the help that Cheby has no pointers, with an edit that removes
+//! the `*`.
+
+fn main() {
+  let x = 1
+  let y = *x
+  assert y == 1
+}

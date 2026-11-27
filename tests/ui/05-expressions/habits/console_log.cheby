@@ -1,0 +1,7 @@
+// @mode: check-fail
+// @decisions: D-1935
+//! JavaScript's `console.log` gets the help to call `io::println`.
+
+fn main() {
+  console.log("a")
+}

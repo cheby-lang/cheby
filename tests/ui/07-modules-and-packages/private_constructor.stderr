@@ -1,7 +1,7 @@
 error[E0043]: `Secret` is private to module `app::secret`
-  --> tests/ui/07-modules-and-packages/private_constructor/src/main.cheby:11:19
+  --> tests/ui/07-modules-and-packages/private_constructor/src/main.cheby:12:19
    |
-11 |   let _ = secret::Secret("forged")
+12 |   let _ = secret::Secret("forged")
    |                   ^^^^^^
    |
   ::: tests/ui/07-modules-and-packages/private_constructor/src/secret.cheby:4:3

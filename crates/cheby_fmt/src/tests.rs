@@ -145,12 +145,43 @@ fn fmt_items_attributes_break_like_lists() {
     assert_eq!(fmt("@!target( native )\n"), "@!target(native)\n");
 }
 
+/// D-1953: at most three blocks, the standard library's, other
+/// packages' and the package's own, each sorted by path, whatever blank
+/// lines the source has. A comment travels with its import.
 #[test]
-fn fmt_imports_sorted_within_blocks() {
-    let src = "import std::list\nimport std::io\nimport app::b\n\nimport std::string\n// keep\nimport std::int\nimport std::bytes\n";
+fn fmt_imports_in_three_blocks() {
+    let src = "import std::list\nimport std::io\nimport app::b\n\nimport std::string\n// keep\nimport std::int\nimport json::decode // last\nimport app\nimport std::bytes\n\nfn f() {}\n";
+    let grouped = "import std::bytes\nimport std::int\nimport std::io\nimport std::list\nimport std::string\n\nimport json::decode // last\n\nimport app\nimport app::b\n\nfn f() {}\n";
+    let in_app = super::format_source_in(src, WIDTH, Some("app")).unwrap();
+    assert_eq!(
+        in_app,
+        grouped.replace("import std::int\n", "// keep\nimport std::int\n")
+    );
+    assert_eq!(
+        super::format_source_in(&in_app, WIDTH, Some("app")).unwrap(),
+        in_app
+    );
+    // A file of no package has two blocks: nothing is its own.
     assert_eq!(
         fmt(src),
-        "import app::b\nimport std::io\nimport std::list\n\nimport std::string\n// keep\nimport std::bytes\nimport std::int\n"
+        "import std::bytes\n// keep\nimport std::int\nimport std::io\nimport std::list\nimport std::string\n\nimport app\nimport app::b\nimport json::decode // last\n\nfn f() {}\n"
+    );
+    // In the standard library's own files, its modules are one block.
+    assert_eq!(
+        super::format_source_in("import std::list\n\nimport std::io\n", WIDTH, Some("std"))
+            .unwrap(),
+        "import std::io\nimport std::list\n"
+    );
+}
+
+/// D-1953: a file's header stays above the blank line that separates it
+/// from the imports, and an import that follows an item is not moved.
+#[test]
+fn fmt_imports_keep_the_header_and_misplaced_imports() {
+    let src = "// header\n\nimport std::list\nimport std::io\n\nfn f() {}\n\nimport std::string\nimport std::int\n";
+    assert_eq!(
+        fmt(src),
+        "// header\n\nimport std::io\nimport std::list\n\nfn f() {}\n\nimport std::string\nimport std::int\n"
     );
 }
 

@@ -1,0 +1,11 @@
+// @mode: parse-fail
+// @decisions: D-1930, D-1931
+//! `func` before a function gets the help to write `fn`, with an edit.
+
+func twice(n: Int) -> Int {
+  n * 2
+}
+
+fn main() {
+  assert twice(1) == 2
+}

@@ -554,7 +554,9 @@ fn progen_200_seeds_check_cleanly_and_finish() {
             .env("NO_COLOR", "1");
         cache.apply(&mut check);
         let checked = process::run(check, None, timeout()).unwrap();
-        if checked.status != Some(0) || !checked.stdout.is_empty() || !checked.stderr.is_empty() {
+        // Generated programs are not held to the nesting limit (D-1954).
+        let warnings = progen::without_nesting_warnings(&checked.stderr);
+        if checked.status != Some(0) || !checked.stdout.is_empty() || !warnings.is_empty() {
             return Err(format!(
                 "`cheby check` ended with {}:\n{}{}",
                 checked.describe_status(),

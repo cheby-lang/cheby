@@ -275,6 +275,7 @@ fn main_module(count: usize) -> String {
          //! last module, which reaches the rest through its imports.\n\
          \n\
          import std::io\n\
+         \n\
          import {path}\n\
          \n\
          fn main() {{\n\
@@ -333,6 +334,10 @@ fn module(shape: Shape, index: usize, imports: &[usize], target: usize, rng: &mu
     header.push('\n');
     if out.contains("list::") {
         header.push_str("import std::list\n");
+        // The package's own modules are a block of their own (D-1953).
+        if !imports.is_empty() {
+            header.push('\n');
+        }
     }
     for &dep in imports {
         let _ = writeln!(header, "import {}", import_path(dep));

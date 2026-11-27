@@ -1,0 +1,8 @@
+// @mode: parse-fail
+// @decisions: D-1930, D-1933
+//! `0..10` gets the help to call `list::range`.
+
+fn main() {
+  let xs = 0..10
+  assert xs == [0]
+}

@@ -657,7 +657,7 @@ fn import_errors() {
     let b = build(&[
         (
             "",
-            "import app::nope\nimport foo::bar\nimport app::main\nimport std::list\nimport std::iox\nimport std::io as out\n\nfn main() {\n  out::println(\"x\")\n}\n",
+            "import std::io as out\nimport std::iox\nimport std::list\n\nimport foo::bar\n\nimport app::main\nimport app::nope\n\nfn main() {\n  out::println(\"x\")\n}\n",
         ),
         ("web", "fn f() {\n  Nil\n}\n"),
     ]);
@@ -692,7 +692,7 @@ fn import_errors() {
         .filter(|l| l.style == cheby_diag::LabelStyle::Primary)
         .map(|l| (l.span.range.start(), l.span.range.end()))
         .collect();
-    assert_eq!(primary, [(40, 49)]);
+    assert_eq!(primary, [(80, 89)]);
 }
 
 #[test]
@@ -1062,7 +1062,7 @@ fn privacy() {
     let b = build(&[
         (
             "",
-            "import std::secret\nimport app::web\n\nfn main() {\n  secret::open()\n  secret::hidden()\n  secret::internal()\n  web::shared()\n  web::own()\n}\n",
+            "import std::secret\n\nimport app::web\n\nfn main() {\n  secret::open()\n  secret::hidden()\n  secret::internal()\n  web::shared()\n  web::own()\n}\n",
         ),
         (
             "web",
@@ -1194,7 +1194,7 @@ fn e0038_is_left_for_planned_std_modules() {
     let b = build(&[
         (
             "",
-            "import std::list\nimport std::io\n\nfn main() {\n  io::println(list::reverse(\"x\"))\n}\n\nfn later() -> String {\n  lib::later()\n}\n",
+            "import std::io\nimport std::list\n\nfn main() {\n  io::println(list::reverse(\"x\"))\n}\n\nfn later() -> String {\n  lib::later()\n}\n",
         ),
         (
             "lib",
@@ -1229,6 +1229,77 @@ fn functions_on_one_target_resolve() {
     assert_eq!(
         b.body_paths("app", "main"),
         [("lib::later".to_owned(), Res::Def(later))]
+    );
+}
+
+/// Names that other languages use get the Cheby form (D-1934, D-1935):
+/// literals, bare functions where they are called, and type names. The
+/// help writes a prelude name only where it means the prelude's item, and
+/// `null`, `nil` and `none` carry no edit, which the language server writes
+/// itself (D-1737, D-1931).
+#[test]
+fn foreign_names_get_helps() {
+    let b = build(&[(
+        "",
+        "fn main() {\n  let a = true\n  let b = null\n  let c = undefined\n  let d = some(1)\n  \
+         let e = len([1])\n  let f = len\n  println(\"x\")\n}\n\nfn g(x: Void) -> Vec<Int> {\n  []\n}\n\n\
+         fn h(m: HashMap<Int, Int>) -> Int {\n  1\n}\n",
+    )]);
+    let helps: Vec<(String, bool)> = b
+        .diags
+        .iter()
+        .flat_map(|d| {
+            d.helps
+                .iter()
+                .map(|h| (h.message.clone(), !h.edits.is_empty()))
+        })
+        .collect();
+    let expected = [
+        (
+            "`Bool`'s constructors are `True` and `False`; write `True`",
+            true,
+        ),
+        ("the absent case of `Option` is `None`", false),
+        ("the absent case of `Option` is `None`", true),
+        ("the present case of `Option` is `Some`", true),
+        (
+            "Cheby has no `len`; call `list::length(xs)` or `string::length(s)`",
+            false,
+        ),
+        ("`println` is in `std::io`; call `io::println`", false),
+        ("the type that carries no information is `Nil`", true),
+        ("Cheby's list type is `List`", true),
+        (
+            "Cheby's map type is `Map`: add `import std::map` and write `map::Map`",
+            false,
+        ),
+    ];
+    let expected: Vec<(String, bool)> = expected
+        .iter()
+        .map(|&(help, edit)| (help.to_owned(), edit))
+        .collect();
+    // `len` that is not called is a local's name, and gets no help.
+    assert_eq!(helps, expected, "{:?}", b.messages());
+}
+
+/// `import std::{io, list}` names a module `std`, which is a package
+/// (D-1936).
+#[test]
+fn importing_std_itself_names_its_modules() {
+    let b = build(&[("", "import std::{io, list}\n\nfn main() {\n  Nil\n}\n")]);
+    let helps: Vec<&str> = b
+        .diags
+        .iter()
+        .flat_map(|d| d.helps.iter().map(|h| h.message.as_str()))
+        .collect();
+    assert_eq!(
+        helps,
+        [
+            "`std` is a package, not a module; import each module on its own line, such as \
+             `import std::io`"
+        ],
+        "{:?}",
+        b.messages()
     );
 }
 
@@ -1371,7 +1442,7 @@ fn visibility_through_item_imports() {
     let b = build(&[
         (
             "",
-            "import app::web::{shared, own, Page}\nimport std::secret::{open, internal, Token, Internal}\n\nfn main() {\n  shared()\n  open()\n}\n",
+            "import std::secret::{open, internal, Token, Internal}\n\nimport app::web::{shared, own, Page}\n\nfn main() {\n  shared()\n  open()\n}\n",
         ),
         (
             "web",
@@ -1395,7 +1466,7 @@ fn constructors_of_opaque_types() {
     let b = build(&[
         (
             "",
-            "import app::shapes\nimport std::secret\nimport std::secret::{Token, Open, Pair}\n\nfn make() {\n  let t = secret::Token(\"a\")\n  let u = Token(\"b\")\n  let o = Open(\"c\")\n  let p = Pair { left: \"l\", right: \"r\" }\n  let s = shapes::Secret\n  let c = shapes::Circle\n}\n\nfn read(t: Token, o: secret::Open, p: Pair) {\n  let Token(x) = t\n  let secret::Open(y) = o\n  let q = Pair { ..p, left: \"l\" }\n  let r = secret::Pair { ..p, left: \"l\" }\n}\n",
+            "import std::secret\nimport std::secret::{Token, Open, Pair}\n\nimport app::shapes\n\nfn make() {\n  let t = secret::Token(\"a\")\n  let u = Token(\"b\")\n  let o = Open(\"c\")\n  let p = Pair { left: \"l\", right: \"r\" }\n  let s = shapes::Secret\n  let c = shapes::Circle\n}\n\nfn read(t: Token, o: secret::Open, p: Pair) {\n  let Token(x) = t\n  let secret::Open(y) = o\n  let q = Pair { ..p, left: \"l\" }\n  let r = secret::Pair { ..p, left: \"l\" }\n}\n",
         ),
         (
             "shapes",

@@ -7,9 +7,10 @@
 //! form: the debug text would show the tree instead of
 //! `sorted_set::from_list([…])`.
 
-import app::digits
 import std::io
 import std::set
+
+import app::digits
 
 fn main() {
   let listed = digits::listed()

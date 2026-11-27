@@ -47,6 +47,7 @@ priv fn helper(n: Int) -> Int {
 const MAIN: &str = "//! Calls the helpers of `app::util`.
 
 import std::io
+
 import app::util
 
 fn main() {

@@ -210,7 +210,7 @@ fn progen_eval_order_guards_and_local_functions() {
 #[test]
 fn progen_eval_helpers_module_and_function_values() {
     let program = package(
-        "//! Main.\n\nimport std::io\nimport std::list\nimport progen::helpers\n\nfn f0(x: Int) -> Int {\n  x + helpers::h0(x)\n}\n\nfn main() {\n  let ys = list::map([1, 2], f0)\n  let zs = list::map(ys, helpers::h0)\n  io::println(\"{ys} {zs}\")\n}\n",
+        "//! Main.\n\nimport std::io\nimport std::list\n\nimport progen::helpers\n\nfn f0(x: Int) -> Int {\n  x + helpers::h0(x)\n}\n\nfn main() {\n  let ys = list::map([1, 2], f0)\n  let zs = list::map(ys, helpers::h0)\n  io::println(\"{ys} {zs}\")\n}\n",
         Some(
             "//! Helpers.\n\npub fn h0(x: Int) -> Int {\n  h1(x) * 10\n}\n\nfn h1(x: Int) -> Int {\n  x + 1\n}\n",
         ),

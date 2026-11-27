@@ -24,10 +24,11 @@
 //! of a `Handle` may close the account, and an account whose last
 //! `Handle` is dropped closes by itself.
 
-import bank_accounts::money
 import std::channel
 import std::fiber
 import std::result
+
+import bank_accounts::money
 
 /// A handle for sending requests to an account. All copies talk to the
 /// same actor.

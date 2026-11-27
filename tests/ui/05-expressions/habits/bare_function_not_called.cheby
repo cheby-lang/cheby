@@ -1,0 +1,9 @@
+// @mode: check-fail
+// @decisions: D-1935
+//! A bare `len` that is not called may be a local the code forgot to bind,
+//! and gets no help.
+
+fn main() {
+  let n = len + 1
+  assert n == 1
+}

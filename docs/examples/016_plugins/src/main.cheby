@@ -9,14 +9,15 @@
 //! goes through the same generic `notifier::broadcast` with its type
 //! known when the program is compiled.
 
+import std::io
+import std::list
+import std::string
+
 import plugins::email
 import plugins::log
 import plugins::message
 import plugins::notifier
 import plugins::sms
-import std::io
-import std::list
-import std::string
 
 /// The messages of the day, in the order they are sent.
 const messages: List<message::Message> = [

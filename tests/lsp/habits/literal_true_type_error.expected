@@ -10,11 +10,11 @@
       "range": {
         "end": {
           "character": 6,
-          "line": 5
+          "line": 6
         },
         "start": {
           "character": 2,
-          "line": 5
+          "line": 6
         }
       },
       "severity": 1,
@@ -29,11 +29,11 @@
       "range": {
         "end": {
           "character": 13,
-          "line": 13
+          "line": 14
         },
         "start": {
           "character": 2,
-          "line": 13
+          "line": 14
         }
       },
       "relatedInformation": [
@@ -42,11 +42,11 @@
             "range": {
               "end": {
                 "character": 18,
-                "line": 12
+                "line": 13
               },
               "start": {
                 "character": 15,
-                "line": 12
+                "line": 13
               }
             },
             "uri": "src/main.cheby"
@@ -60,18 +60,18 @@
   ]
 }
 
-== src/main.cheby:6:3 action Write `True`
+== src/main.cheby:7:3 action `Bool`'s constructors are `True` and `False`; write `True`
 {
   "actions": [
-    "Write `True`",
+    "`Bool`'s constructors are `True` and `False`; write `True`",
     "Explain E0042"
   ],
   "answer": {
     "data": {
       "hash": "<hash>",
       "range": [
-        189,
-        189
+        233,
+        233
       ],
       "uri": "src/main.cheby"
     },
@@ -85,11 +85,11 @@
         "range": {
           "end": {
             "character": 6,
-            "line": 5
+            "line": 6
           },
           "start": {
             "character": 2,
-            "line": 5
+            "line": 6
           }
         },
         "severity": 1,
@@ -105,11 +105,11 @@
               "range": {
                 "end": {
                   "character": 6,
-                  "line": 5
+                  "line": 6
                 },
                 "start": {
                   "character": 2,
-                  "line": 5
+                  "line": 6
                 }
               }
             }
@@ -123,7 +123,7 @@
     },
     "isPreferred": true,
     "kind": "quickfix",
-    "title": "Write `True`"
+    "title": "`Bool`'s constructors are `True` and `False`; write `True`"
   },
   "showMessage": []
 }

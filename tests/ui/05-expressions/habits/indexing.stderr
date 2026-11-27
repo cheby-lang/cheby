@@ -1,0 +1,8 @@
+error[E0013]: expected a line break or `}`, found `[`
+ --> tests/ui/05-expressions/habits/indexing.cheby:7:17
+  |
+7 |   let first = xs[0]
+  |                 ^
+  |
+  = help: Cheby has no indexing; call `list::get(xs, i)` or `map::get(m, key)`, which return an `Option`
+

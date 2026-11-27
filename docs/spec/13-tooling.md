@@ -14,9 +14,10 @@ Cheby ships as one `cheby` binary that contains the compiler, runtime, REPL, tes
 | `cheby test`                               | run `test` blocks ([§13.6](#136-tests))                            | D-055, D-541        |
 | `cheby fmt`                                | format source files ([§13.7](#137-formatter))                      | D-079, D-1031       |
 | `cheby lsp`                                | language server over stdio ([§13.11](#1311-language-server))       | D-031               |
-| `cheby doc`                                | generate HTML documentation ([§13.10](#1310-documentation))        | D-078               |
+| `cheby doc [path]`                         | look an API up, or generate HTML ([§13.10](#1310-documentation))   | D-078, D-1947       |
 | `cheby add`, `cheby update`, `cheby fetch` | manage dependencies ([§13.4](#134-dependencies-and-lockfile))      | D-044, D-097        |
 | `cheby explain <code>`                     | explain a diagnostic code ([§13.8](#138-diagnostics-and-warnings)) | D-420               |
+| `cheby guide`                              | print the guide for coding agents                                  | D-1952              |
 
 `cheby build --target native` produces an executable. Object files from Cranelift are linked with the system linker in early versions (`cc` or `link.exe`), and with a linker bundled in the `cheby` binary before 1.0 (D-088). `cheby build --target js` produces a directory of ES modules (D-074).
 
@@ -30,9 +31,21 @@ _Note:_ the reference implementation links with the `cc` found on `PATH` and ign
 
 `cheby check --target native` or `cheby check --target js` checks the code as it runs on that target only, so the cross-target check of [§12.6](12-targets-and-ffi.md#126-target-specific-code) reports only uses that would fail there. A target that the manifest's `targets` leaves out is a tool error, such as "the package does not target `js`" (D-550).
 
+`cheby check --fix` applies the sure fixes of the diagnostics to the package's own files and checks again ([§13.8.2](#1382-sure-fixes-and-cheby-check---fix)) (D-1945).
+
+`cheby check`, `cheby run` and `cheby test` take a single file in place of a package: `cheby check FILE`, `cheby run FILE [-- args]` and `cheby test FILE [FILTER]`, where `FILE` is a path that ends in `.cheby` (D-1949). The file is the only module of a package that has no `cheby.toml`. The package and the module are named `script`, the version is `0.0.0`, the targets are the default ones, and there are no dependencies, so the file imports the standard library alone. No `cheby.toml` is read, also when one is above the file. `cheby run FILE` runs the file's `main`, and `cheby test FILE` its `test` blocks, whose full names start with `script`. A diagnostic names the file by the path as it was given, and `cheby check --fix FILE` writes to the file. The warning for an unused package-visible item ([§13.8](#138-diagnostics-and-warnings)) is not reported, since a single file has no other module that could use one.
+
+A file under the `src/` directory of a package is a module of that package and is not taken alone, since its imports of the package's modules would not resolve: naming it is a tool error that names the package (D-1949).
+
+`cheby check -` and `cheby run -` read the source from standard input and show it as `<stdin>`. The program then finds its own standard input at its end. `cheby check --fix -` and `cheby test -` are tool errors (D-1949).
+
 `cheby explain` prints the long explanation of a diagnostic code such as `E0012`, with examples and fixes ([§13.8](#138-diagnostics-and-warnings)) (D-420).
 
+`cheby guide` prints the guide for coding agents to standard output: what differs in Cheby from the languages a language model has seen, two small programs, and the commands that answer a question, such as `cheby check --fix` and `cheby doc <path>`. `cheby new` writes the same text as `AGENTS.md`. The guide's text is informative, and it changes with the toolchain (D-1952).
+
 Every command takes a global `--color=auto|always|never` flag, which says whether diagnostics and other errors are colored ([§13.8](#138-diagnostics-and-warnings)) (D-467).
+
+Every command also takes a global `--format=text|json` flag. With `json`, diagnostics and other errors are written as JSON, one object per line ([§13.8.1](#1381-json-output)), and `cheby test` writes its results that way too ([§13.6](#136-tests)). `text` is the default (D-1944, D-1946).
 
 `cheby check`, `cheby build`, `cheby run`, `cheby test` and `cheby repl` accept `--deny-warnings`, which turns warnings into errors ([§13.8](#138-diagnostics-and-warnings)) (D-080, D-549, D-937).
 
@@ -46,7 +59,7 @@ The report is written after the warnings and before anything runs. Its places ar
 
 `cheby run` and `cheby repl` produce no output files: they run code in memory with the JIT (D-007, D-019). Like every command, they may read and write the build cache ([§13.12.4](#13124-build-cache-and-standard-library)), and the JIT runs the same compiled code that `cheby build` links into an executable (D-254, D-255, D-914).
 
-`cheby new <name>` creates a directory `<name>` with a `cheby.toml` that has the name and version `0.1.0`, a `src/main.cheby` whose `main` prints a greeting, and a `.gitignore` that lists `build/`. It prints nothing on success. With `--library`, the manifest also has `kind = "library"`, and `src/main.cheby` has one `pub` function and a test instead of `main` (D-1872). A name that is not a valid package name, `std` included, which [§7.1](07-modules-and-packages.md#71-packages) reserves, or a path that already exists, is a tool error that writes nothing, and a write that fails removes what the command created (D-1032, D-1214, D-1215).
+`cheby new <name>` creates a directory `<name>` with a `cheby.toml` that has the name and version `0.1.0`, a `src/main.cheby` whose `main` prints a greeting, a `.gitignore` that lists `build/`, and an `AGENTS.md` with the toolchain's guide for coding agents, which `--no-guide` leaves out (D-1952). It prints nothing on success. With `--library`, the manifest also has `kind = "library"`, and `src/main.cheby` has one `pub` function and a test instead of `main` (D-1872). A name that is not a valid package name, `std` included, which [§7.1](07-modules-and-packages.md#71-packages) reserves, or a path that already exists, is a tool error that writes nothing, and a write that fails removes what the command created (D-1032, D-1214, D-1215).
 
 ## 13.2 Project layout
 
@@ -308,6 +321,10 @@ Test blocks are type-checked by `cheby build` as well, so a broken test is caugh
 
 `cheby test` writes to standard output one line per test, `test <module path> "<name>" ... ok` or `... FAILED`. For each failure, a block follows that starts with `---- <module path> "<name>" ----` and holds the panic report or the `Err` text. A summary ends the output, such as `test result: ok. 3 passed; 0 failed; 1 filtered out`, with `FAILED` in place of `ok` when a test failed. A test's own output on standard output and standard error, including that of the fibers it spawns and what foreign code writes through `cheby.h` ([§12.5.1](12-targets-and-ffi.md#1251-native-abi)), is captured (D-951). Once the test has finished and every test before it has been written, its output is written to the same streams, followed by its line. Tests are written in order, by module path and then in source order, so the output is the same as if the tests ran one after another, whatever order they finish in (D-541, D-598, D-723). The failure blocks follow all the lines, each preceded by an empty line. The summary is preceded by an empty line when a test line was written, and when no test is selected it is the only output (D-598). A test's panic report appears only in its failure block, never on standard error, and standard output is flushed before it is taken (D-595). The exit status is 0 when every selected test passes, also when none is selected, and 1 when one fails. A compile error stops the command with status 1 before any test runs (D-541). A write or flush that ends the program ([§10.10](10-concurrency.md#1010-program-entry-and-exit)) also ends the test run at once: nothing more is printed, and the exit status is 1 (D-306, D-783). A test's own writes go to its capture and never fail, so such a failure comes from `cheby test` itself, when it writes a test's captured output, a test line, a failure block or the summary (D-834).
 
+With `--format json` ([§13.1](#131-the-cheby-command)), `cheby test` writes its results to standard output as JSON, one object per line, in place of the lines, the failure blocks and the summary (D-1946). Each test has a line `{"type":"test","module":…,"name":…,"outcome":…}`, in the order of the text form, with the outcome `"passed"` or `"failed"`. `stdout` and `stderr` follow with what the test wrote to each stream, and a key is left out when the test wrote nothing there. Bytes that are not UTF-8 become U+FFFD, and the output is not written to the streams themselves. A failed test's line ends with `failure`, the text of its failure block without the block's first line. The last line is `{"type":"summary","passed":…,"failed":…,"filtered_out":…}`. No line holds a time, so a run's output is the same every time. Diagnostics and other errors are JSON on standard error ([§13.8.1](#1381-json-output)).
+
+`cheby test --report-failures-only` writes no line for a test that passes and drops what that test wrote, in both formats. The failure blocks and the summary are as without it, and the summary counts every selected test (D-1946).
+
 _Note:_ the reference implementation runs each test on a 64 MiB stack like `main`, unless the manifest's `main-stack` sets another size ([§13.3](#133-manifest)) (D-596, D-660). In M1 it ran tests one after another. A test whose start is refused a stack waits for a running test to end and is started again, and fails only when no other test runs (D-836). A toolchain with debug assertions counts the live objects of each test separately, after the test's detached fibers have ended, and objects still live fail that test with the message of the leak check ([§10.10](10-concurrency.md#1010-program-entry-and-exit)) (D-458, D-541, D-723). Each test counts in an accounting domain of its own, which the fibers it starts inherit (D-691, D-833). A test's check is skipped and counted only when one of its detached fibers cannot be stopped, for the reasons given there (D-710, D-786, D-804), or when a request for memory that the system refused ended in `out of memory` (D-771, D-907). The checks of later tests still run: a skipped fiber that goes on when its call returns releases what it holds into its own test's count, which no other test's check reads (D-833). A deadlocked test fails, so it is not checked, as no failing test is (D-541, D-859).
 
 _Note:_ a test's writes to standard output and standard error go to its capture, with two exceptions that go straight to standard error: a fatal runtime error, and the report that precedes one when a fiber cannot unwind because its code was compiled without unwind edges (D-770). The process ends right after these writes, before any captured output could be written, so captured they would be lost (D-820).
@@ -326,11 +343,29 @@ The standard library's `test` blocks sit next to the code they test, in its sour
 
 The style itself is defined by the formatter, not by this specification. Examples in this specification use it: two-space indentation, one statement per line (D-1155), trailing commas in multi-line lists (D-1152), a type definition's variants or fields one per line (D-1274), every pipeline broken with `|>` at the start of each line (D-1275), an arm's body starting on the arm's line, with one space before `=>` (D-1276), the `else` block of a guard always broken over lines (D-1343), and `_` between groups of three digits in a decimal number of five or more digits (D-1345).
 
-_Note:_ the reference formatter is a pretty printer driven by one line width, 100 columns (D-1252). It sorts the imports within each block of imports, a run of imports on consecutive lines with no blank line or comment between them, by module path in byte order (D-1148). It collapses runs of blank lines into one, keeps comments and single blank lines in their places (D-1149, D-1160, D-1161, ADR-0074), writes files with LF line endings that end with one newline, and never splits a string literal (D-1030). A file of only whitespace formats to the empty file (D-1147). It breaks a type definition's body, a pipeline and a block that is an arm's body over lines even when they fit (D-1274, D-1275, D-1276). It writes a decimal integer literal of five or more digits, or the integer part of such a float literal, with `_` between groups of three digits from the right, so `1000000` becomes `1_000_000` and `10000.5` becomes `10_000.5`. It keeps every literal that already holds a `_`, such as `10_00`, and leaves a shorter literal, a fraction, an exponent and a literal with a base prefix as written (D-1345).
+One part of the style is specified here, because the compiler warns about a file that does not follow it ([§13.8](#138-diagnostics-and-warnings)): the order of a file's imports (D-1953).
+
+- The imports before the first item come in at most three blocks, with one blank line between two blocks and none inside a block: the modules of the standard library, then the modules of other packages, then the modules of the file's own package.
+- Inside a block the imports are sorted by module path in byte order, and imports of one path by their whole text.
+- A file belongs to the package whose `cheby.toml` is the nearest above it, and standard input to the package around the working directory. A file of no package has no third block.
+- A comment on the lines above an import, or at the end of its line, moves with the import. Above the first import, only the comment lines that touch it move, so a file's header stays where it is.
+- A comment after the last import is not moved. Nor is an import that follows an item, which is an error ([§7.5](07-modules-and-packages.md#75-imports)).
+
+```cheby
+import std::io
+import std::list
+
+import json::decode
+
+// The routes of this application.
+import my_app::web::router
+```
+
+_Note:_ the reference formatter is a pretty printer driven by one line width, 100 columns (D-1252). It writes the imports in their blocks, as above (D-1953). It collapses runs of blank lines into one, keeps comments and single blank lines in their places (D-1149, D-1160, D-1161, ADR-0074), writes files with LF line endings that end with one newline, and never splits a string literal (D-1030). A file of only whitespace formats to the empty file (D-1147). It breaks a type definition's body, a pipeline and a block that is an arm's body over lines even when they fit (D-1274, D-1275, D-1276). It writes a decimal integer literal of five or more digits, or the integer part of such a float literal, with `_` between groups of three digits from the right, so `1000000` becomes `1_000_000` and `10000.5` becomes `10_000.5`. It keeps every literal that already holds a `_`, such as `10_00`, and leaves a shorter literal, a fraction, an exponent and a literal with a base prefix as written (D-1345).
 
 ## 13.8 Diagnostics and warnings
 
-Compile errors stop compilation. Warnings do not, unless `--deny-warnings` is passed, which is intended for CI (D-080). With it, each warning is rendered as an error with its own code, as in `error[W0002]: unused binding …`, and the first one has the note "warnings are denied by `--deny-warnings`". The command then fails with exit status 1, and `cheby run` and `cheby test` run nothing (D-549). An error found while reading the manifest, discovering modules, lexing, parsing or checking syntax stops the later checks, such as name resolution and type checking, so their diagnostics never come from a broken file (D-452). A denied warning of those phases, such as one about the manifest, is rendered as an error but does not stop the later checks, because a warning never comes from a broken file. The command still fails with status 1 after them, `cheby check` evaluates no constants, and `cheby run` and `cheby test` compile and run nothing (D-621).
+Compile errors stop compilation. Warnings do not, unless `--deny-warnings` is passed, which is intended for CI (D-080). With it, each warning is rendered as an error with its own code, as in `error[W0002]: unused binding …`, and the first one has the note "warnings are denied by `--deny-warnings`". The command then fails with exit status 1, and `cheby run` and `cheby test` run nothing (D-549). An error found while reading the manifest, discovering modules, lexing, parsing or checking syntax stops the later checks, such as name resolution and type checking, for what it reaches, so their diagnostics never come from a broken file (D-452). An error in the manifest, in the discovery of modules or in a dependency reaches the whole package. An error in a module of the package reaches that module and every module that imports it, directly or through others: for the later checks the module counts as empty, so an importer's diagnostics would come from what is missing, and they are not reported. Every other module of the package is checked in full, without the warning for an unused package-visible item, which needs every module. After the diagnostics, the command names the modules that were not checked in a line `note: 2 modules were not checked, because they import a module with syntax errors: app, app::server`, with at most six names (D-1951). The command fails as for any error. If these later checks end in an internal compiler error, the diagnostics found before them are still printed, and the internal error's line follows them (D-464, D-1951). A denied warning of those phases, such as one about the manifest, is rendered as an error but does not stop the later checks, because a warning never comes from a broken file. The command still fails with status 1 after them, `cheby check` evaluates no constants, and `cheby run` and `cheby test` compile and run nothing (D-621).
 
 _Note:_ in the language server, the rule that diagnostics never come from a broken file holds through a file's last good text. While a file has such an error, the other files are checked against that text, so their diagnostics do not come from a broken file either ([§13.11](#1311-language-server)) (D-1347).
 
@@ -350,6 +385,10 @@ The following are warnings (D-080 and the cited decisions):
 | use of a `@deprecated` item                                             | D-200, D-517         |
 | a written tuple type with a tuple element or with four or more elements | D-243, D-440         |
 | a negative integer literal passed as a standard-library count argument  | D-298, D-303, D-518  |
+| imports out of the order of [§13.7](#137-formatter)                     | D-1953               |
+| function calls nested more than three deep                              | D-1954               |
+
+Function calls may nest three deep, as in `f(g(h(x)))`. The depth of a function call is one more than the depth of the deepest function call in its arguments. A constructor call adds no level, though the calls in its arguments count. A block, a closure, a local function and a `case` expression start the count again, and the stages of a pipeline are not nested in each other. A call of the fourth level is a warning, one for each outermost call, with no sure fix: moving a call out of an argument can change the order in which calls run (D-1954).
 
 Unused `pub` items are never reported (D-152). What counts as a use is fixed as follows (D-515, D-516):
 
@@ -406,6 +445,48 @@ error[E0029]: comparison operators cannot be chained
 
 Codes are listed with their explanations in [`docs/diagnostics/`](../diagnostics/README.md).
 
+### 13.8.1 JSON output
+
+With the global flag `--format json` ([§13.1](#131-the-cheby-command)), a command writes its diagnostics to standard error as JSON, one object per line, in place of the text form (D-1944). A diagnostic is an object with these keys, in this order:
+
+| Key                                                                | Value                                                                                             |
+| ------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------- |
+| `type`                                                             | `"diagnostic"`                                                                                    |
+| `severity`                                                         | `"error"` or `"warning"`; a warning that `--deny-warnings` denies is an `"error"` with its code   |
+| `code`                                                             | the code, such as `"E0042"`                                                                       |
+| `message`                                                          | the message of the header                                                                         |
+| `file`, `line`, `column`, `end_line`, `end_column`, `start`, `end` | the place of the first primary label; left out when the diagnostic has none                       |
+| `labels`                                                           | an array with each label: the keys of a place, `message`, which may be empty, and `primary`       |
+| `notes`                                                            | an array with the text of each note                                                               |
+| `helps`                                                            | an array with each help: `message`, `fix` and `edits`                                             |
+
+A place gives a span. `file`, `line` and `column` are the location of its start as the text form writes it, and `end_line` and `end_column` are that of its end. `start` and `end` are the byte offsets of both in the file's text. `primary` is `true` for a label that the text form marks with `^`. A help's `edits` are the replacements that apply it, each with the keys of a place and `replacement`, the text that replaces the span, and the array is empty for a help that is words only. `fix` says whether the help is a sure fix ([§13.8.2](#1382-sure-fixes-and-cheby-check---fix)).
+
+An error that has no code is `{"type":"error","message":…}`. A `help:` line that follows such an error is the same object with the type `"help"`, and a note of the toolchain with the type `"note"`. Later versions may add keys and values of `type`, so a consumer skips what it does not know. The lines are never colored, and a string holds its text in UTF-8 with control characters escaped.
+
+The flag changes only what the toolchain itself reports. A program's own output, a panic report ([§11.6](11-errors-and-panics.md#116-panic-and-todo)) and the lines of `--reuse-report` are written as without it, and so is an error in the command line, which is found before the flag is read. `cheby repl` and `cheby lsp` ignore the flag. `cheby test` also writes its results as JSON ([§13.6](#136-tests)).
+
+_Example:_ one line, broken here to fit the page.
+
+```
+{"type":"diagnostic","severity":"error","code":"E0003","message":"unexpected character `;`",
+ "file":"src/main.cheby","line":6,"column":8,"end_line":6,"end_column":9,"start":62,"end":63,
+ "labels":[{"file":"src/main.cheby","line":6,"column":8,"end_line":6,"end_column":9,
+            "start":62,"end":63,"message":"","primary":true}],
+ "notes":[],
+ "helps":[{"message":"statements are separated by line breaks, not `;`","fix":true,
+           "edits":[{"file":"src/main.cheby","line":6,"column":8,"end_line":6,"end_column":9,
+                     "start":62,"end":63,"replacement":""}]}]}
+```
+
+### 13.8.2 Sure fixes and `cheby check --fix`
+
+A help may carry edits, which an editor offers as a quick fix ([§13.11](#1311-language-server)). Some helps are also marked as sure fixes: the edits do the one thing the message names, no other reading fits the code as written, and they are whole on their own. Removing a `;` after a statement and writing `True` for `true` are sure fixes. A guess among similar names, a help that names one of two possible fixes, the rename of a declaration without its uses, and a help that only silences a warning are not (D-1945).
+
+`cheby check --fix` applies the sure fixes to the source files of the package itself and checks the package again. Of a diagnostic's helps it applies the first sure fix, when each of its edits lies in such a file and none overlaps an edit that it has applied in this round. A file that changed after the check read it is left alone. The second check can report diagnostics of a later phase, which the errors of the first one held back, so the command applies their sure fixes too, and so on, for at most four rounds of fixes. It never writes to the standard library or to a dependency, and it does not ask whether the files are under version control (D-1945).
+
+For each fix it applies, the command writes a line `fixed: path:line:column: message` to standard error, with the location of the fix's first edit and the help's message. With `--format json` the line is `{"type":"fix","code":…,"message":…,"file":…,"line":…,"column":…}`. The diagnostics of the last check follow, and the exit status is the one they give (D-1945).
+
 ## 13.9 Compile-time evaluation
 
 Constant initializers ([§4.5](04-declarations.md#45-constants)) are run by the compiler with the JIT (D-090). Because the language server evaluates constants without being asked, evaluation must be bounded (ADR-0027):
@@ -429,12 +510,35 @@ Hash-based collections (`Map`, `Set`) may appear in constants, even though the h
 
 ## 13.10 Documentation
 
-`cheby doc` generates HTML documentation for a package from its `pub` items and their `///` and `//!` doc comments (D-078):
+`cheby doc`, without an argument, generates HTML documentation for a package from its `pub` items and their `///` and `//!` doc comments (D-078):
 
 - Doc comments are Markdown.
 - The pages show each item's signature, the variants and fields of `exposed` types, and the interfaces each type satisfies structurally ([chapter 8](08-interfaces.md)).
 - Code blocks in doc comments are highlighted as Cheby.
 - Code examples in doc comments are compiled and run as tests by `cheby test`, so they cannot go stale (D-197).
+
+`cheby doc <path>` looks an API up and writes it to standard output as text (D-1947). It looks in the standard library and, inside a package, in the modules of the package and of the dependencies that its manifest names, each under the path that an import in the package writes for it. A module of the package shows every item. A module of the standard library or of a dependency shows the items that the package may name, and the constructors and fields of a type only when the package may see them ([§4.3](04-declarations.md#43-type-declarations)).
+
+The path is read by the first of these rules that finds something:
+
+1. A module, such as `std::list`. A standard-library module may be written without `std::`, as `list`. The output is the module's doc comment, then each function, type, alias, constant and interface of the module, with its declaration without a body and the first sentence of its doc comment.
+2. An item, such as `list::map` or `std::option::Some`. The output is its declaration without a body and its whole doc comment, then the message of its `@deprecated`, and its targets when it does not exist on every target. A name that another language uses for a standard-library function, such as `list::reduce`, gives the function it means, after a line that says so.
+3. A path with modules below it, such as `std`: those modules, each with the first sentence of its doc comment.
+4. A name that items of any module have, such as `parse` or `Option`: one item is written as in rule 2, and several as in rule 1, each under its path.
+5. A text that item names contain, ignoring case: those items, as in rule 4.
+
+A path that names nothing is an error without a code ([§13.8](#138-diagnostics-and-warnings)). When the package cannot be read, the command says so in a note on standard error and looks in the standard library alone. Outside a package it looks there too. With `--format json` ([§13.8.1](#1381-json-output)) the output is JSON, one object per line: a module is `{"type":"module","path":…,"origin":…,"doc":…}`, with the origin `"package"`, `"dependency"` or `"std"`, and an item is `{"type":"item","module":…,"name":…,"kind":…,"signature":…,"doc":…,"deprecated":…,"targets":[…]}`, with its whole doc comment, and with `doc` and `deprecated` left out when it has none. The kind is `"fn"`, `"type"`, `"alias"`, `"const"`, `"interface"`, `"interface_fn"` or `"constructor"`.
+
+_Example:_
+
+```
+$ cheby doc list::map
+std::list::map
+
+pub fn map<T, U>(xs: List<T>, f: fn(T) -> U) -> List<U>
+
+  Returns the results of calling `f` on each element, in order.
+```
 
 ## 13.11 Language server
 

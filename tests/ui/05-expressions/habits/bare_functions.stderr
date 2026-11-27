@@ -1,0 +1,72 @@
+error[E0042]: cannot find value `println` in this scope
+ --> tests/ui/05-expressions/habits/bare_functions.cheby:7:3
+  |
+7 |   println("a")
+  |   ^^^^^^^ not found
+  |
+  = help: `println` is in `std::io`; call `io::println`
+
+error[E0042]: cannot find value `print` in this scope
+ --> tests/ui/05-expressions/habits/bare_functions.cheby:8:3
+  |
+8 |   print("b")
+  |   ^^^^^ not found
+  |
+  = help: `print` is in `std::io`; call `io::print`
+
+error[E0042]: cannot find value `eprintln` in this scope
+ --> tests/ui/05-expressions/habits/bare_functions.cheby:9:3
+  |
+9 |   eprintln("c")
+  |   ^^^^^^^^ not found
+  |
+  = help: `eprintln` is in `std::io`; call `io::eprintln`
+
+error[E0042]: cannot find value `eprint` in this scope
+  --> tests/ui/05-expressions/habits/bare_functions.cheby:10:3
+   |
+10 |   eprint("d")
+   |   ^^^^^^ not found
+   |
+   = help: `eprint` is in `std::io`; call `io::eprint`
+
+error[E0042]: cannot find value `len` in this scope
+  --> tests/ui/05-expressions/habits/bare_functions.cheby:11:11
+   |
+11 |   let n = len([1])
+   |           ^^^ not found
+   |
+   = help: Cheby has no `len`; call `list::length(xs)` or `string::length(s)`
+
+warning[W0002]: unused binding `s`
+  --> tests/ui/05-expressions/habits/bare_functions.cheby:12:7
+   |
+12 |   let s = str(1)
+   |       ^ never used
+   |
+   = help: if this is intentional, start the name with an underscore: `_s`
+
+error[E0042]: cannot find value `str` in this scope
+  --> tests/ui/05-expressions/habits/bare_functions.cheby:12:11
+   |
+12 |   let s = str(1)
+   |           ^^^ not found
+   |
+   = help: Cheby has no `str`; interpolate, as in `"{x}"`, or call `int::show(x)`
+
+warning[W0002]: unused binding `xs`
+  --> tests/ui/05-expressions/habits/bare_functions.cheby:13:7
+   |
+13 |   let xs = range(0, 2)
+   |       ^^ never used
+   |
+   = help: if this is intentional, start the name with an underscore: `_xs`
+
+error[E0042]: cannot find value `range` in this scope
+  --> tests/ui/05-expressions/habits/bare_functions.cheby:13:12
+   |
+13 |   let xs = range(0, 2)
+   |            ^^^^^ not found
+   |
+   = help: `range` is in `std::list`; call `list::range(start, end)`
+

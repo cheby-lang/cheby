@@ -19,16 +19,17 @@
 //! module, used as `heap::push`, and once for the type, so signatures
 //! can say `Graph`.
 
-import route_planner::graph
-import route_planner::graph::{Graph}
-import route_planner::heap
-import route_planner::heap::{Heap}
 import std::io
 import std::list
 import std::map
 import std::map::{Map}
 import std::set
 import std::string
+
+import route_planner::graph
+import route_planner::graph::{Graph}
+import route_planner::heap
+import route_planner::heap::{Heap}
 
 /// The roads of the map, with their lengths in km.
 ///

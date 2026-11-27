@@ -1,0 +1,8 @@
+error[E0013]: expected a line break or `}`, found `{`
+ --> tests/ui/05-expressions/habits/do_word.cheby:6:6
+  |
+6 |   do {
+  |      ^
+  |
+  = help: Cheby has no `do`; use recursion, often through a local `fn`
+

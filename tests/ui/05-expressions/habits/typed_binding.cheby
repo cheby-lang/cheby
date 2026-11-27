@@ -1,0 +1,10 @@
+// @mode: parse-fail
+// @decisions: D-1930, D-1932
+//! `x: Int = 1` as a statement, as Python and TypeScript bind a name with
+//! its type, gets the help to bind it with `let`, with the name and the
+//! type as written.
+
+fn main() {
+  total: Int = 1
+  assert total == 1
+}

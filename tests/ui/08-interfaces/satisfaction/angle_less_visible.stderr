@@ -1,7 +1,7 @@
 error[E0063]: `angle::Angle` does not satisfy `Show`
-  --> tests/ui/08-interfaces/satisfaction/angle_less_visible/src/main.cheby:12:17
+  --> tests/ui/08-interfaces/satisfaction/angle_less_visible/src/main.cheby:13:17
    |
-12 |   io::println("{right}")
+13 |   io::println("{right}")
    |                 ^^^^^ interpolated here
    |
   ::: tests/ui/08-interfaces/satisfaction/angle_less_visible/src/geometry/angle.cheby:9:4

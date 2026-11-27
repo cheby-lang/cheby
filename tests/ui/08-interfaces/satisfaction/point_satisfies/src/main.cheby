@@ -3,8 +3,9 @@
 //! A type satisfies an interface through the functions of the module
 //! that declares it (§8.2).
 
-import app::geometry::point
 import std::io
+
+import app::geometry::point
 
 fn main() {
   let a = point::Point { x: 1, y: 2 }

@@ -1,7 +1,7 @@
 error[E0067]: `name` exists only on `native`, but `main` also runs on `js`
-  --> tests/ui/12-targets-and-ffi/module_target_both/src/main.cheby:10:15
+  --> tests/ui/12-targets-and-ffi/module_target_both/src/main.cheby:11:15
    |
-10 |   io::println(platform::name())
+11 |   io::println(platform::name())
    |               ^^^^^^^^^^^^^^ not available on `js`
    |
   ::: tests/ui/12-targets-and-ffi/module_target_both/src/platform.cheby:5:8

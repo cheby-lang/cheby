@@ -16,10 +16,11 @@
 //! so they take constant stack space. Nesting is not: every level of
 //! arrays or objects inside each other uses a few more stack frames.
 
-import json::value
 import std::float
 import std::result
 import std::string
+
+import json::value
 
 /// Why parsing failed, and where, counted in code points from 0.
 type ParseError {

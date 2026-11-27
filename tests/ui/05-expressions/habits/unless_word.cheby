@@ -1,0 +1,10 @@
+// @mode: parse-fail
+// @decisions: D-1930
+//! Ruby's `unless` gets the help to use `case`.
+
+fn main() {
+  let x = 1
+  unless x > 0 {
+    assert False
+  }
+}

@@ -130,7 +130,7 @@ fn package(dir: &Path) {
     .unwrap();
     std::fs::write(
         dir.join("src/main.cheby"),
-        "//! Root.\n\nimport app::plain\nimport std::io\n\n/// A box.\ntype Box { Box(Int) }\n\n\
+        "//! Root.\n\nimport std::io\n\nimport app::plain\n\n/// A box.\ntype Box { Box(Int) }\n\n\
          fn unbox(b: Box) -> Int {\n  let Box(n) = b\n  n\n}\n\n\
          fn main() {\n  let n = unbox(Box(plain::two()))\n  io::println(\"{n}\")\n}\n",
     )

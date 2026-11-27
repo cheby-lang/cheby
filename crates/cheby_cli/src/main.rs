@@ -46,7 +46,9 @@ use cheby_doc as _; // M5
 
 mod build_id;
 mod color;
+mod guide;
 mod new;
+mod single;
 
 use std::io::{IsTerminal as _, Write as _};
 use std::num::NonZeroUsize;
@@ -90,8 +92,27 @@ struct Cli {
     /// Number of worker threads for the build; defaults to the available parallelism
     #[arg(short = 'j', long, global = true, value_name = "N")]
     jobs: Option<NonZeroUsize>,
+    /// How diagnostics, tool errors and test results are written (D-1944)
+    #[arg(
+        long,
+        global = true,
+        value_enum,
+        value_name = "FORMAT",
+        default_value_t = Format::Text
+    )]
+    format: Format,
     #[command(subcommand)]
     command: Command,
+}
+
+/// The value of `--format` (D-1944).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, ValueEnum)]
+enum Format {
+    /// The layout of §13.8, for people
+    #[default]
+    Text,
+    /// One JSON object per line, for tools
+    Json,
 }
 
 #[derive(Debug, Subcommand)]
@@ -103,15 +124,26 @@ enum Command {
         /// Create a library, which other packages can depend on (D-1872)
         #[arg(long)]
         library: bool,
+        /// Leave out `AGENTS.md`, the guide for coding agents (D-1952)
+        #[arg(long)]
+        no_guide: bool,
     },
     /// Type-check the package without producing artifacts (D-282)
     Check {
+        /// A `.cheby` file to check without a package, or `-` for the source on standard
+        /// input (D-1949)
+        #[arg(value_name = "FILE")]
+        file: Option<String>,
         /// Check the code as it runs on this target only (D-550)
         #[arg(long, value_enum)]
         target: Option<Target>,
         /// Treat every warning as an error (D-549)
         #[arg(long)]
         deny_warnings: bool,
+        /// Apply the sure fixes of the diagnostics to the package's files and check again
+        /// (D-1945)
+        #[arg(long)]
+        fix: bool,
     },
     /// Compile a module's `main` into an executable for `native` (AOT) or `js` (D-006, D-937)
     Build {
@@ -133,7 +165,10 @@ enum Command {
     },
     /// Compile with the JIT and run a module's `main` (D-137)
     Run {
-        /// Module path, such as `my_app::tools::migrate`; defaults to the root module
+        /// Module path, such as `my_app::tools::migrate`; defaults to the root module. A
+        /// `.cheby` file, or `-` for the source on standard input, runs without a package
+        /// (D-1949)
+        #[arg(value_name = "MODULE_PATH|FILE")]
         module_path: Option<String>,
         /// Treat every warning as an error and run nothing after one (D-549)
         #[arg(long)]
@@ -156,8 +191,14 @@ enum Command {
     },
     /// Run `test` blocks (§13.6, D-541)
     Test {
-        /// Only run tests whose full name, `<module path> "<test name>"`, contains this text
+        /// Only run tests whose full name, `<module path> "<test name>"`, contains this text.
+        /// A `.cheby` file runs its own tests without a package, and the filter may follow it
+        /// (D-1949)
+        #[arg(value_name = "FILTER|FILE")]
         filter: Option<String>,
+        /// The filter, after a file
+        #[arg(value_name = "FILTER")]
+        file_filter: Option<String>,
         /// Only run the tests of this module and its submodules, such as `my_app::util`
         #[arg(long, value_name = "PATH")]
         module: Option<String>,
@@ -172,6 +213,10 @@ enum Command {
         /// Compile the tests with the release profile, which optimizes the program as a whole
         #[arg(long)]
         release: bool,
+        /// Write a line only for the tests that fail, and drop the output of those that pass
+        /// (D-1946)
+        #[arg(long)]
+        report_failures_only: bool,
     },
     /// Format source files (§13.7, D-1031)
     Fmt {
@@ -189,8 +234,12 @@ enum Command {
         #[arg(long, hide = true)]
         stdio: bool,
     },
-    /// Generate HTML documentation (§13.10)
-    Doc,
+    /// Look an API up as text; without a path, generate HTML documentation (§13.10)
+    Doc {
+        /// A module, such as `std::list`, an item, such as `list::map`, or a name to search
+        /// for, in std, the package and its dependencies (D-1947)
+        path: Option<String>,
+    },
     /// Add a git dependency to the manifest and lockfile (§13.4)
     Add {
         /// Git URL, such as `https://github.com/example/cheby-json`
@@ -209,6 +258,8 @@ enum Command {
     Update,
     /// Download what the lockfile names (§13.4)
     Fetch,
+    /// Print the guide for coding agents, which `cheby new` writes as `AGENTS.md` (D-1952)
+    Guide,
     /// Explain a diagnostic code such as `E0012` (D-420)
     Explain {
         /// Diagnostic code, such as `E0012` or `W0003`
@@ -311,7 +362,10 @@ fn run_command() -> ExitCode {
         color::forced(cli.color, env),
         std::io::stderr().is_terminal(),
     );
-    let out = Out { colors };
+    let out = Out {
+        colors,
+        format: cli.format,
+    };
     // The commands that build start the worker pool first (D-551), and so
     // does the language server, whose analysis runs the front end on it.
     // `-j` is global, and the commands that build nothing ignore it (D-622).
@@ -323,22 +377,32 @@ fn run_command() -> ExitCode {
             | Command::Repl { .. }
             | Command::Test { .. }
             | Command::Lsp { .. }
+            | Command::Doc { path: Some(_) }
             | Command::Backend(_)
     );
     if builds && let Err(e) = cheby_driver::configure_jobs(cli.jobs) {
         return out.error(e.message());
     }
     match cli.command {
-        Command::New { name, library } => new(out, &name, kind(library)),
+        Command::New {
+            name,
+            library,
+            no_guide,
+        } => new(out, &name, kind(library), !no_guide),
+        Command::Guide => guide(),
         Command::Check {
+            file,
             target,
             deny_warnings,
+            fix,
         } => check(
             out,
+            file.as_deref(),
             cheby_driver::CheckOptions {
                 target: target.map(Into::into),
                 deny_warnings,
             },
+            fix,
         ),
         Command::Build {
             module_path,
@@ -362,16 +426,24 @@ fn run_command() -> ExitCode {
             reuse_report,
             release,
             args,
-        } => run(
-            out,
-            cheby_driver::RunOptions {
-                module_path,
-                args,
-                deny_warnings,
-                reuse_report,
-                profile: profile(release),
-            },
-        ),
+        } => {
+            // A file stands where the module path does (D-1949).
+            let (file, module_path) = match module_path {
+                Some(arg) if single::names_file(&arg) => (Some(arg), None),
+                other => (None, other),
+            };
+            run(
+                out,
+                file.as_deref(),
+                cheby_driver::RunOptions {
+                    module_path,
+                    args,
+                    deny_warnings,
+                    reuse_report,
+                    profile: profile(release),
+                },
+            )
+        }
         Command::Repl { deny_warnings } => cheby_repl::run_cached(
             &cheby_repl::ReplOptions { deny_warnings },
             colors,
@@ -379,20 +451,41 @@ fn run_command() -> ExitCode {
         ),
         Command::Test {
             filter,
+            file_filter,
             module,
             deny_warnings,
             reuse_report,
             release,
-        } => test(
-            out,
-            &cheby_driver::TestOptions {
-                filter,
-                module,
-                deny_warnings,
-                reuse_report,
-                profile: profile(release),
-            },
-        ),
+            report_failures_only,
+        } => {
+            // A file stands where the filter does, and the filter after it
+            // (D-1949).
+            let (file, filter) = match (filter, file_filter) {
+                (Some(arg), filter) if single::names_file(&arg) => (Some(arg), filter),
+                (filter, None) => (None, filter),
+                (_, Some(_)) => {
+                    return out.error(
+                        "`cheby test` takes one filter; a first argument is a file only when it \
+                         ends in `.cheby`",
+                    );
+                }
+            };
+            test(
+                out,
+                file.as_deref(),
+                &cheby_driver::TestOptions {
+                    filter,
+                    module,
+                    deny_warnings,
+                    reuse_report,
+                    profile: profile(release),
+                },
+                cheby_driver::ReportStyle {
+                    json: cli.format == Format::Json,
+                    failures_only: report_failures_only,
+                },
+            )
+        }
         Command::Fmt { check, paths } => fmt(out, check, &paths),
         // The flag only names the one transport there is.
         Command::Lsp { .. } => cheby_lsp::run(cheby_lsp::ServerOptions {
@@ -400,7 +493,8 @@ fn run_command() -> ExitCode {
             // Without its own path the server runs no child jobs.
             child: std::env::current_exe().ok(),
         }),
-        Command::Doc => out.not_yet("doc", "M5"),
+        Command::Doc { path: None } => out.not_yet("doc", "M5"),
+        Command::Doc { path: Some(path) } => doc(out, &path),
         Command::Add {
             url,
             tag,
@@ -430,34 +524,119 @@ fn write_stderr(text: &str) {
     let _ = std::io::stderr().lock().write_all(text.as_bytes());
 }
 
-/// How the toolchain's own messages are written to stderr: colored or not.
+/// How the toolchain's own messages are written to stderr: colored or not,
+/// and as text or, with `--format json`, as one JSON object per line
+/// (D-1944).
 #[derive(Clone, Copy)]
 struct Out {
     colors: Colors,
+    format: Format,
 }
 
 impl Out {
     /// Prints diagnostics in the layout of D-418, warnings as errors
-    /// under `--deny-warnings` (D-549).
+    /// under `--deny-warnings` (D-549), or as JSON lines.
     fn diagnostics(self, out: &cheby_driver::CheckOutput) {
-        write_stderr(&out.render_with(self.colors));
+        match self.format {
+            Format::Text => write_stderr(&out.render_with(self.colors)),
+            Format::Json => write_stderr(&out.render_json()),
+        }
+        // The modules that import one with syntax errors were not checked
+        // (D-1951): silence about them does not mean they are clean.
+        if let Some(note) = out.unchecked_note() {
+            self.note(&note);
+        }
+        // An internal error of that extra check comes after the syntax
+        // errors, which are what the user fixes first (D-464, D-1951).
+        if let Some(message) = &out.internal {
+            let _ = self.error(message);
+        }
     }
 
-    /// Prints an `error:` line without a code (D-442) and returns status 1.
+    /// Prints diagnostics that are not a check's, as `cheby fmt`'s syntax
+    /// errors.
+    fn errors(self, errors: &[cheby_diag::Diagnostic], sources: &cheby_diag::SourceMap) {
+        match self.format {
+            Format::Text => {
+                write_stderr(&cheby_diag::render_all_with(errors, sources, self.colors));
+            }
+            Format::Json => {
+                for error in errors {
+                    write_stderr(&cheby_diag::render_json(error, sources, error.severity()));
+                }
+            }
+        }
+    }
+
+    /// Prints an `error:` line without a code (D-442), or its JSON line,
+    /// and returns status 1.
     fn error(self, message: &str) -> ExitCode {
-        write_stderr(&cheby_diag::render_tool_error(message, self.colors));
+        match self.format {
+            Format::Text => write_stderr(&cheby_diag::render_tool_error(message, self.colors)),
+            Format::Json => write_stderr(&cheby_diag::render_json_message("error", message)),
+        }
         ExitCode::FAILURE
     }
 
     /// Prints a `help:` line that follows a tool error.
     fn help(self, message: &str) {
-        write_stderr(&cheby_diag::render_tool_help(message, self.colors));
+        match self.format {
+            Format::Text => write_stderr(&cheby_diag::render_tool_help(message, self.colors)),
+            Format::Json => write_stderr(&cheby_diag::render_json_message("help", message)),
+        }
+    }
+
+    /// Prints a `note: …` line, given whole with its line break.
+    fn note(self, line: &str) {
+        match self.format {
+            Format::Text => write_stderr(line),
+            Format::Json => {
+                let message = line.strip_prefix("note: ").unwrap_or(line).trim_end();
+                write_stderr(&cheby_diag::render_json_message("note", message));
+            }
+        }
+    }
+
+    /// Prints a line for each fix that `cheby check --fix` applied:
+    /// `fixed: src/main.cheby:7:11: <the help>` (D-1945).
+    fn fixes(self, fixes: &[cheby_driver::AppliedFix]) {
+        use cheby_diag::json_string;
+        for fix in fixes {
+            let line = match self.format {
+                Format::Text => format!(
+                    "fixed: {}:{}:{}: {}\n",
+                    fix.path, fix.line, fix.column, fix.message
+                ),
+                Format::Json => cheby_diag::render_json_object(
+                    "fix",
+                    &[
+                        ("code", json_string(&fix.code.to_string())),
+                        ("message", json_string(&fix.message)),
+                        ("file", json_string(&fix.path)),
+                        ("line", fix.line.to_string()),
+                        ("column", fix.column.to_string()),
+                    ],
+                ),
+            };
+            write_stderr(&line);
+        }
     }
 
     fn not_yet(self, command: &str, milestone: &str) -> ExitCode {
         self.error(&format!(
             "`cheby {command}` is not implemented yet (planned for {milestone})"
         ))
+    }
+}
+
+/// What `cheby <command>` works on: the single file `file` names
+/// (D-1949), or the package that holds the current directory.
+fn work(out: Out, file: Option<&str>, command: &str) -> Result<single::Work, ExitCode> {
+    match file {
+        Some(arg) => single::load(arg, command)
+            .map(single::Work::File)
+            .map_err(|message| out.error(&message)),
+        None => package_root(out).map(single::Work::Package),
     }
 }
 
@@ -530,7 +709,7 @@ fn open_cache(out: Out) -> Result<cheby_driver::Cache, ExitCode> {
     match cheby_driver::Cache::open(&CacheEnv::from_process(), build_id::build_id(), log) {
         Ok((cache, fallback)) => {
             if let Some(fallback) = fallback {
-                write_stderr(&fallback_note(&fallback));
+                out.note(&fallback_note(&fallback));
             }
             Ok(cache)
         }
@@ -555,26 +734,55 @@ fn finish_cache(out: Out, cache: cheby_driver::Cache, trim: bool, code: ExitCode
 /// implemented phase and prints its diagnostics. It reads and writes the
 /// build cache's front records (D-955) and trims the cache at most once a
 /// day at its end (D-961).
-fn check(out: Out, options: cheby_driver::CheckOptions) -> ExitCode {
+/// How many times `cheby check --fix` applies fixes and checks again
+/// (D-1945).
+const FIX_ROUNDS: u32 = 4;
+
+fn check(out: Out, file: Option<&str>, options: cheby_driver::CheckOptions, fix: bool) -> ExitCode {
     let _phases = cheby_driver::phases::command("check");
-    let root = match package_root(out) {
-        Ok(root) => root,
+    let work = match work(out, file, "check") {
+        Ok(work) => work,
         Err(code) => return code,
     };
+    if fix && work.is_stdin() {
+        return out.error("`--fix` has no file to write to when the source is on standard input");
+    }
     let cache = match open_cache(out) {
         Ok(cache) => cache,
         Err(code) => return code,
     };
-    let code = match cheby_driver::check_cached(&root, &options, &cache) {
-        Ok(result) => {
-            out.diagnostics(&result);
-            if result.has_errors() {
-                ExitCode::FAILURE
-            } else {
-                ExitCode::SUCCESS
+    // `--fix` (D-1945): the fixes of a check are applied and the package is
+    // checked again, since a fix can clear the way for a later phase's
+    // diagnostics (D-452); the last check's diagnostics are the output.
+    let mut rounds: u32 = 0;
+    let code = loop {
+        let checked = match &work {
+            single::Work::Package(root) => cheby_driver::check_cached(root, &options, &cache),
+            single::Work::File(loaded) => {
+                cheby_driver::check_file_cached(&loaded.file, &options, &cache)
+            }
+        };
+        let result = match checked {
+            Ok(result) => result,
+            Err(e) => break out.error(e.message()),
+        };
+        if fix && rounds < FIX_ROUNDS {
+            match cheby_driver::apply_fixes(work.origin(), &result) {
+                Ok(applied) if applied.is_empty() => {}
+                Ok(applied) => {
+                    out.fixes(&applied);
+                    rounds = rounds.saturating_add(1);
+                    continue;
+                }
+                Err(e) => break out.error(e.message()),
             }
         }
-        Err(e) => out.error(e.message()),
+        out.diagnostics(&result);
+        break if result.has_errors() {
+            ExitCode::FAILURE
+        } else {
+            ExitCode::SUCCESS
+        };
     };
     finish_cache(out, cache, true, code)
 }
@@ -586,17 +794,22 @@ fn check(out: Out, options: cheby_driver::CheckOptions) -> ExitCode {
 /// errors (D-549). The build reads and writes the cache's front records
 /// (D-955); the cache is closed before the program starts, which may end
 /// the process itself, and `cheby run` never trims (D-961).
-fn run(out: Out, options: cheby_driver::RunOptions) -> ExitCode {
+fn run(out: Out, file: Option<&str>, options: cheby_driver::RunOptions) -> ExitCode {
     let _phases = cheby_driver::phases::command("run");
-    let root = match package_root(out) {
-        Ok(root) => root,
+    let work = match work(out, file, "run") {
+        Ok(work) => work,
         Err(code) => return code,
     };
     let cache = match open_cache(out) {
         Ok(cache) => cache,
         Err(code) => return code,
     };
-    let prepared = cheby_driver::prepare_run_cached(&root, options, &cache);
+    let prepared = match &work {
+        single::Work::Package(root) => cheby_driver::prepare_run_cached(root, options, &cache),
+        single::Work::File(loaded) => {
+            cheby_driver::prepare_run_file_cached(&loaded.file, options, &cache)
+        }
+    };
     let mut program = match prepared {
         Ok(cheby_driver::Prepared::Ready(program)) => program,
         Ok(cheby_driver::Prepared::CompileFailed(result)) => {
@@ -640,17 +853,28 @@ fn run(out: Out, options: cheby_driver::RunOptions) -> ExitCode {
 /// reads and writes the cache's front records (D-955); the cache is
 /// trimmed at most once a day (D-961) and closed when the build ends,
 /// before any test runs.
-fn test(out: Out, options: &cheby_driver::TestOptions) -> ExitCode {
+fn test(
+    out: Out,
+    file: Option<&str>,
+    options: &cheby_driver::TestOptions,
+    report: cheby_driver::ReportStyle,
+) -> ExitCode {
     let _phases = cheby_driver::phases::command("test");
-    let root = match package_root(out) {
-        Ok(root) => root,
+    let work = match work(out, file, "test") {
+        Ok(work) => work,
         Err(code) => return code,
     };
     let cache = match open_cache(out) {
         Ok(cache) => cache,
         Err(code) => return code,
     };
-    let program = match cheby_driver::prepare_test_cached(&root, options, &cache) {
+    let prepared = match &work {
+        single::Work::Package(root) => cheby_driver::prepare_test_cached(root, options, &cache),
+        single::Work::File(loaded) => {
+            cheby_driver::prepare_test_file_cached(&loaded.file, options, &cache)
+        }
+    };
+    let mut program = match prepared {
         Ok(cheby_driver::PreparedTests::Ready(program)) => program,
         Ok(cheby_driver::PreparedTests::CompileFailed(result)) => {
             out.diagnostics(&result);
@@ -674,6 +898,7 @@ fn test(out: Out, options: &cheby_driver::TestOptions) -> ExitCode {
     // that output ends the run with 1 and prints nothing more
     // (`terminated`, D-306, D-783); a tool error here is only a runtime
     // that cannot start or run a test.
+    program.set_report(report);
     match program.run(&mut std::io::stdout(), &mut std::io::stderr()) {
         Ok(report) if report.success() => ExitCode::SUCCESS,
         Ok(_) => ExitCode::FAILURE,
@@ -681,12 +906,46 @@ fn test(out: Out, options: &cheby_driver::TestOptions) -> ExitCode {
     }
 }
 
+/// `cheby doc <path>` (§13.10, D-1947): looks `query` up in std and, inside
+/// a package, in the package and its dependencies, and prints what it names
+/// to standard output, as text or, with `--format json`, as JSON lines. A
+/// package that cannot be read costs a note, and std still answers. A query
+/// that names nothing is a tool error.
+fn doc(out: Out, query: &str) -> ExitCode {
+    let root = std::env::current_dir()
+        .ok()
+        .and_then(|cwd| cheby_driver::find_package_root(&cwd));
+    let (index, unread) = match cheby_driver::analysis::api_index(root.as_deref()) {
+        Ok(found) => found,
+        Err(e) => return out.error(e.message()),
+    };
+    if let Some(why) = unread {
+        out.note(&format!(
+            "note: the package was not read, so only the standard library is searched: {why}\n"
+        ));
+    }
+    let Some(found) = cheby_doc::lookup(&index, query) else {
+        let code = out.error(&format!("nothing is named `{query}`"));
+        out.help("`cheby doc std` lists the modules of the standard library");
+        return code;
+    };
+    let text = match out.format {
+        Format::Text => cheby_doc::render_text(&found),
+        Format::Json => cheby_doc::render_json(&found),
+    };
+    if std::io::stdout().lock().write_all(text.as_bytes()).is_ok() {
+        ExitCode::SUCCESS
+    } else {
+        ExitCode::FAILURE
+    }
+}
+
 /// `cheby new <name>` (D-1032, spec §13.1): creates the package `name` in
 /// the working directory and prints nothing. An invalid name and an
 /// existing path are tool errors that write nothing, the first with a
 /// `help:` line when a valid name is close (D-464).
-fn new(out: Out, name: &str, kind: cheby_driver::Kind) -> ExitCode {
-    match new::new_package(std::path::Path::new(""), name, kind) {
+fn new(out: Out, name: &str, kind: cheby_driver::Kind, guide: bool) -> ExitCode {
+    match new::new_package(std::path::Path::new(""), name, kind, guide) {
         Ok(()) => ExitCode::SUCCESS,
         Err(e) => {
             let code = out.error(&e.message());
@@ -695,6 +954,20 @@ fn new(out: Out, name: &str, kind: cheby_driver::Kind) -> ExitCode {
             }
             code
         }
+    }
+}
+
+/// `cheby guide` (D-1952): prints the guide for coding agents, the text of
+/// `docs/guide/agents.md`, which `cheby new` writes as `AGENTS.md`.
+fn guide() -> ExitCode {
+    if std::io::stdout()
+        .lock()
+        .write_all(guide::GUIDE.as_bytes())
+        .is_ok()
+    {
+        ExitCode::SUCCESS
+    } else {
+        ExitCode::FAILURE
     }
 }
 
@@ -728,6 +1001,28 @@ struct FmtTarget {
     /// How `--check` and errors name it: as given on the command line, or
     /// relative to the package root (D-1146).
     display: String,
+    /// The name of the package that holds it, which tells the imports of
+    /// the package's own modules from other packages' (D-1953).
+    package: Option<String>,
+}
+
+/// The name of the package around `path`, a file or, for standard input,
+/// the working directory (D-1953): the name in the nearest `cheby.toml`
+/// above it. `None` outside a package, or when the manifest cannot be
+/// read. `known` keeps the answer for each package root.
+fn package_around(
+    path: Option<&std::path::Path>,
+    known: &mut std::collections::BTreeMap<std::path::PathBuf, Option<String>>,
+) -> Option<String> {
+    let dir = match path {
+        Some(path) => std::path::absolute(path).ok()?.parent()?.to_path_buf(),
+        None => std::env::current_dir().ok()?,
+    };
+    let root = cheby_driver::find_package_root(&dir)?;
+    known
+        .entry(root)
+        .or_insert_with_key(|root| cheby_driver::package_name(root))
+        .clone()
 }
 
 /// `cheby fmt [--check] [PATH…]` (§13.7, D-1031): formats every `.cheby`
@@ -745,22 +1040,29 @@ fn fmt(out: Out, check: bool, paths: &[std::path::PathBuf]) -> ExitCode {
             Err(code) => return code,
         };
         let src = root.join("src");
+        let package = cheby_driver::package_name(&root);
         match package_sources(&src) {
             Ok(files) => files
                 .into_iter()
                 .map(|path| FmtTarget {
                     display: cheby_diag::display_path(&path, &root),
                     path: Some(path),
+                    package: package.clone(),
                 })
                 .collect(),
             Err(e) => return out.error(&format!("cannot read `{}`: {e}", src.display())),
         }
     } else {
+        let mut known = std::collections::BTreeMap::new();
         paths
             .iter()
-            .map(|path| FmtTarget {
-                display: path.display().to_string(),
-                path: (path.as_os_str() != "-").then(|| path.clone()),
+            .map(|path| {
+                let file = (path.as_os_str() != "-").then(|| path.clone());
+                FmtTarget {
+                    display: path.display().to_string(),
+                    package: package_around(file.as_deref(), &mut known),
+                    path: file,
+                }
             })
             .collect()
     };
@@ -810,17 +1112,14 @@ fn fmt_one(out: Out, target: &FmtTarget, check: bool) -> Result<bool, ()> {
     let file = sources
         .add_file(name, text.as_str())
         .map_err(|e| fail(e.to_string()))?;
-    let formatted = match cheby_fmt::format_file(file, &text, cheby_fmt::WIDTH) {
-        Ok(formatted) => formatted,
-        Err(e) => {
-            write_stderr(&cheby_diag::render_all_with(
-                e.errors(),
-                &sources,
-                out.colors,
-            ));
-            return Err(());
-        }
-    };
+    let formatted =
+        match cheby_fmt::format_file(file, &text, cheby_fmt::WIDTH, target.package.as_deref()) {
+            Ok(formatted) => formatted,
+            Err(e) => {
+                out.errors(e.errors(), &sources);
+                return Err(());
+            }
+        };
     let changed = formatted != text;
     if check {
         return Ok(changed);
@@ -1133,8 +1432,10 @@ mod tests {
         assert!(matches!(
             cli.command,
             Command::Check {
+                file: None,
                 target: Some(Target::Js),
-                deny_warnings: true
+                deny_warnings: true,
+                fix: false,
             }
         ));
         assert_eq!(cli.jobs, None);
@@ -1296,7 +1597,9 @@ mod tests {
     #[test]
     fn cheby_new_parses_one_name() {
         let cli = Cli::try_parse_from(["cheby", "new", "my_app"]).unwrap();
-        assert!(matches!(cli.command, Command::New { name, library: false } if name == "my_app"));
+        assert!(
+            matches!(cli.command, Command::New { name, library: false, no_guide: false } if name == "my_app")
+        );
         assert!(Cli::try_parse_from(["cheby", "new"]).is_err());
         assert!(Cli::try_parse_from(["cheby", "new", "a", "b"]).is_err());
     }

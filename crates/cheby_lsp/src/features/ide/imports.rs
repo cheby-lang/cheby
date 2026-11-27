@@ -15,21 +15,25 @@
 //!   std checkout, std's modules are the session's own: the cycle rule
 //!   holds among them, and a std module the checkout lacks is refused
 //!   (D-1700).
-//! - It goes where `cheby fmt` would keep it (D-1030, D-1148): into the
-//!   first block of imports, before the first whose module path sorts
-//!   after it in byte order, else after the block's last. A file with no
-//!   import gets it after its inner attributes, else after its `//!` block
-//!   and a blank line, else at its start, in E0018's order.
+//! - It goes where `cheby fmt` would keep it (D-1030, D-1953): into the
+//!   block of its class, the standard library's, other packages' or the
+//!   package's own, before the first import there whose module path sorts
+//!   after it in byte order, else after the block's last; a file with no
+//!   block of its class gets one at its place, with a blank line between
+//!   blocks. A file with no import before its first item gets it after its
+//!   inner attributes, else after its `//!` block and a blank line, else at
+//!   its start, in E0018's order.
 
 use std::collections::BTreeSet;
 
 use cheby_driver::analysis::{
     ModuleId, ModulePath, ModuleView, PackageId, Snapshot, StdIndex, TextRange, TextSize,
 };
+use cheby_syntax::imports::{ImportChunk, ImportClass, ImportSection, import_section};
 use cheby_syntax::names::{NameCase, check_candidate};
-use cheby_syntax::{SyntaxElement, SyntaxKind as K, SyntaxNode, SyntaxToken};
+use cheby_syntax::{SyntaxElement, SyntaxKind as K, SyntaxNode};
 
-use crate::features::ide::scope;
+use crate::features::ide::{package_name, scope};
 
 /// How code in one module names another module.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -80,7 +84,14 @@ pub(crate) fn import_plan(
     } else {
         format!("import {path_text} as {name}")
     };
-    let edit = placement(tree.root(), tree.text(), &path_text, &line);
+    let package = package_name(snapshot);
+    let edit = placement(
+        tree.root(),
+        tree.text(),
+        package.as_deref(),
+        &path_text,
+        &line,
+    );
     Some(ImportPlan {
         name,
         edit: Some(edit),
@@ -181,40 +192,47 @@ pub(crate) fn parse_path(text: &str) -> Option<ModulePath> {
     Some(segments.fold(ModulePath::root(first), |path, s| path.child(s)))
 }
 
-/// The insertion of `line`, an import of the module `path`, into the file
-/// of `root`, whose text is `text`.
+/// The insertion of `line`, one import of the module `path`, into the
+/// file of `root`, whose text is `text`, a file of the package named
+/// `package` (D-1953). E0018's fix puts the imports that follow an item
+/// where it puts them, one at a time (D-1744).
+///
+/// The import goes into the block of its class (`ImportClass`), before
+/// the first import of that block that sorts after it, else after the
+/// block's last. A file with no block of its class gets one, with a blank
+/// line between it and its neighbours: before the first import of a later
+/// class, else after the section's last import. An insertion before an
+/// import goes before the comments that travel with it, so a section in
+/// `cheby fmt`'s order stays in it (D-1953).
 pub(crate) fn placement(
     root: SyntaxNode<'_>,
     text: &str,
+    package: Option<&str>,
     path: &str,
     line: &str,
 ) -> (TextRange, String) {
-    placement_without(root, text, path, line, &[])
-}
-
-/// [`placement`], as if the imports whose nodes cover `moved` were not
-/// in the file: where E0018's fix puts the imports that follow an item
-/// (D-1744). `line` may hold several imports, one per line.
-pub(crate) fn placement_without(
-    root: SyntaxNode<'_>,
-    text: &str,
-    path: &str,
-    line: &str,
-    moved: &[TextRange],
-) -> (TextRange, String) {
-    let imports: Vec<SyntaxNode<'_>> = root
-        .children()
-        .filter(|c| c.kind() == K::IMPORT_DECL && !moved.contains(&c.text_range()))
-        .collect();
-    if let Some((first, rest)) = imports.split_first() {
-        let block = first_block(*first, rest, text);
+    let section = import_section(root, package);
+    let chunks: &[ImportChunk<'_>] = section.as_ref().map_or(&[], ImportSection::chunks);
+    if let Some(last) = chunks.last() {
+        let class = ImportClass::of(path.split("::").next().unwrap_or_default(), package);
         let key = (path.to_owned(), sort_text(line));
-        if let Some(after) = block.iter().find(|import| import_key(**import) > key) {
-            let at = line_start(text, after.text_range().start());
-            return (TextRange::empty(at), format!("{line}\n"));
+        let before = |chunk: &ImportChunk<'_>, insert: String| {
+            (
+                TextRange::empty(line_start(text, chunk.range().start())),
+                insert,
+            )
+        };
+        if let Some(next) = chunks.iter().find(|c| c.class == class && c.key > key) {
+            return before(next, format!("{line}\n"));
         }
-        let last = block.last().copied().unwrap_or(*first);
-        return after_line(text, last.text_range().end(), format!("{line}\n"));
+        if let Some(own) = chunks.iter().rev().find(|c| c.class == class) {
+            return after_line(text, own.range().end(), format!("{line}\n"));
+        }
+        // A new block: before the first of a later block, else last.
+        if let Some(next) = chunks.iter().find(|c| c.class > class) {
+            return before(next, format!("{line}\n\n"));
+        }
+        return after_line(text, last.range().end(), format!("\n{line}\n"));
     }
     let anchor = root
         .children_with_tokens()
@@ -251,54 +269,14 @@ pub(crate) fn placement_without(
     }
 }
 
-/// The first block of imports (D-1148): `first` and the imports of `rest`
-/// that follow it on consecutive lines, with nothing but a line break
-/// between each and the next.
-fn first_block<'t>(
-    first: SyntaxNode<'t>,
-    rest: &[SyntaxNode<'t>],
-    text: &str,
-) -> Vec<SyntaxNode<'t>> {
-    let mut block = vec![first];
-    for &next in rest {
-        let Some(&prev) = block.last() else { break };
-        let between = TextRange::new(prev.text_range().end(), next.text_range().start());
-        let gap = between.slice(text).unwrap_or("x");
-        let breaks = gap.matches('\n').count();
-        if breaks != 1 || !gap.chars().all(char::is_whitespace) {
-            break;
-        }
-        block.push(next);
-    }
-    block
-}
-
-/// The sort key of an import (D-1148): its module path's text, then its
-/// whole text with tokens joined by single spaces.
-fn import_key(import: SyntaxNode<'_>) -> (String, String) {
-    let path = import
-        .first_child_of_kind(K::MODULE_PATH)
-        .map_or_default(|p| {
-            p.tokens()
-                .filter(|t| !t.kind().is_trivia() && t.kind() != K::NEWLINE)
-                .map(SyntaxToken::text)
-                .collect::<String>()
-        });
-    let whole: Vec<&str> = import
-        .tokens()
-        .filter(|t| !t.kind().is_trivia() && t.kind() != K::NEWLINE)
-        .map(SyntaxToken::text)
-        .collect();
-    (path, whole.join(" "))
-}
-
-/// `line`, an import as written, with its tokens joined by single spaces,
-/// as [`import_key`] compares them.
+/// `line`, one import as written, with its tokens joined by single spaces,
+/// as `cheby_syntax::imports::import_key` joins them.
 fn sort_text(line: &str) -> String {
-    line.replace("::", " :: ")
-        .split_whitespace()
-        .collect::<Vec<_>>()
-        .join(" ")
+    let mut spaced = line.replace("::", " :: ");
+    for punct in ['{', '}', ','] {
+        spaced = spaced.replace(punct, &format!(" {punct} "));
+    }
+    spaced.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
 /// The insertion of `text` at the start of the line after the one that

@@ -5,10 +5,11 @@
 //! module, get distinct static dictionaries: each call reaches its own
 //! interface's function (§8.5.1).
 
+import std::io
+
 import app::app
 import app::app::m
 import app::t
-import std::io
 
 fn main() {
   let inner = m::call(t::T)

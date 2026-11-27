@@ -39,7 +39,7 @@ const DOUBLING: &str = "//! Doubling in C.\n\n\
                         @external(native, \"app_twice\")\npub fn twice(n: Int) -> Int\n";
 
 /// The package's root module: `main` and a test call the C function.
-const MAIN: &str = "//! Doubles a number in C.\n\nimport app::doubling\nimport std::io\n\n\
+const MAIN: &str = "//! Doubles a number in C.\n\nimport std::io\n\nimport app::doubling\n\n\
                     fn main() {\n  let n = doubling::twice(21)\n  io::println(\"twice: {n}\")\n}\n\n\
                     test \"twice doubles\" {\n  assert doubling::twice(21) == 42\n}\n";
 
@@ -536,8 +536,9 @@ pub fn count(counter: Counter) -> Int
 /// The root module: prints what the pool built.
 const BLOCKING_MAIN: &str = r#"//! Prints values that C code built on the blocking pool.
 
-import app::pool
 import std::io
+
+import app::pool
 
 fn main() {
   io::println(pool::greet("Ada"))
@@ -649,7 +650,7 @@ const REGISTRY: &str = "//! A registry that the package's C code collects in a s
 /// The root module: `main` prints the count, and a test asserts it under
 /// `cheby test`.
 const REGISTRY_MAIN: &str = "//! Prints how many entries the C registry holds.\n\n\
-                             import app::registry\nimport std::io\n\n\
+                             import std::io\n\nimport app::registry\n\n\
                              fn main() {\n  let n = registry::entries()\n  io::println(\"entries: {n}\")\n}\n\n\
                              test \"the registry keeps its three entries under cheby test\" {\n  \
                              assert registry::entries() == 3\n}\n";

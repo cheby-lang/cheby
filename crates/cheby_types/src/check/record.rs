@@ -8,10 +8,11 @@
 
 use cheby_diag::{Diagnostic, Span, codes};
 use cheby_iface::{
-    CtorFields, DefId, Ice, Interner, ItemSig, ModuleId, Name, Ty, TyKind, TypeDefKind, Vis,
-    structure_visible,
+    CtorFields, DefId, DefKind, Ice, Interner, ItemSig, ModuleId, ModuleInterface, Name, Namespace,
+    Ty, TyKind, TypeDefKind, Vis, builtin, structure_visible,
 };
 use cheby_resolve::{LocalKind, Res};
+use cheby_syntax::SyntaxKind;
 use cheby_syntax::ast::{self, AstNode, AstToken, FieldInit, RecordEntry};
 
 use super::{BodyCx, Expected};
@@ -658,7 +659,7 @@ impl BodyCx<'_> {
                 (def, ctors, args) = next;
             }
             let Some((index_per_ctor, field_ty)) =
-                self.common_field(def, &ctors, text, name.span(), "updated")
+                self.common_field(def, &ctors, text, name.span(), "updated", None)
             else {
                 let label = (name.span(), text);
                 self.note_field_label(label, FieldSite::Update, def, None, None);
@@ -710,7 +711,7 @@ impl BodyCx<'_> {
             None => None,
         };
         let (Some((def, args)), Some(ctors)) = (parts, ctors) else {
-            self.no_fields(&known, text, name.span(), prev.span());
+            self.no_fields(&known, text, name.span(), prev.span(), None);
             return Ok(None);
         };
         if !self.check_structure(def, Structure::Fields, name.span())? {
@@ -899,6 +900,7 @@ impl BodyCx<'_> {
         name: &str,
         span: Span,
         done: &str,
+        method: Option<&MethodCall>,
     ) -> Option<CommonField> {
         let names = &self.input.globals.names;
         let ty_name = self.input.name_of(self.own, ty_def);
@@ -931,6 +933,11 @@ impl BodyCx<'_> {
                     only.name,
                     quoted_list(&all)
                 ));
+            }
+            if let Some(method) = method
+                && let Some(help) = self.method_help(ty_def, name, method, &all)
+            {
+                diag = diag.with_help(help);
             }
             self.report(diag);
             return None;
@@ -1134,7 +1141,174 @@ impl BodyCx<'_> {
         let Some(name) = field.field() else {
             return self.error_expr(span);
         };
-        self.read_field(base, name.text(), name.span(), span)
+        let method = self.method_call(field, receiver);
+        self.read_field_of(base, name.text(), name.span(), span, method.as_ref())
+    }
+
+    /// The call `x.name(…)` whose callee is `field`, with `receiver`, for
+    /// the help of E0058 (D-1938). `None` when `field` is not called.
+    fn method_call(
+        &self,
+        field: ast::FieldExpr<'_>,
+        receiver: ast::Expr<'_>,
+    ) -> Option<MethodCall> {
+        let node = field.syntax();
+        let call = node
+            .parent()
+            .filter(|p| p.kind() == SyntaxKind::CALL_EXPR && p.first_child() == Some(node))?;
+        let args = call
+            .children()
+            .find(|c| c.kind() == SyntaxKind::ARG_LIST)
+            .is_some_and(|list| list.children().next().is_some());
+        let text = receiver
+            .syntax()
+            .text_range()
+            .slice(self.input.tree.text())
+            .filter(|text| text.len() <= MAX_RECEIVER && !text.contains('\n'))
+            .map(str::to_owned);
+        Some(MethodCall {
+            receiver: text,
+            args,
+        })
+    }
+
+    /// E0058's help for the call `x.name(…)` on a value of the type
+    /// `ty_def` (D-1938): the function `name` of the type's home module,
+    /// else the std function that another language's `name` means
+    /// (D-1658), else the module where the type's functions are. Only
+    /// interfaces are read (D-246). `None` when no function `name` is
+    /// found and one of `fields`, the type's named fields, is close to
+    /// `name`: a misspelled field that holds a function is then the likelier
+    /// cause.
+    fn method_help(
+        &self,
+        ty_def: DefId,
+        name: &str,
+        call: &MethodCall,
+        fields: &[&str],
+    ) -> Option<String> {
+        let ty_name = self.input.name_of(self.own, ty_def);
+        let modules = self.input.modules;
+        let (home, segment) = if ty_def.module == ModuleId::BUILTIN {
+            let Some(&(_, segment)) = builtin::HOMES.iter().find(|(def, _)| *def == ty_def) else {
+                return Some(
+                    "Cheby has no methods; call a function with the value as its first argument"
+                        .to_owned(),
+                );
+            };
+            (modules.find(&builtin::home_path(segment)), Some(segment))
+        } else {
+            (Some(ty_def.module), None)
+        };
+        // 1. A function `name` of the home module.
+        if let Some(home) = home
+            && let Some(params) = self.function_in(home, name)
+        {
+            return Some(Self::call_help(
+                home_name(self, home, segment),
+                name,
+                params > 1 || call.args,
+                call,
+            ));
+        }
+        // A field whose name is close, such as `run` for `h.rnu(1)`.
+        if cheby_resolve::closest_name(name, fields.iter().copied()).is_some() {
+            return None;
+        }
+        // 2. The std function that another language's name means.
+        if let Some(segment) = segment
+            && let Some((to_module, to_name)) = cheby_resolve::std_alias(segment, name)
+        {
+            let target = modules.find(&builtin::home_path(to_module));
+            let params = target.and_then(|m| self.function_in(m, to_name));
+            let qualifier = match target {
+                Some(m) => home_name(self, m, Some(to_module)),
+                None => Some(Qualifier {
+                    name: to_module.to_owned(),
+                    import: Some(format!("std::{to_module}")),
+                }),
+            };
+            return Some(Self::call_help(
+                qualifier,
+                to_name,
+                params.map_or(call.args, |p| p > 1),
+                call,
+            ));
+        }
+        // 3. Where the type's functions are.
+        let help = match home {
+            Some(home) if home == self.input.module => {
+                format!("Cheby has no methods; the functions of `{ty_name}` are in this module")
+            }
+            Some(home) => match modules.get(home) {
+                Some(info) => format!(
+                    "Cheby has no methods; the functions of `{ty_name}` are in `{}`",
+                    info.path
+                ),
+                None => {
+                    "Cheby has no methods; call a function with the value as its first argument"
+                        .to_owned()
+                }
+            },
+            None => match segment {
+                Some(segment) => format!(
+                    "Cheby has no methods; the functions of `{ty_name}` are in `std::{segment}`"
+                ),
+                None => {
+                    "Cheby has no methods; call a function with the value as its first argument"
+                        .to_owned()
+                }
+            },
+        };
+        Some(help)
+    }
+
+    /// The number of parameters of the function `name` that module
+    /// `module` has and this module may call, if it has one and its
+    /// interface is readable here: this module's own, or a dependency's.
+    fn function_in(&self, module: ModuleId, name: &str) -> Option<usize> {
+        let name = self.input.globals.names.lookup(name)?;
+        let own = module == self.input.module;
+        let iface: &ModuleInterface = if own {
+            self.own
+        } else {
+            self.input.deps.get(module)?
+        };
+        let index = iface.lookup(Namespace::Value, name)?;
+        let item = iface.item(index)?;
+        let visible = own || iface.visible_from(index, self.input.package);
+        let ItemSig::Fn(sig) = &item.sig else {
+            return None;
+        };
+        (item.kind == DefKind::Fn && visible).then_some(sig.params.len())
+    }
+
+    /// "Cheby has no methods; call `list::length(xs)`": the call of
+    /// `function`, through `qualifier` when there is one, with the receiver
+    /// first and `…` for the other arguments when `more`.
+    fn call_help(
+        qualifier: Option<Qualifier>,
+        function: &str,
+        more: bool,
+        call: &MethodCall,
+    ) -> String {
+        let (callee, import) = match qualifier {
+            Some(Qualifier { name, import }) => (format!("{name}::{function}"), import),
+            None => (function.to_owned(), None),
+        };
+        let help = match &call.receiver {
+            Some(receiver) => {
+                let rest = if more { ", …" } else { "" };
+                format!("Cheby has no methods; call `{callee}({receiver}{rest})`")
+            }
+            None => format!(
+                "Cheby has no methods; call `{callee}` with the value as its first argument"
+            ),
+        };
+        match import {
+            Some(path) => format!("{help}, after `import {path}`"),
+            None => help,
+        }
     }
 
     /// The field access `base.text` at `span`, with the field's name at
@@ -1149,6 +1323,18 @@ impl BodyCx<'_> {
         name_span: Span,
         span: Span,
     ) -> Result<ExprId, Ice> {
+        self.read_field_of(base, text, name_span, span, None)
+    }
+
+    /// [`Self::read_field`], for the callee of `method` when it is one.
+    fn read_field_of(
+        &mut self,
+        base: ExprId,
+        text: &str,
+        name_span: Span,
+        span: Span,
+        method: Option<&MethodCall>,
+    ) -> Result<ExprId, Ice> {
         let base_ty = self.ty_of(base)?;
         let base_span = self.span_of(base)?;
         let fact = self.note_field_read(name_span, text, &base_ty);
@@ -1162,13 +1348,14 @@ impl BodyCx<'_> {
             return self.propagated_error_expr(span);
         }
         let Some((ty_def, args)) = self.named_parts(&known)? else {
-            self.no_fields(&known, text, name_span, base_span);
+            self.no_fields(&known, text, name_span, base_span, None);
             return self.error_expr(span);
         };
         self.note_field_owner(fact, ty_def);
         let Some(ctors) = self.adt_ctors(ty_def)? else {
             if matches!(self.input.item(self.own, ty_def)?.sig, ItemSig::Type(_)) {
-                self.no_fields(&known, text, name_span, base_span);
+                let method = method.map(|method| (method, ty_def));
+                self.no_fields(&known, text, name_span, base_span, method);
             } else {
                 self.errored = true;
             }
@@ -1178,7 +1365,7 @@ impl BodyCx<'_> {
             return self.error_expr(span);
         }
         let Some((index_per_ctor, field_ty)) =
-            self.common_field(ty_def, &ctors, text, name_span, "read")
+            self.common_field(ty_def, &ctors, text, name_span, "read", method)
         else {
             return self.error_expr(span);
         };
@@ -1205,8 +1392,17 @@ impl BodyCx<'_> {
         )
     }
 
-    /// E0058 for `.name` on a type without named fields.
-    fn no_fields(&mut self, ty: &InferTy, name: &str, span: Span, base_span: Span) {
+    /// E0058 for `.name` on a type without named fields, with the help of
+    /// a method call when `.name` is called on a value of the type in
+    /// `method` (D-1938).
+    fn no_fields(
+        &mut self,
+        ty: &InferTy,
+        name: &str,
+        span: Span,
+        base_span: Span,
+        method: Option<(&MethodCall, DefId)>,
+    ) {
         let shown = self.show(ty);
         let mut diag = Diagnostic::new(
             codes::UNKNOWN_FIELD,
@@ -1219,8 +1415,64 @@ impl BodyCx<'_> {
         {
             diag = diag.with_help("read tuple elements with a pattern: `let (a, b) = pair`");
         }
+        if let Some((method, ty_def)) = method
+            && let Some(help) = self.method_help(ty_def, name, method, &[])
+        {
+            diag = diag.with_help(help);
+        }
         self.report(diag);
     }
+}
+
+/// The longest receiver that E0058's help writes out (D-1938).
+const MAX_RECEIVER: usize = 30;
+
+/// A field access that is the callee of a call, `x.name(…)` (D-1938).
+pub(super) struct MethodCall {
+    /// The receiver's text, if it is short and on one line.
+    receiver: Option<String>,
+    /// Whether the call has arguments.
+    args: bool,
+}
+
+/// The name through which the module `module` is written here: none in
+/// the module itself, the name of its import, or else `segment`, its last
+/// segment under `std`, when it has one.
+fn home_name(cx: &BodyCx<'_>, module: ModuleId, segment: Option<&str>) -> Option<Qualifier> {
+    if module == cx.input.module {
+        return None;
+    }
+    let names = &cx.input.globals.names;
+    let mut imported: Vec<&str> = cx
+        .input
+        .resolved
+        .scope
+        .iter(Namespace::Value)
+        .filter(|(_, entry)| entry.res == Res::Module(module))
+        .map(|(name, _)| names.get(name))
+        .collect();
+    imported.sort_unstable();
+    if let Some(first) = imported.first() {
+        return Some(Qualifier {
+            name: (*first).to_owned(),
+            import: None,
+        });
+    }
+    let path = cx.input.modules.get(module).map(|info| &info.path);
+    let name = segment
+        .map(str::to_owned)
+        .or_else(|| path.and_then(|path| path.segments().last().cloned()))?;
+    Some(Qualifier {
+        name,
+        import: path.map(ToString::to_string),
+    })
+}
+
+/// How a module is written in a call: its name here, and its path when the
+/// module does not import it yet.
+struct Qualifier {
+    name: String,
+    import: Option<String>,
 }
 
 /// The span of `field`'s path, from its first name to its last.

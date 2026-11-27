@@ -263,8 +263,9 @@ pub(super) fn package_candidates(
         .collect()
 }
 
-/// The top-level items of the local package that module `input.module`
-/// uses outside their own declarations (W0005's uses, D-516), as
+/// The top-level items of the local package (of std, for a std module in
+/// std's self-test, D-1957) that module `input.module` uses outside their
+/// own declarations (W0005's uses, D-516), as
 /// `(module, top-level item)`, sorted and without repeats. A reference
 /// into another module counts whatever item holds it; a reference to an
 /// item of the module itself counts unless the item's own signature or
@@ -273,10 +274,12 @@ pub(super) fn package_uses(input: &TypesInput<'_>, refs: &[ItemRef]) -> Vec<cheb
     let mut out: Vec<cheby_iface::DefId> = refs
         .iter()
         .filter(|r| {
-            input
-                .modules
-                .get(r.def.module)
-                .is_some_and(|info| info.package == PackageId::LOCAL)
+            input.modules.get(r.def.module).is_some_and(|info| {
+                // In std's self-test, std's own modules are the package
+                // (D-1957); a dependency's uses stay out of its records.
+                info.package == PackageId::LOCAL
+                    || (input.package == PackageId::STD && info.package == PackageId::STD)
+            })
         })
         .filter_map(|r| {
             let top = if r.def.module == input.module {

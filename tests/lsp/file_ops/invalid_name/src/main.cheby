@@ -2,9 +2,10 @@
 // @steps: willRename src/util.cheby src/My-Util.cheby
 //! The root module, which imports `util`.
 
+import std::io
+
 import moves::util
 import moves::util::{greet}
-import std::io
 
 fn main() {
   let s: util::Shape = util::Shape(1)

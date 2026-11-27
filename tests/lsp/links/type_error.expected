@@ -10,11 +10,11 @@
       "range": {
         "end": {
           "character": 13,
-          "line": 8
+          "line": 9
         },
         "start": {
           "character": 2,
-          "line": 8
+          "line": 9
         }
       },
       "relatedInformation": [
@@ -23,11 +23,11 @@
             "range": {
               "end": {
                 "character": 18,
-                "line": 7
+                "line": 8
               },
               "start": {
                 "character": 15,
-                "line": 7
+                "line": 8
               }
             },
             "uri": "src/main.cheby"
@@ -46,30 +46,30 @@
   {
     "range": {
       "end": {
-        "character": 18,
-        "line": 4
-      },
-      "start": {
-        "character": 7,
-        "line": 4
-      }
-    },
-    "target": "src/util.cheby",
-    "tooltip": "links::util"
-  },
-  {
-    "range": {
-      "end": {
         "character": 14,
-        "line": 5
+        "line": 4
       },
       "start": {
         "character": 7,
-        "line": 5
+        "line": 4
       }
     },
     "target": "<std>/std/io.cheby",
     "tooltip": "std::io"
+  },
+  {
+    "range": {
+      "end": {
+        "character": 18,
+        "line": 6
+      },
+      "start": {
+        "character": 7,
+        "line": 6
+      }
+    },
+    "target": "src/util.cheby",
+    "tooltip": "links::util"
   }
 ]
 

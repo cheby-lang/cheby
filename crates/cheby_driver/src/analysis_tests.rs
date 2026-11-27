@@ -266,8 +266,8 @@ fn check_lists(
 enum Compared {
     /// The run is the check: every file's list equals check's.
     Report,
-    /// Phase-A errors: each published file's list equals check's, and
-    /// check has no error elsewhere.
+    /// Phase-A errors: the published phase-A lists, with what the D run
+    /// they plan publishes, equal check's lists (D-1951).
     PhaseA,
     /// A cut cycle: the D run of W4 publishes, check has E0040.
     Cut,
@@ -303,7 +303,7 @@ fn checked(root: &Path) -> Result<(SourceMap, Vec<Diagnostic>), String> {
 }
 
 /// Compares `live` with `cheby check` on the package at `root`.
-fn compare(root: &Path, live: &Live) -> Result<Compared, String> {
+fn compare(root: &Path, live: Live, session: &mut Session) -> Result<Compared, String> {
     let (sources, diagnostics) = checked(root)?;
     let expected = check_lists(root, &sources, &diagnostics);
     if let Some(failed) = &live.failed {
@@ -321,18 +321,22 @@ fn compare(root: &Path, live: &Live) -> Result<Compared, String> {
     let has_errors =
         |list: &[PlainDiagnostic]| list.iter().any(|d| d.code.to_string().starts_with('E'));
     if phase_a.values().any(|list| has_errors(list)) {
-        let kept: BTreeMap<PathBuf, Vec<PlainDiagnostic>> = expected
-            .iter()
-            .filter(|(path, _)| live.phase_a.contains_key(*path))
-            .map(|(path, list)| (path.clone(), list.clone()))
-            .collect();
-        let elsewhere = expected
-            .iter()
-            .any(|(path, list)| !live.phase_a.contains_key(path) && has_errors(list));
-        return if kept == phase_a && !elsewhere {
+        // D-1951: check also reports the modules that import no broken
+        // one, which the server publishes from the D run of the plan, a
+        // broken file with no last good text being empty there (D-1357).
+        let mut found = phase_a;
+        if let Some(plan) = live.plan {
+            let report = session
+                .analyze_strict(plan)
+                .map_err(|e| format!("the D run failed: {e}"))?;
+            found.extend(lists(&report.files));
+        }
+        return if found == expected {
             Ok(Compared::PhaseA)
         } else {
-            Err(format!("expected {expected:#?}\nphase A {phase_a:#?}"))
+            Err(format!(
+                "expected {expected:#?}\nphase A and the D run {found:#?}"
+            ))
         };
     }
     let cut = live
@@ -370,10 +374,11 @@ fn live_matches_check() {
     let mut failures = Vec::new();
     let mut counts: BTreeMap<String, usize> = BTreeMap::new();
     for (root, _temp) in &packages {
-        let live = session(root).analyze_live(&Overlay::default());
+        let mut session = session(root);
+        let live = session.analyze_live(&Overlay::default());
         let compared = live
             .map_err(|e| format!("the session failed: {e}"))
-            .and_then(|live| compare(root, &live));
+            .and_then(|live| compare(root, live, &mut session));
         match compared {
             Ok(kind) => *counts.entry(format!("{kind:?}")).or_default() += 1,
             Err(why) => failures.push(format!("{}: {why}", root.display())),

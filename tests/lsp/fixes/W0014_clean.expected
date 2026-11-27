@@ -1,0 +1,93 @@
+== diagnostics
+{
+  "src/main.cheby": [
+    {
+      "code": "W0014",
+      "codeDescription": {
+        "href": "https://github.com/cheby-lang/cheby/blob/main/docs/diagnostics/W0014.md"
+      },
+      "message": "the imports are not in order\n`std::int` comes before this import\nnote: imports come in up to three blocks, each sorted by path: the standard library's, other packages', then the package's own",
+      "range": {
+        "end": {
+          "character": 16,
+          "line": 4
+        },
+        "start": {
+          "character": 0,
+          "line": 4
+        }
+      },
+      "severity": 2,
+      "source": "cheby"
+    }
+  ]
+}
+
+== src/main.cheby:5:1 action put the imports in order, as `cheby fmt` does
+{
+  "actions": [
+    "put the imports in order, as `cheby fmt` does",
+    "Organize imports",
+    "Explain W0014"
+  ],
+  "answer": {
+    "data": {
+      "hash": "<hash>",
+      "range": [
+        147,
+        147
+      ],
+      "uri": "src/main.cheby"
+    },
+    "diagnostics": [
+      {
+        "code": "W0014",
+        "codeDescription": {
+          "href": "https://github.com/cheby-lang/cheby/blob/main/docs/diagnostics/W0014.md"
+        },
+        "message": "the imports are not in order\n`std::int` comes before this import\nnote: imports come in up to three blocks, each sorted by path: the standard library's, other packages', then the package's own",
+        "range": {
+          "end": {
+            "character": 16,
+            "line": 4
+          },
+          "start": {
+            "character": 0,
+            "line": 4
+          }
+        },
+        "severity": 2,
+        "source": "cheby"
+      }
+    ],
+    "edit": {
+      "documentChanges": [
+        {
+          "edits": [
+            {
+              "newText": "// For `int::show`.\nimport std::int\nimport std::io\nimport std::list // lists",
+              "range": {
+                "end": {
+                  "character": 14,
+                  "line": 7
+                },
+                "start": {
+                  "character": 0,
+                  "line": 4
+                }
+              }
+            }
+          ],
+          "textDocument": {
+            "uri": "src/main.cheby",
+            "version": 1
+          }
+        }
+      ]
+    },
+    "isPreferred": true,
+    "kind": "quickfix",
+    "title": "put the imports in order, as `cheby fmt` does"
+  },
+  "showMessage": []
+}

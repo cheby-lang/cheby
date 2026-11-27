@@ -1,0 +1,16 @@
+error[E0013]: expected `=>`, found `->`
+ --> tests/ui/06-patterns/habits/arm_thin_arrow.cheby:8:7
+  |
+8 |     0 -> 0
+  |       ^^
+  |
+  = help: a `case` arm uses `=>`; write `=>`
+
+error[E0013]: expected `=>`, found `->`
+ --> tests/ui/06-patterns/habits/arm_thin_arrow.cheby:9:7
+  |
+9 |     _ -> 1
+  |       ^^
+  |
+  = help: a `case` arm uses `=>`; write `=>`
+
