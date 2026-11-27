@@ -381,9 +381,11 @@ mod tests {
 
     #[test]
     fn paths_are_written_from_the_root() {
-        let root = Path::new("/repo");
+        // An absolute path has a drive on Windows.
+        let root = Path::new(if cfg!(windows) { r"C:\repo" } else { "/repo" });
+        let absolute = root.join("std").join("list.cheby");
         assert_eq!(normal(root, "./std/list.cheby"), "std/list.cheby");
-        assert_eq!(normal(root, "/repo/std/list.cheby"), "std/list.cheby");
+        assert_eq!(normal(root, absolute.to_str().unwrap()), "std/list.cheby");
         assert_eq!(
             normal(root, "docs/spec/01-overview.md"),
             "docs/spec/01-overview.md"

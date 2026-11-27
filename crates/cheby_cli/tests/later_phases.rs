@@ -92,7 +92,9 @@ fn headlines(stderr: &str) -> Vec<&str> {
 /// `util` parses and imports nothing, so its error is reported beside the
 /// syntax errors of `parser`; the root imports `parser`, so it is named
 /// in the note and its own error is not reported. `check`, `build`,
-/// `run` and `test` agree, twice, the second time with a warm cache.
+/// `run` and `test` agree, twice, the second time with a warm cache. On
+/// Windows `cheby build --target native` refuses before it reads the
+/// package until M6 (D-545), so `build` is left out there.
 #[test]
 fn every_command_reports_the_modules_that_parse() {
     let package = Package::new(&[
@@ -109,8 +111,13 @@ fn every_command_reports_the_modules_that_parse() {
     let check = package.cheby(&["check"]);
     assert_eq!(check.status, Some(1));
     assert_eq!(headlines(&check.stderr), expected, "{}", check.stderr);
+    let commands: &[&str] = if cfg!(windows) {
+        &["check", "run", "test"]
+    } else {
+        &["check", "build", "run", "test"]
+    };
     for _ in 0..2 {
-        for command in ["check", "build", "run", "test"] {
+        for &command in commands {
             let out = package.cheby(&[command]);
             assert_eq!(out.status, Some(1), "{command}");
             assert_eq!(out.stderr, check.stderr, "{command}");

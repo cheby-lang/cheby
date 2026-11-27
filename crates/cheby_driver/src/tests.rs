@@ -1455,6 +1455,8 @@ fn tests_are_selected_and_counted() {
 fn std_self_test_runs_a_selection() {
     let report = test_std(Some("std::bool ")).unwrap();
     assert!(report.success(), "{}", report.render());
+    // Std has no warning, whatever the filter (D-1955).
+    assert!(report.warnings.is_empty(), "{}", report.render());
     assert_eq!(report.modules.len(), 1, "{}", report.render());
     assert_eq!(report.modules[0].path, "std::bool");
     assert!(report.counts().passed >= 1);
@@ -1487,6 +1489,30 @@ fn std_bytes_builds_and_passes() {
     assert!(report.success(), "{text}");
     assert!(report.counts().passed >= 19, "{text}");
     assert!(text.contains("  std::bytes: "), "{text}");
+}
+
+/// A warning in a std module fails the std self-test: the report shows it
+/// first and counts it in the summary (D-1955).
+#[test]
+fn std_warnings_fail_the_self_test() {
+    let warning = "warning[W0002]: unused binding `y`\n --> std/bool.cheby:3:7\n".to_owned();
+    let report = TestReport {
+        warnings: vec![warning.clone()],
+        ..TestReport::default()
+    };
+    assert!(!report.success());
+    assert_eq!(report.exit_status(), 1);
+    let text = report.render();
+    assert!(text.starts_with(&format!("{warning}\n")), "{text}");
+    assert!(
+        text.ends_with("test result: FAILED. 0 passed; 0 failed; 1 warning; 0 filtered out\n"),
+        "{text}"
+    );
+    let two = TestReport {
+        warnings: vec![warning.clone(), warning],
+        ..TestReport::default()
+    };
+    assert!(two.render().ends_with("2 warnings; 0 filtered out\n"));
 }
 
 // ---------------------------------------------------------------------

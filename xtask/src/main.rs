@@ -37,8 +37,9 @@
 //!   at the pinned commit and with the compiler parser, and fails if they
 //!   disagree (D-272).
 //! - `test-std`: checks every shipped std module with its `test` blocks
-//!   and runs them, one batch per module (D-479, D-542); `--release`
-//!   builds them in the release profile.
+//!   and runs them, one batch per module (D-479, D-542), and fails on a
+//!   warning in any std module (D-1955); `--release` builds them in the
+//!   release profile.
 //! - `bench-compile`: compile-speed numbers on generated projects (I1,
 //!   D-247, plan §8.5), with the size of the code and its RC operations
 //!   (D-718).
@@ -252,8 +253,8 @@ fn bless(root: &Path, filter: Option<&str>) -> Result<(), String> {
 /// Tests the standard library (D-542) and prints the report: a line per
 /// test, the modules and tests that did not build with their codes, a
 /// block per failure, and the counts per module and in total. Fails when a
-/// test failed or did not build. With `release`, the tests are built in
-/// the release profile.
+/// test failed or did not build, or a std module has a warning (D-1955).
+/// With `release`, the tests are built in the release profile.
 fn test_std(filter: Option<&str>, release: bool) -> Result<(), String> {
     let profile = if release {
         cheby_driver::Profile::Release
@@ -266,8 +267,12 @@ fn test_std(filter: Option<&str>, release: bool) -> Result<(), String> {
         Ok(())
     } else {
         let counts = report.counts();
+        let warnings = match report.warnings.len() {
+            1 => "1 warning".to_owned(),
+            n => format!("{n} warnings"),
+        };
         Err(format!(
-            "{} std tests failed and {} did not build",
+            "{} std tests failed, {} did not build, and std has {warnings}",
             counts.failed, counts.not_built
         ))
     }

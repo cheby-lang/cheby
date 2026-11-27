@@ -520,6 +520,9 @@ Logged in [`../decisions/LOG.md`](../decisions/LOG.md#2026-10-04-implementation-
 | D-1952    | `cheby guide` and `AGENTS.md` in `cheby new`: a guide for coding agents, checked by tests           |
 | D-1953    | Imports in three blocks (std, other packages, own), written by `cheby fmt`, reported by W0014       |
 | D-1954    | Function calls nest at most three deep; a fourth level is the warning W0015                         |
+| D-1955    | `cargo xtask test-std` fails on a warning in a std module, whatever the filter                      |
+| D-1956    | CI runs on pushes to `main`; on other branches only by hand (`workflow_dispatch`)                   |
+| D-1957    | Std's self-test runs W0005 over std: a package-visible std item nothing in std uses fails it        |
 
 ## Open questions
 

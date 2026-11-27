@@ -1971,7 +1971,9 @@ impl BuildInputs<'_> {
             hidden_reads(self.modules, id, log.modules(), get(self.targets, id)?, &[]);
         // The summaries read the interfaces again without recording: the
         // reads are taken above.
+        // Std's self-test runs the package pass over std (D-1957).
         let summaries = if (info.package == PackageId::LOCAL && self.mode == Mode::Check)
+            || (info.package == PackageId::STD && self.mode == Mode::StdTests)
             || self.cache.is_some_and(|cx| cx.use_.covers(info.package))
         {
             let quiet = TypesInput {
@@ -3693,7 +3695,21 @@ fn run_inner(
         false
     };
     if mode == Mode::Check && every_local_built {
-        diagnostics.extend(unused_package_items(&modules, &built, &uses)?);
+        diagnostics.extend(unused_package_items(
+            &modules,
+            &built,
+            &uses,
+            PackageId::LOCAL,
+        )?);
+    }
+    // Std's self-test runs it over std's own modules (D-1957).
+    if mode == Mode::StdTests {
+        diagnostics.extend(unused_package_items(
+            &modules,
+            &built,
+            &uses,
+            PackageId::STD,
+        )?);
     }
     // The modules later phases may lower: std's and the package's checked
     // on fresh interfaces (D-1134).
@@ -4116,7 +4132,8 @@ fn must_check(
     Ok(out)
 }
 
-/// W0005 over every package module's use summary (D-516, D-965): each
+/// W0005 over the use summary of every module of `package`, the local
+/// package or, in std's self-test, std (D-516, D-965, D-1957): each
 /// package-visible candidate that no module of the package uses. Nothing
 /// is reported when a module's bodies did not all check, since they could
 /// hold the only uses.
@@ -4124,15 +4141,12 @@ fn unused_package_items(
     modules: &ModuleTable,
     built: &[ModuleId],
     uses: &[Option<(front::UseSummary, bool)>],
+    package: PackageId,
 ) -> Result<Vec<Diagnostic>, Ice> {
     let local: Vec<ModuleId> = built
         .iter()
         .copied()
-        .filter(|&id| {
-            modules
-                .get(id)
-                .is_some_and(|info| info.package == PackageId::LOCAL)
-        })
+        .filter(|&id| modules.get(id).is_some_and(|info| info.package == package))
         .collect();
     let mut summaries = Vec::with_capacity(local.len());
     for &id in &local {
@@ -4286,6 +4300,76 @@ mod tests {
             ]
         );
         std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// Std's self-test runs the package pass over std (D-1957): std as
+    /// shipped has no unused package-visible item, and one added to
+    /// `std::bool` is W0005. The std modules come from their texts, as a
+    /// checkout's do (D-1700).
+    #[test]
+    fn the_std_self_test_reports_unused_package_items_of_std() {
+        use std::collections::{BTreeMap, BTreeSet};
+
+        use cheby_diag::SourceMap;
+        use cheby_package::ModulePath;
+
+        use super::{CheckoutStd, Mode, RunExtras, run_inner};
+        use crate::std_lib;
+
+        let w0005 = |extra: &str| -> Vec<String> {
+            let mut sources = SourceMap::new();
+            let mut diagnostics = Vec::new();
+            let package = crate::test::std_test_package(&mut sources, &mut diagnostics).unwrap();
+            let mut modules = BTreeMap::new();
+            for m in std_lib::STD_MODULES {
+                let text = if m.path == "bool" {
+                    format!("{}{extra}", m.source)
+                } else {
+                    m.source.to_owned()
+                };
+                let mut own = Vec::new();
+                let display = std_lib::display_path(m.path);
+                let source =
+                    crate::parse_file(&mut sources, &display, text.clone().into_bytes(), &mut own)
+                        .unwrap();
+                let path = m
+                    .path
+                    .split("::")
+                    .fold(ModulePath::root("std"), |p, s| p.child(s));
+                let module = crate::Module {
+                    path,
+                    source,
+                    hashes: crate::SourceHashes::of(text.as_bytes()),
+                    parsed: true,
+                    syntax_diagnostics: own,
+                };
+                modules.insert(m.path.to_owned(), module);
+            }
+            let checkout = CheckoutStd {
+                modules,
+                tested: BTreeSet::new(),
+            };
+            let run = run_inner(
+                package,
+                Mode::StdTests,
+                &mut sources,
+                &mut diagnostics,
+                None,
+                RunExtras::batch(),
+                Some(checkout),
+            );
+            assert!(run.is_ok(), "the std self-test's front end stopped");
+            diagnostics
+                .iter()
+                .filter(|d| d.code.to_string() == "W0005")
+                .map(|d| d.message.clone())
+                .collect()
+        };
+        assert_eq!(w0005(""), Vec::<String>::new());
+        assert_eq!(
+            w0005("\nfn never_used_in_std() -> Int {\n  1\n}\n"),
+            ["the function `never_used_in_std` is never used in this package"]
+        );
     }
 
     #[test]

@@ -1,5 +1,10 @@
 # CI for the reference implementation (D-277, docs/plan/m0-foundation.md).
 #
+# It runs on every push to `main`, and on any other branch only when started
+# by hand, from the Actions tab or with `gh workflow run ci.yml --ref
+# <branch>`. A pull request gets no run of its own; a run on its branch
+# reports its checks on the pull request's head commit (D-1956).
+#
 # - `test`: build, clippy and every test, including the conformance, UI,
 #   REPL and language server (`--test lsp`, D-1352) harnesses, on every
 #   platform of D-074 and D-892. The tests run under cargo-nextest 0.9.151,
@@ -56,7 +61,7 @@
 #   (D-272).
 # - `std-tests`: checks and runs the standard library's own tests, one module
 #   at a time (D-479, D-542). Every std module builds and every test passes,
-#   so a failure fails CI.
+#   so a failure fails CI. A warning in a std module fails it too (D-1955).
 # - `rc-naive`: the UI tests (under nextest's `ci` profile, D-1558, with
 #   their report rendered as `junit-rc-naive.html`, D-1559) and the
 #   standard library's tests under M1's
@@ -83,9 +88,9 @@
 #   results (D-247), and times the compiler on them (I1): checking, checking
 #   with code generation, and the edit-to-run latency, in the step summary.
 # - `bench-gate`: the one run-time check that fails CI (D-895). It builds a
-#   release `cheby` for this commit and for its base (the base-branch commit
-#   a pull request's merge commit is built on, or the previous `main` on a
-#   push), each with its own toolchain, times `bench/runtime`'s RC group
+#   release `cheby` for this commit and for its base (the commit where the
+#   branch of a run started by hand leaves `main`, or the previous `main` on
+#   a push, D-1956), each with its own toolchain, times `bench/runtime`'s RC group
 #   with both on the same runner, their runs interleaved, and fails when the
 #   geometric mean, or `rc/list_pipeline` alone, is more than 10% slower
 #   than the base. A benchmark the base cannot run, or for which it prints
@@ -116,18 +121,19 @@
 name: CI
 
 on:
-  pull_request:
+  workflow_dispatch:
   push:
     branches: [main]
 
 permissions:
   contents: read
 
-# A newer push to a pull request cancels its older run. Runs on `main` are
-# never cancelled, so every merge is tested and gated (D-897).
+# A newer run started by hand on a branch cancels its older one. Runs on
+# `main`'s pushes are never cancelled, so every merge is tested and gated
+# (D-897, D-1956).
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+  cancel-in-progress: ${{ github.event_name != 'push' }}
 
 env:
   CARGO_TERM_COLOR: always
@@ -381,7 +387,7 @@ jobs:
       - name: Compile speed on every merge
         if: github.event_name == 'push'
         run: cargo xtask bench-compile --summary "$GITHUB_STEP_SUMMARY"
-      - name: Compile speed (10k lines) on pull requests
+      - name: Compile speed (10k lines) on runs started by hand
         if: github.event_name != 'push'
         run: cargo xtask bench-compile --quick --summary "$GITHUB_STEP_SUMMARY"
 
@@ -397,8 +403,10 @@ jobs:
       - uses: ./.github/actions/c-compiler
       - name: Find the base
         run: |
-          if [ "${{ github.event_name }}" = pull_request ]; then
-            base=$(git merge-base "origin/${{ github.base_ref }}" HEAD)
+          if [ "${{ github.event_name }}" != push ]; then
+            # A run started by hand compares with where its branch leaves
+            # `main` (D-1956).
+            base=$(git merge-base origin/main HEAD)
           else
             base="${{ github.event.before }}"
             # A force push can leave `before` unreachable (or all zeros).

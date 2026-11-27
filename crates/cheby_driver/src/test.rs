@@ -230,6 +230,10 @@ pub struct TestReport {
     /// How long the tests ran, from the first start to the last test's
     /// line, compile excluded. Informative: it is never printed.
     pub run_time: Duration,
+    /// The std self-test's warnings in std modules, each rendered as
+    /// `cheby check` prints it, in module order and then by place. Any
+    /// of them fails the run (D-1955). `cheby test` leaves it empty.
+    pub warnings: Vec<String>,
 }
 
 /// Counts of one module or of a whole run.
@@ -268,12 +272,12 @@ impl TestReport {
         TestCounts::of(self.modules.iter().flat_map(|m| &m.tests))
     }
 
-    /// Whether every selected test passed (also when none was selected)
-    /// and no write failure ended the run.
+    /// Whether every selected test passed (also when none was selected),
+    /// no write failure ended the run, and std had no warning (D-1955).
     #[must_use]
     pub fn success(&self) -> bool {
         let counts = self.counts();
-        !self.terminated && counts.failed == 0 && counts.not_built == 0
+        !self.terminated && counts.failed == 0 && counts.not_built == 0 && self.warnings.is_empty()
     }
 
     /// The exit status: 0 when every selected test passed, 1 otherwise
@@ -283,12 +287,17 @@ impl TestReport {
         i32::from(!self.success())
     }
 
-    /// The whole report of the std self-test (D-542): a line per test and
-    /// per module or test that did not build, a block per failure, the
-    /// counts per module and in total, and the summary line.
+    /// The whole report of the std self-test (D-542): std's warnings, each
+    /// followed by an empty line (D-1955), a line per test and per module
+    /// or test that did not build, a block per failure, the counts per
+    /// module and in total, and the summary line.
     #[must_use]
     pub fn render(&self) -> String {
         let mut text = String::new();
+        for warning in &self.warnings {
+            text.push_str(warning);
+            text.push('\n');
+        }
         for module in &self.modules {
             if let Some(codes) = &module.not_built {
                 let _ = writeln!(text, "module {} did not build: {codes}", module.path);
@@ -354,8 +363,13 @@ impl TestReport {
         } else {
             String::new()
         };
+        let warnings = match self.warnings.len() {
+            0 => String::new(),
+            1 => "1 warning; ".to_owned(),
+            n => format!("{n} warnings; "),
+        };
         format!(
-            "test result: {verdict}. {} passed; {} failed; {not_built}{} filtered out\n",
+            "test result: {verdict}. {} passed; {} failed; {not_built}{warnings}{} filtered out\n",
             c.passed, c.failed, self.filtered_out
         )
     }
@@ -1327,7 +1341,9 @@ const STD_TEST_PACKAGE: &str = "std_self_test";
 /// tests whose full name `std::<module> "<name>"` contains `filter`, one
 /// JIT batch per module. A module whose batch does not build has each of
 /// its tests built alone. Modules and tests that do not build are counted
-/// and reported with their codes, and the other modules still run.
+/// and reported with their codes, and the other modules still run. A
+/// warning in any std module, whatever `filter` selects, fails the run
+/// (D-1955).
 ///
 /// The tests' own output goes to standard output as they run; the report
 /// is returned for [`TestReport::render`].
@@ -1366,6 +1382,21 @@ pub fn test_std_in(filter: Option<&str>, profile: cheby_mir::Profile) -> Result<
         .map(|(id, info)| (info.path.clone(), id))
         .collect();
     std_modules.sort();
+    // A warning in a std module fails the self-test (D-1955). The root
+    // module's unused imports of every std module are not std's.
+    for &(_, module) in &std_modules {
+        let Some(file) = front.modules.get(module).and_then(|info| info.file) else {
+            continue;
+        };
+        let mut here: Vec<&Diagnostic> = diagnostics
+            .iter()
+            .filter(|d| !d.is_error() && d.primary_span().is_some_and(|s| s.file == file))
+            .collect();
+        here.sort_by_key(|d| d.primary_span().map(|s| s.range.start()));
+        report
+            .warnings
+            .extend(here.into_iter().map(|d| cheby_diag::render(d, &sources)));
+    }
     for (path, module) in std_modules {
         let shown = path.to_string();
         let errors = codes_in(&front, module, &diagnostics);

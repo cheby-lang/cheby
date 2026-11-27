@@ -109,7 +109,7 @@ Follow `docs/plan/`, especially `architecture.md`, `testing.md` and the file of 
 
 ### Building and testing
 
-CI (`.github/workflows/ci.yml`) runs these commands, and a change must pass them:
+CI (`.github/workflows/ci.yml`) runs these commands on every push to `main`, and on another branch only when started by hand, with `gh workflow run ci.yml --ref <branch>` (D-1956). A change must pass them:
 
 ```sh
 cargo build --workspace --all-targets --locked
@@ -119,7 +119,7 @@ cargo xtask test                  # every test under cargo-nextest, the harnesse
 cargo xtask coverage              # decisions cited in the spec that no test names
 cargo xtask decisions lint        # the decision log's form, every D-NNN names an entry, ADR numbers
 cargo xtask cross-check           # compiler parser against tree-sitter
-cargo xtask test-std              # std's own test blocks, one module at a time
+cargo xtask test-std              # std's own test blocks, one module at a time; std's warnings fail it
 cargo xtask check-examples        # cheby check in every example
 # cheby fmt's form in std and the examples
 cargo run --locked -q -p cheby_cli -- fmt --check $(git ls-files 'std/*.cheby' 'docs/examples/*/src/*.cheby')

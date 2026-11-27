@@ -1,5 +1,9 @@
 # Cheby
 
+[![CI](https://github.com/cheby-lang/cheby/actions/workflows/ci.yml/badge.svg?branch=main&event=push)](https://github.com/cheby-lang/cheby/actions/workflows/ci.yml?query=branch%3Amain+event%3Apush)
+[![Nightly](https://github.com/cheby-lang/cheby/actions/workflows/nightly.yml/badge.svg?branch=main&event=schedule)](https://github.com/cheby-lang/cheby/actions/workflows/nightly.yml?query=branch%3Amain+event%3Aschedule)
+[![Miri](https://github.com/cheby-lang/cheby/actions/workflows/miri.yml/badge.svg?branch=main&event=schedule)](https://github.com/cheby-lang/cheby/actions/workflows/miri.yml?query=branch%3Amain+event%3Aschedule)
+
 Cheby is a statically typed, expression-oriented programming language with immutable data, lightweight fibers and deterministic memory management. Its syntax is inspired by Rust, its semantics by Gleam and Erlang, and its concurrency by Go. Programs compile to native code through Cranelift and to JavaScript.
 
 > **Status:** pre-1.0. The language specification is a draft. The reference implementation has finished milestones M1, the single-fiber core, M2, the runtime, and M3, AOT output and the build cache: `cheby check`, `run`, `test` and `repl` work through a Cranelift JIT, with fibers on an M:N scheduler, channels, selectors, scopes, deadlock detection and Perceus reference counting, `cheby build --target native` writes executables, and a global cache keeps compiled modules between commands. The JavaScript backend comes in M4. Breaking changes are allowed until 1.0.
