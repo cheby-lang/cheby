@@ -40,6 +40,9 @@ cheby_test_support = { path = "tests/support" }
 # External crates.
 astro-float = "0.9.6"
 clap = { version = "4.6", features = ["derive"] }
+# Shell completion that asks `cheby` for its candidates (D-1958). The engine
+# is behind an unstable feature: read its changelog before a bump.
+clap_complete = { version = "4.6.12", features = ["unstable-dynamic"] }
 cranelift-codegen = "0.135"
 cranelift-frontend = "0.135"
 cranelift-jit = "0.135"

@@ -110,6 +110,82 @@ pub fn lookup<'a>(index: &'a ApiIndex, query: &str) -> Option<Found<'a>> {
     (!close.is_empty() && !wanted.is_empty()).then_some(Found::Names(close))
 }
 
+/// One path that [`complete`] offers.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Candidate {
+    /// What to pass to `cheby doc`, such as `list::map`.
+    pub path: String,
+    /// One line about it: the first sentence of its doc comment, or for an
+    /// item without one the first line of its signature.
+    pub about: Option<String>,
+}
+
+/// The paths that start with `typed` and that [`lookup`] finds a module or
+/// an item at, sorted, for a shell's completion (D-1958):
+///
+/// 1. the modules of the package and of its dependencies, by path;
+/// 2. the std modules, by their path once `typed` starts with `std::`, and
+///    before that without `std::`, as `list`, with `std` itself, which
+///    lists them, so that no module is offered twice;
+/// 3. when the text before the last `::` of `typed` names a module, its
+///    items, written after that text as it was typed.
+#[must_use]
+pub fn complete(index: &ApiIndex, typed: &str) -> Vec<Candidate> {
+    const STD: &str = "std";
+    let mut found = Vec::new();
+    let full_std = typed.starts_with("std::");
+    if STD.starts_with(typed) {
+        found.push(Candidate {
+            path: STD.to_owned(),
+            about: Some("The modules of the standard library.".to_owned()),
+        });
+    }
+    for module in &index.modules {
+        let short = module
+            .path
+            .strip_prefix("std::")
+            .filter(|_| module.origin == ApiOrigin::Std);
+        let path = match short {
+            // A module of the package with the short path is the one a
+            // lookup of it finds.
+            Some(short) if !full_std => {
+                if index.modules.iter().any(|other| other.path == short) {
+                    continue;
+                }
+                short
+            }
+            Some(_) | None => &module.path,
+        };
+        if path.starts_with(typed) {
+            found.push(Candidate {
+                path: path.to_owned(),
+                about: module.doc.as_deref().and_then(first_sentence),
+            });
+        }
+    }
+    if let Some((before, name)) = typed.rsplit_once("::")
+        && let Some(module) = module(index, before)
+    {
+        for item in &module.items {
+            if item.name.starts_with(name) {
+                found.push(Candidate {
+                    path: format!("{before}::{}", item.name),
+                    about: item
+                        .doc
+                        .as_deref()
+                        .and_then(first_sentence)
+                        .or_else(|| item.signature.lines().next().map(str::to_owned)),
+                });
+            }
+        }
+    }
+    // A module comes before an item at the same path, as a lookup finds it,
+    // and a constructor named as its type is the type's twin.
+    found.sort_by(|a, b| a.path.cmp(&b.path));
+    found.dedup_by(|later, first| later.path == first.path);
+    found
+}
+
 /// `hits` without each constructor that has its type's name when the type
 /// is a hit too, as the constructor of a single-variant type has (§4.3.3):
 /// the type's signature shows it.
@@ -485,6 +561,109 @@ mod tests {
                 .map(|hit| format!("{}::{}", hit.module.path, hit.item.name))
                 .collect(),
         }
+    }
+
+    /// The paths a shell offers for `cheby doc` (D-1958): modules, std's
+    /// by the short path until `std::` is typed, and the items of the
+    /// module that the text before the last `::` names.
+    #[test]
+    fn completion_offers_modules_and_their_items() {
+        let index = index();
+        let paths = |typed: &str| -> Vec<String> {
+            complete(&index, typed)
+                .into_iter()
+                .map(|found| found.path)
+                .collect()
+        };
+        assert_eq!(paths(""), ["app::list", "list", "option", "std"]);
+        assert_eq!(paths("st"), ["std"]);
+        assert_eq!(paths("std"), ["std"]);
+        assert_eq!(paths("std::"), ["std::list", "std::option"]);
+        assert_eq!(paths("std::o"), ["std::option"]);
+        assert_eq!(paths("app"), ["app::list"]);
+        assert_eq!(paths("list::"), ["list::fold", "list::length"]);
+        assert_eq!(paths("std::list::l"), ["std::list::length"]);
+        assert_eq!(paths("app::list::"), ["app::list::helper"]);
+        // Types sort before functions, and a constructor is an item.
+        assert_eq!(
+            paths("option::"),
+            ["option::Option", "option::Some", "option::length"]
+        );
+        assert_eq!(paths("nothing::"), Vec::<String>::new());
+        assert_eq!(paths("list::x"), Vec::<String>::new());
+        // Every path is one a lookup finds.
+        for typed in ["", "std::", "list::", "option::", "app::list::"] {
+            for path in paths(typed) {
+                assert!(lookup(&index, &path).is_some(), "{path}");
+            }
+        }
+    }
+
+    /// A candidate's line is the first sentence of the doc comment, and
+    /// for an item without one the first line of its signature.
+    #[test]
+    fn completion_says_what_a_candidate_is() {
+        let index = index();
+        let about = |typed: &str| -> Vec<(String, Option<String>)> {
+            complete(&index, typed)
+                .into_iter()
+                .map(|found| (found.path, found.about))
+                .collect()
+        };
+        assert_eq!(
+            about("list"),
+            [("list".to_owned(), Some("Lists.".to_owned()))]
+        );
+        assert_eq!(
+            about("list::"),
+            [
+                (
+                    "list::fold".to_owned(),
+                    Some("pub fn fold<T, A>(…) -> A".to_owned())
+                ),
+                (
+                    "list::length".to_owned(),
+                    Some("The number of elements.".to_owned())
+                ),
+            ]
+        );
+        assert_eq!(about("app"), [("app::list".to_owned(), None)]);
+    }
+
+    /// A module of the package at a std module's short path is the one a
+    /// lookup of that path finds, so it is the one offered.
+    #[test]
+    fn completion_offers_a_shadowing_module_once() {
+        let index = ApiIndex {
+            modules: vec![
+                module(
+                    "option",
+                    ApiOrigin::Package,
+                    "Command-line options.",
+                    vec![item("parse", DefKind::Fn, "fn parse() -> Int", "")],
+                ),
+                module(
+                    "std::option",
+                    ApiOrigin::Std,
+                    "Optional values.",
+                    Vec::new(),
+                ),
+            ],
+        };
+        let found = complete(&index, "op");
+        assert_eq!(found.len(), 1, "{found:?}");
+        assert_eq!(found[0].path, "option");
+        assert_eq!(found[0].about.as_deref(), Some("Command-line options."));
+        let items: Vec<String> = complete(&index, "option::")
+            .into_iter()
+            .map(|found| found.path)
+            .collect();
+        assert_eq!(items, ["option::parse"]);
+        let std: Vec<String> = complete(&index, "std::")
+            .into_iter()
+            .map(|found| found.path)
+            .collect();
+        assert_eq!(std, ["std::option"]);
     }
 
     #[test]

@@ -74,6 +74,22 @@ The [overview](docs/spec/01-overview.md) lists what Cheby has, what it deliberat
 | [`tests/`](tests/)                                | Conformance, UI, REPL and language server harnesses     |
 | [`xtask/`](xtask/)                                | Developer commands, run as `cargo xtask`                |
 
+## Shell completion
+
+`cheby completions <shell>` prints a script that turns completion of `cheby` on in bash, zsh, fish, elvish or PowerShell. Run it when the shell starts, so that the script always fits the `cheby` on your `PATH`:
+
+| Shell      | Line for the shell's startup file                                 |
+| ---------- | ----------------------------------------------------------------- |
+| bash       | `eval "$(cheby completions bash)"`                                |
+| zsh        | `source <(cheby completions zsh)`, after `compinit`               |
+| fish       | `cheby completions fish \| source`                                |
+| elvish     | `eval (cheby completions elvish \| slurp)`                        |
+| PowerShell | `cheby completions powershell \| Out-String \| Invoke-Expression` |
+
+Tab then completes the commands and their flags, and what `cheby` finds in the working directory: diagnostic codes for `cheby explain`, the package's module paths for `cheby run`, `cheby build` and `cheby test --module`, test names for `cheby test`, `.cheby` files, and modules and items for `cheby doc`, such as `cheby doc list::ma`.
+
+Completion was tried in zsh, fish and bash 3.2 and 5.2. In elvish only the script's answers were checked, and PowerShell was not tried.
+
 ## Editor support
 
 - [tree-sitter-cheby](https://github.com/cheby-lang/tree-sitter-cheby): tree-sitter grammar and highlight queries
